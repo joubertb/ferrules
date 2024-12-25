@@ -1,0 +1,12 @@
+[package]
+name = "ferrules"
+version = "0.1.0"
+edition = "2021"
+
+[dependencies]
+anyhow = "1.0.95"
+candle-core = { version = "0.8.1", features = ["metal"] }
+candle-metal-kernels = "0.8.1"
+candle-nn = { version = "0.8.1", features = ["metal"] }
+clap = { version = "4.5.23", features = ["derive"] }
+tracing = "0.1.41"
