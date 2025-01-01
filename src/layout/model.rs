@@ -5,13 +5,6 @@ use ort::{
     session::{builder::GraphOptimizationLevel, Session},
 };
 
-trait LayoutParser<I> {
-    type ParseResult;
-    type Error;
-
-    fn parse_layout(&self, input: I) -> Result<Self::ParseResult, Self::Error>;
-}
-
 pub struct ORTLayoutParser {
     session: Session,
 }
