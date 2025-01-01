@@ -5,8 +5,10 @@ edition = "2021"
 
 [dependencies]
 anyhow = "1.0.95"
-candle-core = { version = "0.8.1", features = ["metal"] }
-candle-metal-kernels = "0.8.1"
-candle-nn = { version = "0.8.1", features = ["metal"] }
-clap = { version = "4.5.23", features = ["derive"] }
 tracing = "0.1.41"
+clap = { version = "4.5.23", features = ["derive"] }
+pdfium-render = { version = "0.8.27", features = ["static"] }
+image = "0.25.5"
+# Inference
+ndarray = "0.16.1"
+ort = { version = "=2.0.0-rc.9", features = ["coreml", "fetch-models"] }
