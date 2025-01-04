@@ -70,8 +70,16 @@ impl BBox {
         )
     }
 
-    fn intersection_area(&self, other: &Self) -> f32 {
+    fn iou(&self, other: &Self) -> f32 {
+        self.intersection(other) / self.union(other)
+    }
+
+    fn intersection(&self, other: &Self) -> f32 {
         self.overlap_x(other) * self.overlap_y(other)
+    }
+
+    fn union(&self, other: &Self) -> f32 {
+        other.area() + self.area() - self.intersection(other)
     }
 
     fn rotate(self) -> Self {
@@ -247,7 +255,7 @@ pub fn parse_document<P: AsRef<Path>>(
     let pdfium = Pdfium::new(Pdfium::bind_to_statically_linked_library()?);
     let mut document = pdfium.load_pdf_from_file(&path, password)?;
 
-    let layout_model = ORTLayoutParser::new("./models/yolox_tiny.onnx")?;
+    let layout_model = ORTLayoutParser::new("./models/yolov8s-doclaynet.onnx")?;
     // TODO: deal with document embedded forms?
     // let mut pages = Vec::with_capacity(document.pages().len() as usize);
     dbg!(&layout_model);
@@ -273,9 +281,7 @@ pub fn parse_document<P: AsRef<Path>>(
         // TODO: Takes ~25ms -> batch a &[PdfPage] later
         let layout_result = layout_model.parse_layout(&page_image)?;
 
-        if index > 2 {
-            break;
-        }
+        break;
 
         // pages.push(Page {
         //     id: index,
