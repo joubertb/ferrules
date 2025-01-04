@@ -1,5 +1,11 @@
+#![allow(dead_code)]
+
+use layout::model::ORTLayoutParser;
 use plsfix::fix_text;
-use std::path::{Path, PathBuf};
+use std::{
+    path::{Path, PathBuf},
+    time::Instant,
+};
 
 use pdfium_render::prelude::{
     PdfFontWeight, PdfPageRenderRotation, PdfPageTextChar, PdfRect, PdfRenderConfig, Pdfium,
@@ -240,24 +246,20 @@ pub fn parse_document<P: AsRef<Path>>(
 ) -> anyhow::Result<()> {
     let pdfium = Pdfium::new(Pdfium::bind_to_statically_linked_library()?);
     let mut document = pdfium.load_pdf_from_file(&path, password)?;
+
+    let layout_model = ORTLayoutParser::new("./models/yolox_tiny.onnx")?;
     // TODO: deal with document embedded forms?
     // let mut pages = Vec::with_capacity(document.pages().len() as usize);
+    dbg!(&layout_model);
     for (index, mut page) in document.pages_mut().iter().enumerate() {
         if flatten_pdf {
             page.flatten()?;
         }
-
         // FIXME: check that rotation is correct ??
         // let page_rotation = page.rotation().unwrap_or(PdfPageRenderRotation::None);
-        // let page_image = page
-        //     .render_with_config(&PdfRenderConfig::default().scale_page_by_factor(1.0))
-        //     .map(|bitmap| bitmap.as_image())?;
-
-        // TODO: this segfaults
-        // let page_rect = page
-        //     .boundaries()
-        //     .get(pdfium_render::prelude::PdfPageBoundaryBoxType::Crop)?
-        //     .bounds;
+        let page_image = page
+            .render_with_config(&PdfRenderConfig::default().scale_page_by_factor(1.0))
+            .map(|bitmap| bitmap.as_image())?;
 
         let page_bbox = BBox {
             x0: 0f32,
@@ -268,7 +270,12 @@ pub fn parse_document<P: AsRef<Path>>(
         let spans = parse_spans(page.text()?.chars().iter(), &page_bbox);
         let lines = parse_lines(spans);
 
-        lines.iter().for_each(|l| println!("{}", l.text));
+        // TODO: Takes ~25ms -> batch a &[PdfPage] later
+        let layout_result = layout_model.parse_layout(&page_image)?;
+
+        if index > 2 {
+            break;
+        }
 
         // pages.push(Page {
         //     id: index,

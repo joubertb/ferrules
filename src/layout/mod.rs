@@ -1,6 +1,6 @@
 pub mod model;
 
-struct LayoutResult;
+pub struct LayoutResult;
 
 pub trait LayoutParser<I> {
     type Error;
