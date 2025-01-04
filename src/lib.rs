@@ -256,10 +256,12 @@ pub fn parse_document<P: AsRef<Path>>(
     let mut document = pdfium.load_pdf_from_file(&path, password)?;
 
     let layout_model = ORTLayoutParser::new("./models/yolov8s-doclaynet.onnx")?;
-    // TODO: deal with document embedded forms?
     // let mut pages = Vec::with_capacity(document.pages().len() as usize);
-    dbg!(&layout_model);
     for (index, mut page) in document.pages_mut().iter().enumerate() {
+        if index == 0 {
+            continue;
+        }
+        // TODO: deal with document embedded forms?
         if flatten_pdf {
             page.flatten()?;
         }

@@ -7,7 +7,7 @@ use imageproc::rect::Rect;
 use lazy_static::lazy_static;
 use ndarray::{s, Array4, ArrayBase, Axis, Dim, OwnedRepr};
 use ort::{
-    execution_providers::CoreMLExecutionProvider,
+    execution_providers::{CPUExecutionProvider, CoreMLExecutionProvider},
     session::{builder::GraphOptimizationLevel, Session},
 };
 
@@ -101,7 +101,7 @@ impl ORTLayoutParser {
         dbg!(&bboxes.len());
 
         let bboxes = nms(bboxes, Self::IOU_THRESHOLD);
-        dbg!(&bboxes.len());
+        dbg!(&bboxes[..10]);
 
         let output_file = "test.png";
         draw_bboxes_and_save(&bboxes, page_img, output_file)?;
@@ -137,10 +137,10 @@ impl ORTLayoutParser {
             let w = prediction[2_usize] / Self::REQUIRED_WIDTH as f32 * (original_width as f32);
             let h = prediction[3_usize] / Self::REQUIRED_HEIGHT as f32 * (original_height as f32);
             // Change to (upper-left, lower-right)
-            let x0 = xc - w / 2.0;
-            let x1 = xc + w / 2.0;
-            let y0 = yc - h / 2.0;
-            let y1 = yc + h / 2.0;
+            let x0 = xc - (w / 2.0);
+            let x1 = xc + (w / 2.0);
+            let y0 = yc - (h / 2.0);
+            let y1 = yc + (h / 2.0);
 
             result.push(LayoutBBox {
                 bbox: BBox { x0, y0, x1, y1 },
@@ -179,14 +179,16 @@ impl ORTLayoutParser {
 
 fn nms(mut raw_bboxes: Vec<LayoutBBox>, iou_threshold: f32) -> Vec<LayoutBBox> {
     // TODO: can I sort this before ?
-    raw_bboxes.sort_by(|r1, r2| r1.proba.total_cmp(&r2.proba));
+    raw_bboxes.sort_by(|r1, r2| r2.proba.total_cmp(&r1.proba));
     let mut result = Vec::new();
     while !raw_bboxes.is_empty() {
         result.push(raw_bboxes.first().unwrap().to_owned());
-
         raw_bboxes.retain(|rbbox| {
             let current_bbox = result.last().unwrap();
-            rbbox.label == current_bbox.label && current_bbox.bbox.iou(&rbbox.bbox) < iou_threshold
+            if rbbox.label != current_bbox.label {
+                return true;
+            }
+            current_bbox.bbox.iou(&rbbox.bbox) < iou_threshold
         });
     }
     result
