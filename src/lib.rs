@@ -258,17 +258,19 @@ pub fn parse_document<P: AsRef<Path>>(
     let layout_model = ORTLayoutParser::new("./models/yolov8s-doclaynet.onnx")?;
     // let mut pages = Vec::with_capacity(document.pages().len() as usize);
     for (index, mut page) in document.pages_mut().iter().enumerate() {
-        if index == 0 {
-            continue;
-        }
         // TODO: deal with document embedded forms?
         if flatten_pdf {
             page.flatten()?;
         }
+        let rescale_factor = {
+            let scale_w = ORTLayoutParser::REQUIRED_WIDTH as f32 / page.width().value;
+            let scale_h = ORTLayoutParser::REQUIRED_HEIGHT as f32 / page.height().value;
+            f32::min(scale_h, scale_w)
+        };
         // FIXME: check that rotation is correct ??
         // let page_rotation = page.rotation().unwrap_or(PdfPageRenderRotation::None);
         let page_image = page
-            .render_with_config(&PdfRenderConfig::default().scale_page_by_factor(1.0))
+            .render_with_config(&PdfRenderConfig::default().scale_page_by_factor(rescale_factor))
             .map(|bitmap| bitmap.as_image())?;
 
         let page_bbox = BBox {
@@ -281,9 +283,12 @@ pub fn parse_document<P: AsRef<Path>>(
         let lines = parse_lines(spans);
 
         // TODO: Takes ~25ms -> batch a &[PdfPage] later
-        let layout_result = layout_model.parse_layout(&page_image)?;
+        // Export model with dynamic batch params
+        layout_model.parse_layout(&page_image)?;
 
-        break;
+        if index > 2 {
+            break;
+        }
 
         // pages.push(Page {
         //     id: index,
@@ -296,4 +301,152 @@ pub fn parse_document<P: AsRef<Path>>(
     }
 
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_intersection() {
+        let bbox1 = BBox {
+            x0: 0.0,
+            y0: 0.0,
+            x1: 2.0,
+            y1: 2.0,
+        };
+        let bbox2 = BBox {
+            x0: 1.0,
+            y0: 1.0,
+            x1: 3.0,
+            y1: 3.0,
+        };
+        let bbox3 = BBox {
+            x0: 2.0,
+            y0: 2.0,
+            x1: 4.0,
+            y1: 4.0,
+        };
+        let bbox4 = BBox {
+            x0: 3.0,
+            y0: 3.0,
+            x1: 5.0,
+            y1: 5.0,
+        }; // No overlap
+        let bbox5 = BBox {
+            x0: -1.0,
+            y0: -1.0,
+            x1: 1.0,
+            y1: 1.0,
+        }; // Negative coordinates
+        let bbox6 = BBox {
+            x0: 0.5,
+            y0: 0.5,
+            x1: 1.5,
+            y1: 1.5,
+        }; // Inside bbox1
+
+        // Edge Cases
+        assert_eq!(bbox1.intersection(&bbox3), 0.0);
+        assert_eq!(bbox1.intersection(&bbox4), 0.0); // Adjacent
+        assert_eq!(bbox5.intersection(&bbox1), 1.0); // Overlaps partially with bbox1
+
+        // Overlaps
+        assert_eq!(bbox1.intersection(&bbox2), 1.0);
+        assert_eq!(bbox1.intersection(&bbox6), bbox6.area()); // bbox6 is inside bbox1
+
+        // Sanity Checks
+        assert_eq!(bbox1.intersection(&bbox1), bbox1.area());
+    }
+
+    #[test]
+    fn test_union() {
+        let bbox1 = BBox {
+            x0: 0.0,
+            y0: 0.0,
+            x1: 2.0,
+            y1: 2.0,
+        };
+        let bbox2 = BBox {
+            x0: 1.0,
+            y0: 1.0,
+            x1: 3.0,
+            y1: 3.0,
+        };
+        let bbox3 = BBox {
+            x0: 2.0,
+            y0: 2.0,
+            x1: 4.0,
+            y1: 4.0,
+        };
+        let bbox4 = BBox {
+            x0: 3.0,
+            y0: 3.0,
+            x1: 5.0,
+            y1: 5.0,
+        }; // No overlap
+        let bbox5 = BBox {
+            x0: -1.0,
+            y0: -1.0,
+            x1: 1.0,
+            y1: 1.0,
+        }; // Negative coordinates
+
+        // Edge Cases
+        assert_eq!(bbox1.union(&bbox3), 8.0);
+        assert_eq!(bbox1.union(&bbox4), 8.0); // Completely non-overlapping
+        assert_eq!(bbox5.union(&bbox1), 7.0); // Negative coordinate case
+
+        // Overlapping
+        assert_eq!(bbox1.union(&bbox2), 7.0);
+
+        // Sanity Checks
+        assert_eq!(bbox1.union(&bbox1), bbox1.area());
+    }
+
+    #[test]
+    fn test_iou() {
+        let bbox1 = BBox {
+            x0: 0.0,
+            y0: 0.0,
+            x1: 2.0,
+            y1: 2.0,
+        };
+        let bbox2 = BBox {
+            x0: 1.0,
+            y0: 1.0,
+            x1: 3.0,
+            y1: 3.0,
+        };
+        let bbox3 = BBox {
+            x0: 2.0,
+            y0: 2.0,
+            x1: 4.0,
+            y1: 4.0,
+        };
+        let bbox4 = BBox {
+            x0: 3.0,
+            y0: 3.0,
+            x1: 5.0,
+            y1: 5.0,
+        }; // No overlap
+        let bbox6 = BBox {
+            x0: 0.5,
+            y0: 0.5,
+            x1: 1.5,
+            y1: 1.5,
+        }; // Inside bbox1
+
+        // Sanity Checks
+        assert_eq!(bbox1.iou(&bbox1), 1.0);
+        // Completely non-overlapping
+        assert_eq!(bbox1.iou(&bbox4), 0.0);
+
+        // Edge Cases
+        assert_eq!(bbox1.iou(&bbox3), 0.0);
+
+        // Overlapping
+        assert_eq!(bbox1.iou(&bbox2), 1.0 / 7.0);
+        assert_eq!(bbox1.iou(&bbox6), bbox6.area() / bbox1.area()); // bbox6 is inside bbox1
+    }
 }
