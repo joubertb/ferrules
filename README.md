@@ -65,12 +65,14 @@ A Ferrule (a corruption of Latin viriola "small bracelet", under the influence o
 
   - [ ] HTML renderer
   - [ ] Markdown renderer
+  - [ ] JSON renderer
 
 - [ ] API
 
   - [ ] Batch inference on pages
-  - [ ] Dynamic batching of document to process
-  - [ ]
+    - [ ] Export onnx with dynamic batch_size
+    - [ ] Run layout on &Vec<page>
+  - [ ] Dynamic batching of document(pages) to process
 
 - [ ] Build pdfium statically for Linux
 - [ ] Configurable inference params: ORTProviders/ batch_size, confidence_score, NMS ..
