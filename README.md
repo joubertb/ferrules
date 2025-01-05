@@ -32,8 +32,6 @@ A Ferrule (a corruption of Latin viriola "small bracelet", under the influence o
 3. **Processor**: Applies [Processors] to StructuredDocument elements
 4. **Render Document:**
 
-## State Machine
-
 # TODO
 
 - [x] Build pdfium statically for Macos
