@@ -33,3 +33,48 @@ A Ferrule (a corruption of Latin viriola "small bracelet", under the influence o
 4. **Render Document:**
 
 ## State Machine
+
+# TODO
+
+- [x] Build pdfium statically for Macos
+
+- [x] Parse document using pdfium
+
+  - [x] Parse char
+  - [x] Merge chars into CharSpans
+  - [x] Merge spans into Lines
+
+- [ ] Layout:
+
+  - [x] Find Layout Model and run with ORT
+  - [x] Accelerate Model on ANE/GPU
+  - [x] Extract Page Layout
+    - [x] Preprocess pdfium image
+    - [x] Postprocess tensor -> nms
+    - [ ] Verify labels
+  - [ ] Determine pages needing OCR (coverage lines/blocks)
+  - [ ] Merge Layout with pdfium lines
+  - [ ] Build ParsedDocument result
+
+- [ ] Transform to HighLevel:
+
+  - [ ] Group_caption_blocks(page)
+  - [ ] Group_lists(page)
+  - [ ] Build Document TOC
+  - [ ] Run processors ( Text, List, PageHeader ) .
+
+- [ ] Render Document
+
+  - [ ] HTML renderer
+  - [ ] Markdown renderer
+
+- [ ] API
+
+  - [ ] Batch inference on pages
+  - [ ] Dynamic batching of document to process
+  - [ ]
+
+- [ ] Build pdfium statically for Linux
+- [ ] Configurable inference params: ORTProviders/ batch_size, confidence_score, NMS ..
+- [ ] Add OCR (recognition) model
+- [ ] Determine page orientation + deskew

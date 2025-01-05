@@ -14,5 +14,5 @@ ndarray = "0.16.1"
 ort = { version = "=2.0.0-rc.9", features = ["coreml", "fetch-models"] }
 plsfix = "0.1.7"
 lazy_static = "1.5.0"
-
 imageproc = "0.25.0"
+ab_glyph = "0.2.29"

@@ -13,11 +13,13 @@ use ort::{
 
 use crate::BBox;
 
+use super::draw::draw_bboxes_and_save;
+
 #[derive(Debug, Default, Clone)]
-struct LayoutBBox {
-    bbox: BBox,
-    label: &'static str,
-    proba: f32,
+pub(crate) struct LayoutBBox {
+    pub(crate) bbox: BBox,
+    pub(crate) label: &'static str,
+    pub(crate) proba: f32,
 }
 
 lazy_static! {
@@ -43,15 +45,14 @@ pub struct ORTLayoutParser {
 
 impl ORTLayoutParser {
     pub fn new<P: AsRef<Path>>(model_path: P) -> anyhow::Result<Self> {
-        // let session = Session::builder()?
-        //     .with_execution_providers([CoreMLExecutionProvider::default()
-        //         .with_ane_only()
-        //         .with_subgraphs()
-        //         .build()])?
-        //     // .with_optimization_level(GraphOptimizationLevel::Level1)?
-        //     .with_intra_threads(8)?
-        //     .commit_from_file(model_path)?;
-        let session = Session::builder()?.commit_from_file(model_path)?;
+        let session = Session::builder()?
+            .with_execution_providers([CoreMLExecutionProvider::default()
+                .with_ane_only()
+                .with_subgraphs()
+                .build()])?
+            .with_optimization_level(GraphOptimizationLevel::Level3)?
+            .with_intra_threads(8)?
+            .commit_from_file(model_path)?;
         Ok(Self { session })
     }
 }
@@ -66,7 +67,7 @@ impl ORTLayoutParser {
     const OUTPUT_SIZE: [usize; 3] = [1, 15, 21504];
 
     const CONF_THRESHOLD: f32 = 0.3;
-    const IOU_THRESHOLD: f32 = 0.45;
+    const IOU_THRESHOLD: f32 = 0.7;
 
     pub fn parse_layout(&self, page_img: &DynamicImage) -> anyhow::Result<()> {
         let (img_width, img_height) = (page_img.width(), page_img.height());
@@ -102,7 +103,6 @@ impl ORTLayoutParser {
         let mut bboxes = self.extract_bboxes(output_tensor, img_width, img_height);
         nms(&mut bboxes, Self::IOU_THRESHOLD);
 
-        dbg!(&bboxes.len());
         // dbg!(&bboxes);
         let output_file = "test.png";
         draw_bboxes_and_save(&bboxes, page_img, output_file)?;
@@ -135,7 +135,6 @@ impl ORTLayoutParser {
             if proba < Self::CONF_THRESHOLD {
                 continue;
             }
-            dbg!(prediction.dim());
             let label = ID2LABEL[max_prob_idx];
             let ratio = (Self::REQUIRED_WIDTH as f32 / original_width as f32)
                 .min(Self::REQUIRED_HEIGHT as f32 / original_height as f32);
@@ -213,40 +212,6 @@ fn nms(raw_bboxes: &mut Vec<LayoutBBox>, iou_threshold: f32) {
         }
     }
     raw_bboxes.truncate(current_index);
-}
-
-fn draw_bboxes_and_save(
-    bboxes: &[LayoutBBox],
-    page_img: &DynamicImage,
-    out_path: impl AsRef<Path>,
-) -> anyhow::Result<()> {
-    // Convert the dynamic image to RGBA for in-place drawing.
-    let mut out_img = page_img.to_rgba8();
-
-    // Iterate over all bounding boxes and draw them.
-    for layout_box in bboxes {
-        let x0 = layout_box.bbox.x0 as i32;
-        let y0 = layout_box.bbox.y0 as i32;
-        let x1 = layout_box.bbox.x1 as i32;
-        let y1 = layout_box.bbox.y1 as i32;
-
-        // Determine rectangle width/height based on (x0, y0), (x1, y1).
-        // Assuming x1 >= x0, y1 >= y0 in your data:
-        let width = (x1 - x0).max(0) as u32;
-        let height = (y1 - y0).max(0) as u32;
-
-        // Create a Rect with top-left at (x0, y0) and size (width, height).
-        let rect = Rect::at(x0, y0).of_size(width, height);
-
-        // Draw a hollow rectangle (box outline only).
-        // Use RGBA color [R, G, B, A] (e.g., red with full opacity).
-        draw_hollow_rect_mut(&mut out_img, rect, Rgba([255, 0, 0, 255]));
-    }
-
-    // Save the image with the drawn bounding boxes.
-    out_img.save(out_path)?;
-
-    Ok(())
 }
 
 #[cfg(test)]
