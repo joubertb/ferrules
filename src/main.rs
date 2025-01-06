@@ -1,4 +1,6 @@
-use ferrules::parse_document;
+use std::time::{self, Instant};
+
+use ferrules::parse::parse_document;
 
 fn main() {
     // let native_single_col =
@@ -6,6 +8,11 @@ fn main() {
     // let native_double_col =
     //     "/Users/amine/data/quivr/parsing/native/0b0ab5f4-b654-4846-bd9b-18b3c1075c52.pdf";
     //
+    let start_time = time::Instant::now();
     let path = "/Users/amine/Downloads/RAG Corporate 2024 016.pdf";
-    parse_document(path, None, true).unwrap()
+    parse_document(path, None, true).unwrap();
+    println!(
+        "Parsing doc took : {} ms",
+        Instant::now().duration_since(start_time).as_millis()
+    )
 }
