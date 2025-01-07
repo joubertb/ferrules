@@ -92,6 +92,10 @@ pub fn parse_document<P: AsRef<Path>>(
         // Export model with dynamic batch params
         layout_model.parse_layout(&page_image)?;
 
+        if index >= 2 {
+            break;
+        }
+
         // pages.push(Page {
         //     id: index,
         //     blocks: vec![],

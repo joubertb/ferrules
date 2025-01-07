@@ -26,7 +26,6 @@ lazy_static! {
     static ref ID2LABEL: [&'static str; 11] = [
         "Caption",
         "Footnote",
-        "Title",
         "Formula",
         "List-item",
         "Page-footer",
@@ -35,6 +34,7 @@ lazy_static! {
         "Section-header",
         "Table",
         "Text",
+        "Title",
     ];
 }
 
@@ -102,9 +102,10 @@ impl ORTLayoutParser {
         let mut bboxes = self.extract_bboxes(output_tensor, img_width, img_height);
         nms(&mut bboxes, Self::IOU_THRESHOLD);
 
-        // dbg!(&bboxes);
-        let output_file = "test.png";
-        draw_bboxes_and_save(&bboxes, page_img, output_file)?;
+        if std::env::var("FERRULES_DEBUG").is_ok() {
+            let output_file = "test.png";
+            draw_bboxes_and_save(&bboxes, page_img, output_file)?;
+        };
 
         Ok(())
     }
@@ -123,14 +124,12 @@ impl ORTLayoutParser {
             const CXYWH_OFFSET: usize = 4;
             let bbox = prediction.slice(s![0..CXYWH_OFFSET]);
             let classes = prediction.slice(s![CXYWH_OFFSET..CXYWH_OFFSET + ID2LABEL.len()]);
-            let max_prob_idx = classes
+            let (max_prob_idx, &proba) = classes
                 .iter()
                 .enumerate()
                 .max_by(|(_, a), (_, b)| a.partial_cmp(b).unwrap_or(std::cmp::Ordering::Equal))
-                .map(|(max_idx, _)| max_idx)
                 .unwrap();
 
-            let proba = classes[max_prob_idx];
             if proba < Self::CONF_THRESHOLD {
                 continue;
             }
