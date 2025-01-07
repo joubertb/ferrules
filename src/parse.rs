@@ -1,16 +1,13 @@
-use plsfix::fix_text;
-use std::{
-    path::{Path, PathBuf},
-    time::Instant,
+use std::path::Path;
+
+use pdfium_render::prelude::{PdfPageTextChar, PdfRenderConfig, Pdfium};
+
+use crate::{
+    layout::model::{LayoutBBox, ORTLayoutParser},
+    BBox, CharSpan, Line,
 };
 
-use pdfium_render::prelude::{
-    PdfFontWeight, PdfPageRenderRotation, PdfPageTextChar, PdfRect, PdfRenderConfig, Pdfium,
-};
-
-use crate::{layout::model::ORTLayoutParser, BBox, CharSpan, Line};
-
-fn parse_spans<'a>(
+fn parse_text_spans<'a>(
     chars: impl Iterator<Item = PdfPageTextChar<'a>>,
     page_bbox: &BBox,
 ) -> Vec<CharSpan> {
@@ -35,7 +32,7 @@ fn parse_spans<'a>(
     spans
 }
 
-fn parse_lines(spans: Vec<CharSpan>) -> Vec<Line> {
+fn parse_text_lines(spans: Vec<CharSpan>) -> Vec<Line> {
     let mut lines = Vec::new();
     for span in spans {
         if lines.is_empty() {
@@ -58,6 +55,8 @@ pub fn parse_document<P: AsRef<Path>>(
     password: Option<&str>,
     flatten_pdf: bool,
 ) -> anyhow::Result<()> {
+    let line_coverage_minimum: u32 = 1;
+    let layout_coverage_threshold: f32 = 0.1;
     let pdfium = Pdfium::new(Pdfium::bind_to_statically_linked_library()?);
     let mut document = pdfium.load_pdf_from_file(&path, password)?;
 
@@ -80,17 +79,27 @@ pub fn parse_document<P: AsRef<Path>>(
             x1: page.width().value,
             y1: page.height().value,
         };
-        let spans = parse_spans(page.text()?.chars().iter(), &page_bbox);
-        let lines = parse_lines(spans);
+        let text_spans = parse_text_spans(page.text()?.chars().iter(), &page_bbox);
+        let text_lines = parse_text_lines(text_spans);
 
         // FIXME: check that rotation is correct ??
         // let page_rotation = page.rotation().unwrap_or(PdfPageRenderRotation::None);
         let page_image = page
             .render_with_config(&PdfRenderConfig::default().scale_page_by_factor(rescale_factor))
             .map(|bitmap| bitmap.as_image())?;
+        //
         // TODO: Takes ~25ms -> batch a &[PdfPage] later
         // Export model with dynamic batch params
-        layout_model.parse_layout(&page_image)?;
+        let page_layout = layout_model.parse_layout(&page_image)?;
+
+        let page_need_ocr = page_need_ocr(
+            &text_lines,
+            &page_layout,
+            line_coverage_minimum,
+            layout_coverage_threshold,
+        );
+
+        dbg!(page_need_ocr);
 
         if index >= 2 {
             break;
@@ -107,4 +116,35 @@ pub fn parse_document<P: AsRef<Path>>(
     }
 
     Ok(())
+}
+
+fn page_need_ocr(
+    text_lines: &[Line],
+    page_bboxes: &[LayoutBBox],
+    line_coverage_minimum: u32,
+    layout_coverage_threshold: f32,
+) -> bool {
+    let text_boxes: Vec<&LayoutBBox> = page_bboxes.iter().filter(|b| b.is_text_block()).collect();
+
+    let coverage: u32 = text_lines
+        .iter()
+        .map(|l| {
+            text_boxes.iter().fold(0, |acc, b| {
+                acc + (b.bbox.intersection(&l.bbox) > 0f32) as u32
+            })
+        })
+        .filter(|v| *v > line_coverage_minimum)
+        .sum();
+
+    // TODO: Model will sometimes say there is a single block of text on the page when it is blank
+    // if not text_okay and (total_blocks == 1 and large_text_blocks == 1):
+    //     text_okay = True
+    //
+    let text_line_coverage = if text_lines.is_empty() {
+        (coverage / (text_lines.len() as u32)) as f32
+    } else {
+        layout_coverage_threshold + 1f32
+    };
+
+    text_line_coverage > layout_coverage_threshold
 }

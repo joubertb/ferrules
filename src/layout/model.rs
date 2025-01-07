@@ -1,26 +1,17 @@
 use std::path::Path;
 
 use anyhow::Context;
-use image::{imageops::FilterType, DynamicImage, GenericImageView, Rgba};
-use imageproc::drawing::draw_hollow_rect_mut;
-use imageproc::rect::Rect;
+use image::{imageops::FilterType, DynamicImage, GenericImageView};
 use lazy_static::lazy_static;
-use ndarray::{s, Array, Array4, ArrayBase, Axis, Dim, OwnedRepr};
+use ndarray::{s, Array4, ArrayBase, Axis, Dim, OwnedRepr};
 use ort::{
-    execution_providers::{CPUExecutionProvider, CoreMLExecutionProvider},
+    execution_providers::CoreMLExecutionProvider,
     session::{builder::GraphOptimizationLevel, Session},
 };
 
 use crate::BBox;
 
 use super::draw::draw_bboxes_and_save;
-
-#[derive(Debug, Default, Clone)]
-pub(crate) struct LayoutBBox {
-    pub(crate) bbox: BBox,
-    pub(crate) label: &'static str,
-    pub(crate) proba: f32,
-}
 
 lazy_static! {
     static ref ID2LABEL: [&'static str; 11] = [
@@ -36,6 +27,28 @@ lazy_static! {
         "Text",
         "Title",
     ];
+}
+
+#[derive(Debug, Default, Clone)]
+pub struct LayoutBBox {
+    pub bbox: BBox,
+    pub label: &'static str,
+    pub proba: f32,
+}
+
+impl LayoutBBox {
+    pub fn is_text_block(&self) -> bool {
+        self.label == "Text"
+            || self.label == "Caption"
+            || self.label == "Footnote"
+            || self.label == "Formula"
+            || self.label == "List-Item"
+            || self.label == "Page-footer"
+            || self.label == "Page-header"
+            || self.label == "Section-header"
+            || self.label == "Table"
+            || self.label == "Title"
+    }
 }
 
 #[derive(Debug)]
@@ -68,7 +81,7 @@ impl ORTLayoutParser {
     const CONF_THRESHOLD: f32 = 0.3;
     const IOU_THRESHOLD: f32 = 0.7;
 
-    pub fn parse_layout(&self, page_img: &DynamicImage) -> anyhow::Result<()> {
+    pub fn parse_layout(&self, page_img: &DynamicImage) -> anyhow::Result<Vec<LayoutBBox>> {
         let (img_width, img_height) = (page_img.width(), page_img.height());
         let input_name = self
             .session
@@ -107,7 +120,7 @@ impl ORTLayoutParser {
             draw_bboxes_and_save(&bboxes, page_img, output_file)?;
         };
 
-        Ok(())
+        Ok(bboxes)
     }
 
     fn extract_bboxes(
