@@ -58,6 +58,7 @@ impl ORTLayoutParser {
     pub fn new<P: AsRef<Path>>(model_path: P) -> anyhow::Result<Self> {
         let session = Session::builder()?
             .with_execution_providers([CoreMLExecutionProvider::default()
+                .with_ane_only()
                 .with_subgraphs()
                 .build()])?
             .with_optimization_level(GraphOptimizationLevel::Level3)?

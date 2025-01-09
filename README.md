@@ -66,6 +66,8 @@ A Ferrule (a corruption of Latin viriola "small bracelet", under the influence o
 
 - [ ] Build pdfium statically for Linux
 - [ ] Determine page orientation + deskew
+- [ ] Optimize layout model for ANE
+- [ ] ORT inference in fp16/mixed precision
 
 ## Resources:
 

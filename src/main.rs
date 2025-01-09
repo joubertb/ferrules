@@ -10,7 +10,7 @@ fn main() {
     let layout_model =
         ORTLayoutParser::new("./models/yolov8s-doclaynet.onnx").expect("can't load layout model");
 
-    for _ in 0..30 {
+    for _ in 0..5 {
         let start_time = time::Instant::now();
         parse_document(path, &layout_model, None, true).unwrap();
         println!(
