@@ -3,8 +3,11 @@ use std::path::Path;
 use pdfium_render::prelude::{PdfPageTextChar, PdfRenderConfig, Pdfium};
 
 use crate::{
-    layout::model::{LayoutBBox, ORTLayoutParser},
-    BBox, CharSpan, Line,
+    layout::{
+        draw::{draw_bboxes, draw_text_lines},
+        model::{LayoutBBox, ORTLayoutParser},
+    },
+    BBox, Block, CharSpan, Line,
 };
 
 fn parse_text_spans<'a>(
@@ -55,14 +58,13 @@ pub fn parse_document<P: AsRef<Path>>(
     password: Option<&str>,
     flatten_pdf: bool,
 ) -> anyhow::Result<()> {
-    let line_coverage_minimum: u32 = 1;
     let layout_coverage_threshold: f32 = 0.1;
     let pdfium = Pdfium::new(Pdfium::bind_to_statically_linked_library()?);
     let mut document = pdfium.load_pdf_from_file(&path, password)?;
 
     let layout_model = ORTLayoutParser::new("./models/yolov8s-doclaynet.onnx")?;
     // let mut pages = Vec::with_capacity(document.pages().len() as usize);
-    for (index, mut page) in document.pages_mut().iter().enumerate() {
+    for (page_idx, mut page) in document.pages_mut().iter().enumerate() {
         // TODO: deal with document embedded forms?
         if flatten_pdf {
             page.flatten()?;
@@ -72,7 +74,8 @@ pub fn parse_document<P: AsRef<Path>>(
             let scale_h = ORTLayoutParser::REQUIRED_HEIGHT as f32 / page.height().value;
             f32::min(scale_h, scale_w)
         };
-
+        // TODO: change
+        // let rescale_factor = 1f32;
         let page_bbox = BBox {
             x0: 0f32,
             y0: 0f32,
@@ -87,21 +90,28 @@ pub fn parse_document<P: AsRef<Path>>(
         let page_image = page
             .render_with_config(&PdfRenderConfig::default().scale_page_by_factor(rescale_factor))
             .map(|bitmap| bitmap.as_image())?;
-        //
+
         // TODO: Takes ~25ms -> batch a &[PdfPage] later
         // Export model with dynamic batch params
         let page_layout = layout_model.parse_layout(&page_image)?;
 
-        let page_need_ocr = page_need_ocr(
-            &text_lines,
-            &page_layout,
-            line_coverage_minimum,
-            layout_coverage_threshold,
-        );
+        if std::env::var("FERRULES_DEBUG").is_ok() {
+            let output_file = "page_line.png";
+            let out_img = draw_text_lines(&text_lines, &page_image, rescale_factor)?;
+            let out_img = draw_bboxes(&page_layout, &out_img.into())?;
+            out_img.save(output_file)?;
+        };
 
-        dbg!(page_need_ocr);
+        // let page_need_ocr = page_need_ocr(
+        //     &text_lines,
+        //     &page_layout,
+        //     // line_coverage_minimum,
+        //     layout_coverage_threshold,
+        // );
 
-        if index >= 2 {
+        let blocks = merge_line_layout(&page_layout, &text_lines, page_idx);
+
+        if page_idx >= 0 {
             break;
         }
 
@@ -118,33 +128,91 @@ pub fn parse_document<P: AsRef<Path>>(
     Ok(())
 }
 
+fn merge_line_layout(
+    page_layout: &[LayoutBBox],
+    text_lines: &[Line],
+    page_id: usize,
+) -> anyhow::Result<Vec<Block>> {
+    let text_boxes: Vec<&LayoutBBox> = page_layout.iter().filter(|b| b.is_text_block()).collect();
+
+    let mut total_line_coverage = 0;
+
+    let line_block_iterator = text_lines.iter().map(|line| {
+        // Get max intersection block for the line
+        let max_intersection_bbox = text_boxes.iter().max_by(|a, b| {
+            let a_intersection = a.bbox.intersection(&line.bbox);
+            let b_intersection = b.bbox.intersection(&line.bbox);
+
+            a_intersection.partial_cmp(&b_intersection).unwrap()
+        });
+        let max_intersection_bbox = max_intersection_bbox.and_then(|b| {
+            if b.bbox.intersection(&line.bbox) > 0.8 {
+                Some(b)
+            } else {
+                None
+            }
+        });
+        (line, max_intersection_bbox)
+    });
+
+    // TODO: Return the page intersection
+    let mut blocks = Vec::new();
+    for (line, layout_block) in line_block_iterator {
+        match layout_block {
+            Some(&layoutb) => {
+                if blocks.is_empty() {
+                    let mut block = Block::from_layout_block(0, layoutb, page_id);
+                    block.push_line(line);
+                    blocks.push(block);
+                }
+
+                let last_block = blocks.last_mut().unwrap();
+
+                if layoutb.id == last_block.layout_block_id {
+                    last_block.push_line(line);
+                } else {
+                    let mut block = Block::from_layout_block(0, layoutb, page_id);
+                    block.push_line(line);
+                    blocks.push(block);
+                }
+            }
+            None => {
+                // TODO: add box
+                // eprintln!("Line skipped because no layout bbox intersection");
+                continue;
+            }
+        }
+    }
+
+    Ok(blocks)
+}
+
 fn page_need_ocr(
     text_lines: &[Line],
     page_bboxes: &[LayoutBBox],
-    line_coverage_minimum: u32,
     layout_coverage_threshold: f32,
 ) -> bool {
     let text_boxes: Vec<&LayoutBBox> = page_bboxes.iter().filter(|b| b.is_text_block()).collect();
 
-    let coverage: u32 = text_lines
-        .iter()
-        .map(|l| {
-            text_boxes.iter().fold(0, |acc, b| {
-                acc + (b.bbox.intersection(&l.bbox) > 0f32) as u32
-            })
-        })
-        .filter(|v| *v > line_coverage_minimum)
-        .sum();
+    let mut total_line_coverage = 0;
 
-    // TODO: Model will sometimes say there is a single block of text on the page when it is blank
-    // if not text_okay and (total_blocks == 1 and large_text_blocks == 1):
-    //     text_okay = True
-    //
-    let text_line_coverage = if text_lines.is_empty() {
-        (coverage / (text_lines.len() as u32)) as f32
+    for line in text_lines {
+        let max_intersection_bbox = text_boxes.iter().max_by(|a, b| {
+            let a_intersection = a.bbox.intersection(&line.bbox);
+            let b_intersection = b.bbox.intersection(&line.bbox);
+
+            a_intersection.partial_cmp(&b_intersection).unwrap()
+        });
+
+        if let Some(layout_bbox) = max_intersection_bbox {
+            total_line_coverage += (layout_bbox.bbox.intersection(&line.bbox) > 0f32) as usize;
+        }
+    }
+
+    if !text_lines.is_empty() {
+        let text_line_coverage = (total_line_coverage / text_lines.len()) as f32;
+        text_line_coverage > layout_coverage_threshold
     } else {
-        layout_coverage_threshold + 1f32
-    };
-
-    text_line_coverage > layout_coverage_threshold
+        true
+    }
 }

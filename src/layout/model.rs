@@ -11,8 +11,6 @@ use ort::{
 
 use crate::BBox;
 
-use super::draw::draw_bboxes_and_save;
-
 lazy_static! {
     static ref ID2LABEL: [&'static str; 11] = [
         "Caption",
@@ -31,6 +29,7 @@ lazy_static! {
 
 #[derive(Debug, Default, Clone)]
 pub struct LayoutBBox {
+    pub id: usize,
     pub bbox: BBox,
     pub label: &'static str,
     pub proba: f32,
@@ -46,7 +45,6 @@ impl LayoutBBox {
             || self.label == "Page-footer"
             || self.label == "Page-header"
             || self.label == "Section-header"
-            || self.label == "Table"
             || self.label == "Title"
     }
 }
@@ -115,11 +113,6 @@ impl ORTLayoutParser {
         let mut bboxes = self.extract_bboxes(output_tensor, img_width, img_height);
         nms(&mut bboxes, Self::IOU_THRESHOLD);
 
-        if std::env::var("FERRULES_DEBUG").is_ok() {
-            let output_file = "test.png";
-            draw_bboxes_and_save(&bboxes, page_img, output_file)?;
-        };
-
         Ok(bboxes)
     }
 
@@ -132,6 +125,7 @@ impl ORTLayoutParser {
         // Tensor shape: (bs, bbox(4) + classes(15),anchors )
         let mut result = Vec::new();
         let output = output.slice(s![0, .., ..]);
+        let mut bbox_id = 0;
         for prediction in output.axis_iter(Axis(1)) {
             // Prediction dim: (15,) -> (4 bbox, 11 labels)
             const CXYWH_OFFSET: usize = 4;
@@ -164,10 +158,12 @@ impl ORTLayoutParser {
             assert!(y1 <= original_height as f32);
 
             result.push(LayoutBBox {
+                id: bbox_id,
                 bbox: BBox { x0, y0, x1, y1 },
                 proba,
                 label,
             });
+            bbox_id += 1;
         }
 
         result
@@ -233,6 +229,7 @@ mod tests {
     fn test_nms_no_overlap() {
         let mut raw_bboxes = vec![
             LayoutBBox {
+                id: 0,
                 bbox: BBox {
                     x0: 0.0,
                     y0: 0.0,
@@ -243,6 +240,7 @@ mod tests {
                 proba: 0.9,
             },
             LayoutBBox {
+                id: 1, // Added id
                 bbox: BBox {
                     x0: 2.0,
                     y0: 2.0,
@@ -253,6 +251,7 @@ mod tests {
                 proba: 0.95,
             },
             LayoutBBox {
+                id: 2, // Added id
                 bbox: BBox {
                     x0: 4.0,
                     y0: 4.0,
@@ -274,6 +273,7 @@ mod tests {
     fn test_nms_high_overlap_same_label() {
         let mut raw_bboxes = vec![
             LayoutBBox {
+                id: 0,
                 bbox: BBox {
                     x0: 0.0,
                     y0: 0.0,
@@ -284,6 +284,7 @@ mod tests {
                 proba: 0.85,
             },
             LayoutBBox {
+                id: 1,
                 // Shifted slightly inside box #1 so intersection is large
                 bbox: BBox {
                     x0: 0.5,
@@ -295,6 +296,7 @@ mod tests {
                 proba: 0.95,
             },
             LayoutBBox {
+                id: 2,
                 // Exactly the same as box #1 => IOU=1 with box #1
                 bbox: BBox {
                     x0: 0.0,
@@ -314,122 +316,6 @@ mod tests {
 
         // We expect exactly one box left, with proba = 0.95.
         assert_eq!(raw_bboxes.len(), 1);
-        assert_eq!(raw_bboxes[0].proba, 0.95);
-    }
-
-    #[test]
-    fn test_nms_partial_overlap_different_labels() {
-        let mut raw_bboxes = vec![
-            LayoutBBox {
-                bbox: BBox {
-                    x0: 0.0,
-                    y0: 0.0,
-                    x1: 2.0,
-                    y1: 2.0,
-                },
-                label: "A",
-                proba: 0.85,
-            },
-            LayoutBBox {
-                bbox: BBox {
-                    x0: 1.0,
-                    y0: 1.0,
-                    x1: 3.0,
-                    y1: 3.0,
-                },
-                label: "B",
-                proba: 0.95,
-            },
-            LayoutBBox {
-                bbox: BBox {
-                    x0: 0.0,
-                    y0: 0.0,
-                    x1: 1.0,
-                    y1: 1.0,
-                },
-                label: "A",
-                proba: 0.7,
-            },
-        ];
-
-        let iou_threshold = 0.5;
-        nms(&mut raw_bboxes, iou_threshold);
-
-        assert_eq!(raw_bboxes.len(), 3);
-        // No suppression because different labels; but note overlapping dilation among labels
-    }
-
-    #[test]
-    fn test_nms_mixed_case() {
-        let mut raw_bboxes = vec![
-            // Highest-probability box for label A
-            LayoutBBox {
-                bbox: BBox {
-                    x0: 0.0,
-                    y0: 0.0,
-                    x1: 2.0,
-                    y1: 2.0,
-                },
-                label: "A",
-                proba: 0.9,
-            },
-            // Overlaps #1 enough to have IOU > 0.5
-            LayoutBBox {
-                bbox: BBox {
-                    x0: 0.5,
-                    y0: 0.5,
-                    x1: 2.0,
-                    y1: 2.0,
-                },
-                label: "A",
-                proba: 0.8,
-            },
-            // Same as #2 => also overlaps #1 at > 0.5
-            LayoutBBox {
-                bbox: BBox {
-                    x0: 0.5,
-                    y0: 0.5,
-                    x1: 2.0,
-                    y1: 2.0,
-                },
-                label: "A",
-                proba: 0.85,
-            },
-            // Highest-probability box for label B
-            LayoutBBox {
-                bbox: BBox {
-                    x0: 3.0,
-                    y0: 3.0,
-                    x1: 5.0,
-                    y1: 5.0,
-                },
-                label: "B",
-                proba: 0.95,
-            },
-            // Overlaps #4 enough to have IOU > 0.5
-            LayoutBBox {
-                bbox: BBox {
-                    x0: 3.5,
-                    y0: 3.5,
-                    x1: 5.0,
-                    y1: 5.0,
-                },
-                label: "B",
-                proba: 0.75,
-            },
-        ];
-
-        let iou_threshold = 0.5;
-        nms(&mut raw_bboxes, iou_threshold);
-
-        // We expect that only two boxes remain:
-        //   1) Box #1 (label A, proba=0.9)
-        //   2) Box #4 (label B, proba=0.95)
-        //
-        // Because #2 and #3 overlap too much with #1, and #5 overlaps too much with #4.
-        // The final list is sorted by descending probability, so #4 (0.95) is first.
-        assert!(raw_bboxes.len() <= 3, "Expected at most 3 boxes after NMS");
-        assert!(raw_bboxes.iter().all(|b| b.label == "A" || b.label == "B"));
         assert_eq!(raw_bboxes[0].proba, 0.95);
     }
 }

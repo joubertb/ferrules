@@ -1,5 +1,7 @@
 #![allow(dead_code)]
 
+use anyhow::bail;
+use layout::model::LayoutBBox;
 use plsfix::fix_text;
 use std::path::PathBuf;
 pub mod parse;
@@ -45,12 +47,11 @@ impl BBox {
         (self.width(), self.height())
     }
 
-    fn merge(&mut self, other: &Self) -> Self {
-        let x0 = self.x0.min(other.x0);
-        let y0 = self.y0.min(other.y0);
-        let x1 = self.x1.max(other.x1);
-        let y1 = self.y1.max(other.y1);
-        Self { x0, y0, x1, y1 }
+    fn merge(&mut self, other: &Self) {
+        self.x0 = self.x0.min(other.x0);
+        self.y0 = self.y0.min(other.y0);
+        self.x1 = self.x1.max(other.x1);
+        self.y1 = self.y1.max(other.y1);
     }
     fn overlap_x(&self, other: &Self) -> f32 {
         f32::max(
@@ -82,22 +83,84 @@ impl BBox {
     }
 }
 
+#[derive(Debug, Default)]
+pub struct TextBlock {
+    text: String,
+}
+
+impl TextBlock {
+    pub fn append(&mut self, txt: &str) {
+        self.text.push_str(txt);
+    }
+}
+
 #[derive(Debug)]
-enum BlockType {
-    Header,
-    Footer,
-    Text,
-    Line,
-    Span,
+pub enum BlockType {
+    Header(TextBlock),
+    FootNote(TextBlock),
+    Footer(TextBlock),
+    Text(TextBlock),
+    Title(TextBlock),
+    Subtitle(TextBlock),
+    ListItem(TextBlock),
+    Caption(TextBlock),
     Image,
+    Table,
 }
 
 #[derive(Debug)]
 struct Block {
     id: usize,
+    layout_block_id: usize,
     kind: BlockType,
+    elements: Vec<Block>,
     page_id: usize,
     bbox: BBox,
+}
+
+impl Block {
+    pub fn from_layout_block(id: usize, layout_block: &LayoutBBox, page_id: usize) -> Self {
+        let kind = match layout_block.label {
+            "Caption" => BlockType::Caption(Default::default()),
+            "Formula" | "Text" => BlockType::Text(Default::default()),
+            "List-item" => BlockType::ListItem(Default::default()),
+            "Footnote" => BlockType::FootNote(Default::default()),
+            "Page-footer" => BlockType::Footer(Default::default()),
+            "Page-header" => BlockType::Header(Default::default()),
+            "Title" => BlockType::Title(Default::default()),
+            "Section-header" => BlockType::Subtitle(Default::default()),
+            "Table" => BlockType::Table,
+            "Picture" => BlockType::Image,
+            _ => {
+                unreachable!("can't have other type of layout bbox")
+            }
+        };
+        Self {
+            id,
+            kind,
+            layout_block_id: layout_block.id,
+            elements: vec![],
+            page_id,
+            bbox: layout_block.bbox.to_owned(),
+        }
+    }
+    pub fn push_line(&mut self, line: &Line) {
+        match &mut self.kind {
+            BlockType::Header(text_block)
+            | BlockType::FootNote(text_block)
+            | BlockType::Footer(text_block)
+            | BlockType::Text(text_block)
+            | BlockType::Title(text_block)
+            | BlockType::Subtitle(text_block)
+            | BlockType::ListItem(text_block)
+            | BlockType::Caption(text_block) => {
+                text_block.append(&line.text);
+            }
+            BlockType::Image | BlockType::Table => {
+                eprintln!("Can't push line to Image or Table block");
+            }
+        }
+    }
 }
 
 #[derive(Debug)]
@@ -133,7 +196,7 @@ impl CharSpan {
             bbox: BBox::from_pdfrect(
                 char.tight_bounds()
                     .expect("Error init span tight bound char"),
-                page_bbox.width(),
+                page_bbox.height(),
             ),
             text: char.unicode_char().unwrap_or_default().into(),
             font_name: char.font_name(),
