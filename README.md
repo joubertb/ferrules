@@ -52,7 +52,7 @@ A Ferrule (a corruption of Latin viriola "small bracelet", under the influence o
     - [x] Verify labels
   - [x] Determine pages needing OCR (coverage lines/blocks)
   - [x] Merge Layout with pdfium lines
-    - [x] rescale / or / downscale line bbox/ layout bbox
+    - [x] Rescale / or / downscale line bbox/ layout bbox
   - [ ] Build ParsedDocument result
     - [ ] Merge Blocks into sections
 
@@ -60,7 +60,8 @@ A Ferrule (a corruption of Latin viriola "small bracelet", under the influence o
 
   - [ ] Group_caption_blocks(page)
   - [ ] Group_lists(page)
-  - [ ] Run processors (Text, List, PageHeader ) .
+  - [ ] Get PDF Bookmarks (TOC) and reconcile detected titles with TOC
+  - [ ] Run processors (Text, List, PageHeader )
 
 - [ ] Render Document
 
@@ -76,9 +77,9 @@ A Ferrule (a corruption of Latin viriola "small bracelet", under the influence o
   - [ ] Dynamic batching of document(pages) to process
 
 - [ ] Build pdfium statically for Linux
-- [ ] Use onnxruntime IO bindings : https://ort.pyke.io/perf/io-binding
 - [ ] Configurable inference params: ORTProviders/ batch_size, confidence_score, NMS ..
 - [ ] Add OCR (recognition) model
 - [ ] Determine page orientation + deskew
-- [ ] Add tracing
+- [ ] Use onnxruntime IO bindings : https://ort.pyke.io/perf/io-binding
+- [ ] Add tracing ?
 - [ ] Build Document TOC (in transform step)

@@ -5,4 +5,4 @@ model = YOLO("yolov8s-doclaynet.pt")
 
 
 # Export the model to ONNX format
-model.export(format="onnx", simplify=True)
+model.export(format="onnx", dynamic=True)
