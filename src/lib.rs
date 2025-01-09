@@ -1,9 +1,9 @@
 #![allow(dead_code)]
 
-use anyhow::bail;
 use layout::model::LayoutBBox;
 use plsfix::fix_text;
 use std::path::PathBuf;
+pub mod ocr;
 pub mod parse;
 
 use pdfium_render::prelude::{PdfFontWeight, PdfPageRenderRotation, PdfPageTextChar, PdfRect};
@@ -164,18 +164,19 @@ impl Block {
 }
 
 #[derive(Debug)]
-struct Page {
-    id: usize,
+pub struct StructuredPage {
+    pub id: usize,
+    pub width: f32,
+    pub height: f32,
+    pub rotation: PdfPageRenderRotation,
+    pub need_ocr: bool,
     blocks: Vec<Block>,
-    width: f32,
-    height: f32,
-    rotation: PdfPageRenderRotation,
 }
 
 #[derive(Debug)]
 struct Document {
     path: PathBuf,
-    pages: Vec<Page>,
+    pages: Vec<StructuredPage>,
 }
 
 #[derive(Debug)]

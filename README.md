@@ -4,35 +4,9 @@ A Ferrule (a corruption of Latin viriola "small bracelet", under the influence o
 
 ## Installation
 
-**Marker Process**
+// tocome
 
-1. **Document Builder:**
-
-- Utilizes PDF provider(pdfium)
-  - Implements pdftext_extraction, which utilizes pdftext.dictionnary_output to generate ProviderPageLines.
-  - Constructs self.page_bboxes and self.page_lines.
-- Constructs the `Document`:
-
-  - Constructs initial PagesGroup: (page_id, highlowres_image, polygon(page_bbox) ) from PDFium.
-  - Retrieves the layout using `batch_layout_detection`.
-  - Adds layout blocks to pages: bbox to polygon -> page.add_structure(block).
-  - Merges layout blocks of layout:
-    - Pages layout coverage: Intersection between layout_bbox and provider_bbox to verify + check when the model sometimes indicates a single block of text on a page when it is blank.
-    - If dont need OCR:
-      - Merge Provider.page_lines with
-
-- OCR Builder
-
-2. **Structure Builder:**: takes document -> StructuredDocument
-
-- For each page:
-  - group_caption_blocks(page)
-  - group_lists(page)
-
-3. **Processor**: Applies [Processors] to StructuredDocument elements
-4. **Render Document:**
-
-# TODO
+# Roadmap
 
 - [x] Build pdfium statically for Macos
 
@@ -53,14 +27,17 @@ A Ferrule (a corruption of Latin viriola "small bracelet", under the influence o
   - [x] Determine pages needing OCR (coverage lines/blocks)
   - [x] Merge Layout with pdfium lines
     - [x] Rescale / or / downscale line bbox/ layout bbox
-  - [ ] Build ParsedDocument result
-    - [ ] Merge Blocks into sections
+    - [x] Merge intersection lines with max bbox into blocks
+    - [ ] Add lines to bbox based on distance
+    - [ ] Add remaining layout blocks to blocks
 
 - [ ] Transform to HighLevel Document representation:
 
-  - [ ] Group_caption_blocks(page)
-  - [ ] Group_lists(page)
+  - [ ] Group caption/footer blocks with image blocks/tables using minimum gap
+  - [ ] Group listItems into list : Find first and merge subsequent items
+  - [ ] Merge Blocks into sections
   - [ ] Get PDF Bookmarks (TOC) and reconcile detected titles with TOC
+  - [ ] Process SubHeader/Titles using kmeans on line heigths to get the title_level
   - [ ] Run processors (Text, List, PageHeader )
 
 - [ ] Render Document
@@ -69,17 +46,33 @@ A Ferrule (a corruption of Latin viriola "small bracelet", under the influence o
   - [ ] Markdown renderer
   - [ ] JSON renderer
 
+- [ ] Add OCR (recognition) model
+
+  - [ ] Use Apple vision if macOS
+  - [ ] Find good recognition model (onnxtr ??)
+
+- [ ] Batch inference on pages
+
+  - [x] Export onnx with dynamic batch_size
+  - [ ] Run layout on &[DynamicImage]
+
+- [ ] Add tracing
+- [ ] Configurable inference params: ORTProviders/ batch_size, confidence_score, NMS ..
+
 - [ ] API
 
-  - [ ] Batch inference on pages
-    - [ ] Export onnx with dynamic batch_size
-    - [ ] Run layout on &Vec<page>
+  - [ ] Unify Config for env/CLI/API
   - [ ] Dynamic batching of document(pages) to process
 
 - [ ] Build pdfium statically for Linux
-- [ ] Configurable inference params: ORTProviders/ batch_size, confidence_score, NMS ..
-- [ ] Add OCR (recognition) model
 - [ ] Determine page orientation + deskew
-- [ ] Use onnxruntime IO bindings : https://ort.pyke.io/perf/io-binding
-- [ ] Add tracing ?
-- [ ] Build Document TOC (in transform step)
+
+## Resources:
+
+- Apple vision text detection:
+
+  - https://github.com/straussmaximilian/ocrmac/blob/main/ocrmac/ocrmac.py
+  - https://docs.rs/objc2-vision/latest/objc2_vision/index.html
+  - https://developer.apple.com/documentation/vision/recognizing-text-in-images
+
+- Use onnxruntime IO bindings: https://ort.pyke.io/perf/io-binding

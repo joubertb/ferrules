@@ -68,21 +68,26 @@ impl ORTLayoutParser {
 }
 
 impl ORTLayoutParser {
+    /// Required width of the input image for layout parsing.
     pub const REQUIRED_WIDTH: u32 = 1024;
-    /// Required input image height.
+    /// Required height of the input image for layout parsing.
     pub const REQUIRED_HEIGHT: u32 = 1024;
 
-    // tensor: float32[1,15,21504]
-    // 15 = 11 label classes + 4 bbox
+    // Output size of the tensor from the ONNX model.
+    // It has dimensions [batch_size = 1, classes + bbox = 15, candidate_boxes = 21504].
     const OUTPUT_SIZE: [usize; 3] = [1, 15, 21504];
 
+    /// Confidence threshold for filtering out low probability bounding boxes.
+    /// Bounding boxes with probability below this threshold will be ignored.
     const CONF_THRESHOLD: f32 = 0.3;
+    /// Intersection over Union (IOU) threshold for non-maximum suppression (NMS) algorithm.
+    /// It determines the overlap between bounding boxes before suppression.
     const IOU_THRESHOLD: f32 = 0.7;
 
     pub fn parse_layout(
         &self,
         page_img: &DynamicImage,
-        rescale_factor: f32,
+        bbox_rescale_factor: f32,
     ) -> anyhow::Result<Vec<LayoutBBox>> {
         let (img_width, img_height) = (page_img.width(), page_img.height());
         let input_name = self
@@ -114,7 +119,8 @@ impl ORTLayoutParser {
             .to_shape(Self::OUTPUT_SIZE)
             .unwrap()
             .to_owned();
-        let mut bboxes = self.extract_bboxes(output_tensor, img_width, img_height, rescale_factor);
+        let mut bboxes =
+            self.extract_bboxes(output_tensor, img_width, img_height, bbox_rescale_factor);
         nms(&mut bboxes, Self::IOU_THRESHOLD);
 
         Ok(bboxes)
@@ -211,6 +217,7 @@ impl ORTLayoutParser {
     }
 }
 
+/// runs nms on without taking into account which class
 fn nms(raw_bboxes: &mut Vec<LayoutBBox>, iou_threshold: f32) {
     raw_bboxes.sort_by(|r1, r2| r2.proba.partial_cmp(&r1.proba).unwrap());
     let mut current_index = 0;
@@ -234,6 +241,9 @@ fn nms(raw_bboxes: &mut Vec<LayoutBBox>, iou_threshold: f32) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_model_batch() {}
 
     #[test]
     fn test_nms_no_overlap() {

@@ -1,6 +1,6 @@
 use std::path::{Path, PathBuf};
 
-use pdfium_render::prelude::{PdfPageTextChar, PdfRenderConfig, Pdfium};
+use pdfium_render::prelude::{PdfPageRenderRotation, PdfPageTextChar, PdfRenderConfig, Pdfium};
 use uuid::Uuid;
 
 use crate::{
@@ -8,10 +8,10 @@ use crate::{
         draw::{draw_bboxes, draw_text_lines},
         model::{LayoutBBox, ORTLayoutParser},
     },
-    BBox, Block, CharSpan, Line,
+    BBox, Block, CharSpan, Line, StructuredPage,
 };
 
-const LAYOUT_COVERAGE_THRESHOLD: f32 = 0.1;
+const MIN_LAYOUT_COVERAGE_THRESHOLD: f32 = 0.2;
 
 fn parse_text_spans<'a>(
     chars: impl Iterator<Item = PdfPageTextChar<'a>>,
@@ -58,18 +58,18 @@ fn parse_text_lines(spans: Vec<CharSpan>) -> Vec<Line> {
 
 pub fn parse_document<P: AsRef<Path>>(
     path: P,
+    layout_model: &ORTLayoutParser,
     password: Option<&str>,
     flatten_pdf: bool,
 ) -> anyhow::Result<()> {
     // Debug directory
-    let tmp_dir = PathBuf::from("/tmp").join(Uuid::new_v4().to_string());
+    let tmp_dir = PathBuf::from("/tmp").join(format!("ferrules-{}", Uuid::new_v4()));
     std::fs::create_dir_all(&tmp_dir)?;
 
     let pdfium = Pdfium::new(Pdfium::bind_to_statically_linked_library()?);
     let mut document = pdfium.load_pdf_from_file(&path, password)?;
 
-    let layout_model = ORTLayoutParser::new("./models/yolov8s-doclaynet.onnx")?;
-    // let mut pages = Vec::with_capacity(document.pages().len() as usize);
+    let mut pages = Vec::with_capacity(document.pages().len() as usize);
     for (page_idx, mut page) in document.pages_mut().iter().enumerate() {
         // TODO: deal with document embedded forms?
         if flatten_pdf {
@@ -92,7 +92,7 @@ pub fn parse_document<P: AsRef<Path>>(
         let text_lines = parse_text_lines(text_spans);
 
         // FIXME: check that rotation is correct ??
-        // let page_rotation = page.rotation().unwrap_or(PdfPageRenderRotation::None);
+        let page_rotation = page.rotation().unwrap_or(PdfPageRenderRotation::None);
         let page_image = page
             .render_with_config(&PdfRenderConfig::default().scale_page_by_factor(rescale_factor))
             .map(|bitmap| bitmap.as_image())?;
@@ -112,26 +112,28 @@ pub fn parse_document<P: AsRef<Path>>(
             out_img.save(output_file)?;
         };
 
-        // let page_need_ocr = page_need_ocr(
-        //     &text_lines,
-        //     &page_layout,
-        //     // line_coverage_minimum,
-        //     layout_coverage_threshold,
-        // );
+        let (need_ocr, blocks) = merge_line_layout(
+            &page_layout,
+            &text_lines,
+            page_idx,
+            MIN_LAYOUT_COVERAGE_THRESHOLD,
+        )?;
 
-        let blocks = merge_line_layout(&page_layout, &text_lines, page_idx);
+        let structured_page = StructuredPage {
+            id: page_idx,
+            width: page_bbox.width(),
+            height: page_bbox.height(),
+            rotation: page_rotation,
+            blocks,
+            need_ocr,
+        };
 
-        // pages.push(Page {
-        //     id: index,
-        //     blocks: vec![],
-        //     width: page_bbox.bounds.width().value,
-        //     height: page_bbox.bounds.height().value,
-        //     rotation: page_rotation,
-        // });
-        //
+        pages.push(structured_page);
     }
 
-    println!("Saved debug results in {:?}", tmp_dir.as_os_str());
+    if std::env::var("FERRULES_DEBUG").is_ok() {
+        println!("Saved debug results in {:?}", tmp_dir.as_os_str());
+    }
     Ok(())
 }
 
@@ -139,7 +141,8 @@ fn merge_line_layout(
     page_layout: &[LayoutBBox],
     text_lines: &[Line],
     page_id: usize,
-) -> anyhow::Result<Vec<Block>> {
+    layout_coverage_threshold: f32,
+) -> anyhow::Result<(bool, Vec<Block>)> {
     let text_boxes: Vec<&LayoutBBox> = page_layout.iter().filter(|b| b.is_text_block()).collect();
 
     let mut total_line_coverage = 0;
@@ -153,7 +156,8 @@ fn merge_line_layout(
             a_intersection.partial_cmp(&b_intersection).unwrap()
         });
         let max_intersection_bbox = max_intersection_bbox.and_then(|b| {
-            if b.bbox.intersection(&line.bbox) > 0.8 {
+            if b.bbox.intersection(&line.bbox) > 0.5 {
+                total_line_coverage += 1;
                 Some(b)
             } else {
                 None
@@ -184,14 +188,19 @@ fn merge_line_layout(
                 }
             }
             None => {
-                // TODO: add box
-                eprintln!("Line skipped because no layout bbox intersection");
+                // TODO : "Line skipped because no layout bbox intersection");
                 continue;
             }
         }
     }
 
-    Ok(blocks)
+    let need_ocr = if !text_lines.is_empty() {
+        let text_line_coverage = total_line_coverage as f32 / text_lines.len() as f32;
+        text_line_coverage < layout_coverage_threshold
+    } else {
+        true
+    };
+    Ok((need_ocr, blocks))
 }
 
 fn page_need_ocr(
