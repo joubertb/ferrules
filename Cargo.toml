@@ -16,3 +16,4 @@ plsfix = "0.1.7"
 lazy_static = "1.5.0"
 imageproc = "0.25.0"
 ab_glyph = "0.2.29"
+uuid = { version = "1.11.0", features = ["v4"] }

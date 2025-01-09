@@ -49,17 +49,18 @@ A Ferrule (a corruption of Latin viriola "small bracelet", under the influence o
   - [x] Extract Page Layout
     - [x] Preprocess pdfium image
     - [x] Postprocess tensor -> nms
-    - [ ] Verify labels
-  - [ ] Determine pages needing OCR (coverage lines/blocks)
-  - [ ] Merge Layout with pdfium lines
+    - [x] Verify labels
+  - [x] Determine pages needing OCR (coverage lines/blocks)
+  - [x] Merge Layout with pdfium lines
+    - [x] rescale / or / downscale line bbox/ layout bbox
   - [ ] Build ParsedDocument result
+    - [ ] Merge Blocks into sections
 
-- [ ] Transform to HighLevel:
+- [ ] Transform to HighLevel Document representation:
 
   - [ ] Group_caption_blocks(page)
   - [ ] Group_lists(page)
-  - [ ] Build Document TOC
-  - [ ] Run processors ( Text, List, PageHeader ) .
+  - [ ] Run processors (Text, List, PageHeader ) .
 
 - [ ] Render Document
 
@@ -75,6 +76,9 @@ A Ferrule (a corruption of Latin viriola "small bracelet", under the influence o
   - [ ] Dynamic batching of document(pages) to process
 
 - [ ] Build pdfium statically for Linux
+- [ ] Use onnxruntime IO bindings : https://ort.pyke.io/perf/io-binding
 - [ ] Configurable inference params: ORTProviders/ batch_size, confidence_score, NMS ..
 - [ ] Add OCR (recognition) model
 - [ ] Determine page orientation + deskew
+- [ ] Add tracing
+- [ ] Build Document TOC (in transform step)

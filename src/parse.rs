@@ -1,6 +1,7 @@
-use std::path::Path;
+use std::path::{Path, PathBuf};
 
 use pdfium_render::prelude::{PdfPageTextChar, PdfRenderConfig, Pdfium};
+use uuid::Uuid;
 
 use crate::{
     layout::{
@@ -9,6 +10,8 @@ use crate::{
     },
     BBox, Block, CharSpan, Line,
 };
+
+const LAYOUT_COVERAGE_THRESHOLD: f32 = 0.1;
 
 fn parse_text_spans<'a>(
     chars: impl Iterator<Item = PdfPageTextChar<'a>>,
@@ -58,7 +61,10 @@ pub fn parse_document<P: AsRef<Path>>(
     password: Option<&str>,
     flatten_pdf: bool,
 ) -> anyhow::Result<()> {
-    let layout_coverage_threshold: f32 = 0.1;
+    // Debug directory
+    let tmp_dir = PathBuf::from("/tmp").join(Uuid::new_v4().to_string());
+    std::fs::create_dir_all(&tmp_dir)?;
+
     let pdfium = Pdfium::new(Pdfium::bind_to_statically_linked_library()?);
     let mut document = pdfium.load_pdf_from_file(&path, password)?;
 
@@ -91,12 +97,13 @@ pub fn parse_document<P: AsRef<Path>>(
             .render_with_config(&PdfRenderConfig::default().scale_page_by_factor(rescale_factor))
             .map(|bitmap| bitmap.as_image())?;
 
-        // TODO: Takes ~25ms -> batch a &[PdfPage] later
+        // TODO: Takes ~25ms -> batch and send a [PdfPage; BATCH_SIZE] later
         // Export model with dynamic batch params
         let page_layout = layout_model.parse_layout(&page_image, 1f32 / rescale_factor)?;
 
         if std::env::var("FERRULES_DEBUG").is_ok() {
-            let output_file = "page_line.png";
+            // TODO: add feature compile debug
+            let output_file = tmp_dir.join(format!("page_{}.png", page_idx));
             let page_image = page
                 .render_with_config(&PdfRenderConfig::default().scale_page_by_factor(1f32))
                 .map(|bitmap| bitmap.as_image())?;
@@ -114,10 +121,6 @@ pub fn parse_document<P: AsRef<Path>>(
 
         let blocks = merge_line_layout(&page_layout, &text_lines, page_idx);
 
-        if page_idx >= 0 {
-            break;
-        }
-
         // pages.push(Page {
         //     id: index,
         //     blocks: vec![],
@@ -128,6 +131,7 @@ pub fn parse_document<P: AsRef<Path>>(
         //
     }
 
+    println!("Saved debug results in {:?}", tmp_dir.as_os_str());
     Ok(())
 }
 
@@ -181,13 +185,11 @@ fn merge_line_layout(
             }
             None => {
                 // TODO: add box
-                // eprintln!("Line skipped because no layout bbox intersection");
+                eprintln!("Line skipped because no layout bbox intersection");
                 continue;
             }
         }
     }
-
-    dbg!(&blocks);
 
     Ok(blocks)
 }
