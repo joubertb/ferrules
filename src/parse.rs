@@ -93,11 +93,14 @@ pub fn parse_document<P: AsRef<Path>>(
 
         // TODO: Takes ~25ms -> batch a &[PdfPage] later
         // Export model with dynamic batch params
-        let page_layout = layout_model.parse_layout(&page_image)?;
+        let page_layout = layout_model.parse_layout(&page_image, 1f32 / rescale_factor)?;
 
         if std::env::var("FERRULES_DEBUG").is_ok() {
             let output_file = "page_line.png";
-            let out_img = draw_text_lines(&text_lines, &page_image, rescale_factor)?;
+            let page_image = page
+                .render_with_config(&PdfRenderConfig::default().scale_page_by_factor(1f32))
+                .map(|bitmap| bitmap.as_image())?;
+            let out_img = draw_text_lines(&text_lines, &page_image)?;
             let out_img = draw_bboxes(&page_layout, &out_img.into())?;
             out_img.save(output_file)?;
         };
@@ -171,7 +174,7 @@ fn merge_line_layout(
                 if layoutb.id == last_block.layout_block_id {
                     last_block.push_line(line);
                 } else {
-                    let mut block = Block::from_layout_block(0, layoutb, page_id);
+                    let mut block = Block::from_layout_block(blocks.len() + 1, layoutb, page_id);
                     block.push_line(line);
                     blocks.push(block);
                 }
@@ -183,6 +186,8 @@ fn merge_line_layout(
             }
         }
     }
+
+    dbg!(&blocks);
 
     Ok(blocks)
 }

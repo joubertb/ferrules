@@ -79,7 +79,11 @@ impl ORTLayoutParser {
     const CONF_THRESHOLD: f32 = 0.3;
     const IOU_THRESHOLD: f32 = 0.7;
 
-    pub fn parse_layout(&self, page_img: &DynamicImage) -> anyhow::Result<Vec<LayoutBBox>> {
+    pub fn parse_layout(
+        &self,
+        page_img: &DynamicImage,
+        rescale_factor: f32,
+    ) -> anyhow::Result<Vec<LayoutBBox>> {
         let (img_width, img_height) = (page_img.width(), page_img.height());
         let input_name = self
             .session
@@ -110,7 +114,7 @@ impl ORTLayoutParser {
             .to_shape(Self::OUTPUT_SIZE)
             .unwrap()
             .to_owned();
-        let mut bboxes = self.extract_bboxes(output_tensor, img_width, img_height);
+        let mut bboxes = self.extract_bboxes(output_tensor, img_width, img_height, rescale_factor);
         nms(&mut bboxes, Self::IOU_THRESHOLD);
 
         Ok(bboxes)
@@ -121,6 +125,7 @@ impl ORTLayoutParser {
         output: ArrayBase<OwnedRepr<f32>, Dim<[usize; 3]>>,
         original_width: u32,
         original_height: u32,
+        rescale_factor: f32,
     ) -> Vec<LayoutBBox> {
         // Tensor shape: (bs, bbox(4) + classes(15),anchors )
         let mut result = Vec::new();
@@ -159,7 +164,12 @@ impl ORTLayoutParser {
 
             result.push(LayoutBBox {
                 id: bbox_id,
-                bbox: BBox { x0, y0, x1, y1 },
+                bbox: BBox {
+                    x0: x0 * rescale_factor,
+                    y0: y0 * rescale_factor,
+                    x1: x1 * rescale_factor,
+                    y1: y1 * rescale_factor,
+                },
                 proba,
                 label,
             });
@@ -208,7 +218,7 @@ fn nms(raw_bboxes: &mut Vec<LayoutBBox>, iou_threshold: f32) {
         let mut drop = false;
         for prev_index in 0..current_index {
             let iou = raw_bboxes[index].bbox.iou(&raw_bboxes[prev_index].bbox);
-            if iou > iou_threshold && raw_bboxes[prev_index].label == raw_bboxes[index].label {
+            if iou > iou_threshold {
                 drop = true;
                 break;
             }

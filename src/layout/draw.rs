@@ -17,7 +17,6 @@ pub fn load_font() -> FontArc {
 pub(crate) fn draw_text_lines(
     lines: &[Line],
     page_img: &DynamicImage,
-    rescale_factor: f32,
 ) -> anyhow::Result<ImageBuffer<Rgba<u8>, Vec<u8>>> {
     // Convert the dynamic image to RGBA for in-place drawing.
     let mut out_img = page_img.to_rgba8();
@@ -25,10 +24,10 @@ pub(crate) fn draw_text_lines(
     let font: FontArc = load_font();
     // Iterate over all bounding boxes and draw them.
     for line in lines {
-        let x0 = (rescale_factor * line.bbox.x0) as i32;
-        let y0 = (rescale_factor * line.bbox.y0) as i32;
-        let x1 = (rescale_factor * line.bbox.x1) as i32;
-        let y1 = (rescale_factor * line.bbox.y1) as i32;
+        let x0 = (line.bbox.x0) as i32;
+        let y0 = (line.bbox.y0) as i32;
+        let x1 = (line.bbox.x1) as i32;
+        let y1 = (line.bbox.y1) as i32;
 
         // Determine rectangle width/height based on (x0, y0), (x1, y1).
         // Assuming x1 >= x0, y1 >= y0 in your data:
