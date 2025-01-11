@@ -4,11 +4,13 @@ use pdfium_render::prelude::{PdfPageRenderRotation, PdfPageTextChar, PdfRenderCo
 use uuid::Uuid;
 
 use crate::{
+    entities::{BBox, Block, CharSpan, Document, Line, StructuredPage},
     layout::{
-        draw::{draw_bboxes, draw_text_lines},
+        draw::{draw_layout_bboxes, draw_ocr_bboxes, draw_text_lines},
         model::{LayoutBBox, ORTLayoutParser},
     },
-    BBox, Block, CharSpan, Document, Line, StructuredPage,
+    ocr::parse_image_ocr,
+    sanitize_doc_name,
 };
 
 const MIN_LAYOUT_COVERAGE_THRESHOLD: f32 = 0.2;
@@ -62,9 +64,17 @@ pub fn parse_document<P: AsRef<Path>>(
     password: Option<&str>,
     flatten_pdf: bool,
 ) -> anyhow::Result<Document<P>> {
-    // Debug directory
-    let tmp_dir = PathBuf::from("/tmp").join(format!("ferrules-{}", Uuid::new_v4()));
-    std::fs::create_dir_all(&tmp_dir)?;
+    let doc_name = path
+        .as_ref()
+        .file_name()
+        .and_then(|name| name.to_str())
+        .unwrap_or(&Uuid::new_v4().to_string())
+        .to_string();
+
+    let tmp_dir = PathBuf::from("/tmp").join(format!("ferrules-{}", sanitize_doc_name(&doc_name)));
+    if std::env::var("FERRULES_DEBUG").is_ok() {
+        std::fs::create_dir_all(&tmp_dir)?;
+    }
 
     let pdfium = Pdfium::new(Pdfium::bind_to_statically_linked_library()?);
     let mut document = pdfium.load_pdf_from_file(&path, password)?;
@@ -80,8 +90,6 @@ pub fn parse_document<P: AsRef<Path>>(
             let scale_h = ORTLayoutParser::REQUIRED_HEIGHT as f32 / page.height().value;
             f32::min(scale_h, scale_w)
         };
-        // TODO: change
-        // let rescale_factor = 1f32;
         let page_bbox = BBox {
             x0: 0f32,
             y0: 0f32,
@@ -91,26 +99,15 @@ pub fn parse_document<P: AsRef<Path>>(
         let text_spans = parse_text_spans(page.text()?.chars().iter(), &page_bbox);
         let text_lines = parse_text_lines(text_spans);
 
-        // FIXME: check that rotation is correct ??
+        // FIXME: check that rotation is correct ?
+        // Some page return 90 or 270 rotation but are correct...
         let page_rotation = page.rotation().unwrap_or(PdfPageRenderRotation::None);
         let page_image = page
             .render_with_config(&PdfRenderConfig::default().scale_page_by_factor(rescale_factor))
             .map(|bitmap| bitmap.as_image())?;
 
-        // TODO: Takes ~25ms -> batch and send a [PdfPage; BATCH_SIZE] later
-        // Export model with dynamic batch params
+        // TODO(@aminediro): Takes ~25ms per page-> batch and send a [PdfPage; BATCH_SIZE]
         let page_layout = layout_model.parse_layout(&page_image, 1f32 / rescale_factor)?;
-
-        if std::env::var("FERRULES_DEBUG").is_ok() {
-            // TODO: add feature compile debug
-            let output_file = tmp_dir.join(format!("page_{}.png", page_idx));
-            let page_image = page
-                .render_with_config(&PdfRenderConfig::default().scale_page_by_factor(1f32))
-                .map(|bitmap| bitmap.as_image())?;
-            let out_img = draw_text_lines(&text_lines, &page_image)?;
-            let out_img = draw_bboxes(&page_layout, &out_img.into())?;
-            out_img.save(output_file)?;
-        };
 
         let (need_ocr, blocks) = merge_line_layout(
             &page_layout,
@@ -119,6 +116,14 @@ pub fn parse_document<P: AsRef<Path>>(
             MIN_LAYOUT_COVERAGE_THRESHOLD,
         )?;
 
+        dbg!(need_ocr);
+        let ocr_result = if need_ocr {
+            let ocr_result = parse_image_ocr(&page_image, rescale_factor)?;
+            Some(ocr_result)
+        } else {
+            None
+        };
+
         let structured_page = StructuredPage {
             id: page_idx,
             width: page_bbox.width(),
@@ -126,6 +131,22 @@ pub fn parse_document<P: AsRef<Path>>(
             rotation: page_rotation,
             blocks,
             need_ocr,
+        };
+
+        if std::env::var("FERRULES_DEBUG").is_ok() {
+            // TODO: add feature compile debug
+            let output_file = tmp_dir.join(format!("page_{}.png", page_idx));
+            let page_image = page
+                .render_with_config(&PdfRenderConfig::default().scale_page_by_factor(1f32))
+                .map(|bitmap| bitmap.as_image())?;
+            let out_img = draw_text_lines(&text_lines, &page_image)?;
+            let out_img = draw_layout_bboxes(&page_layout, &out_img.into())?;
+            if let Some(ocr_result) = ocr_result {
+                let out_img = draw_ocr_bboxes(&ocr_result, &out_img.into())?;
+                out_img.save(output_file)?;
+            } else {
+                out_img.save(output_file)?;
+            }
         };
 
         pages.push(structured_page);
@@ -197,39 +218,17 @@ fn merge_line_layout(
 
     let need_ocr = if !text_lines.is_empty() {
         let text_line_coverage = total_line_coverage as f32 / text_lines.len() as f32;
-        text_line_coverage < layout_coverage_threshold
+
+        let matched_blocks: Vec<_> = blocks.iter().map(|b| b.layout_block_id).collect();
+
+        let layout_text_no_lines = text_boxes
+            .iter()
+            .filter(|layout_bbox| !matched_blocks.contains(&layout_bbox.id))
+            .count();
+        (text_line_coverage) < layout_coverage_threshold
+            || (layout_text_no_lines as f32 / text_boxes.len() as f32) > 0.8
     } else {
         true
     };
     Ok((need_ocr, blocks))
-}
-
-fn page_need_ocr(
-    text_lines: &[Line],
-    page_bboxes: &[LayoutBBox],
-    layout_coverage_threshold: f32,
-) -> bool {
-    let text_boxes: Vec<&LayoutBBox> = page_bboxes.iter().filter(|b| b.is_text_block()).collect();
-
-    let mut total_line_coverage = 0;
-
-    for line in text_lines {
-        let max_intersection_bbox = text_boxes.iter().max_by(|a, b| {
-            let a_intersection = a.bbox.intersection(&line.bbox);
-            let b_intersection = b.bbox.intersection(&line.bbox);
-
-            a_intersection.partial_cmp(&b_intersection).unwrap()
-        });
-
-        if let Some(layout_bbox) = max_intersection_bbox {
-            total_line_coverage += (layout_bbox.bbox.intersection(&line.bbox) > 0f32) as usize;
-        }
-    }
-
-    if !text_lines.is_empty() {
-        let text_line_coverage = (total_line_coverage / text_lines.len()) as f32;
-        text_line_coverage > layout_coverage_threshold
-    } else {
-        true
-    }
 }

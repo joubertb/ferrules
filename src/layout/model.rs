@@ -9,7 +9,7 @@ use ort::{
     session::{builder::GraphOptimizationLevel, Session},
 };
 
-use crate::BBox;
+use crate::entities::BBox;
 
 lazy_static! {
     static ref ID2LABEL: [&'static str; 11] = [
@@ -203,7 +203,7 @@ impl ORTLayoutParser {
         (r, (w0 * r).round(), (h0 * r).round())
     }
 
-    fn preprocess_batch(&self, batch_imgs: &[DynamicImage]) -> Array4<f32> {
+    fn _preprocess_batch(&self, batch_imgs: &[DynamicImage]) -> Array4<f32> {
         let (w0, h0) = batch_imgs.first().unwrap().dimensions();
         let (_, w_new, h_new) = self.scale_wh(
             w0 as f32,
@@ -335,6 +335,7 @@ mod tests {
         // No boxes should be eliminated as there is no overlap
     }
 
+    #[test]
     fn test_nms_high_overlap_same_label() {
         let mut raw_bboxes = vec![
             LayoutBBox {
