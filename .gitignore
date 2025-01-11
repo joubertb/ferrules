@@ -4,3 +4,4 @@ models/
 **/.venv/
 *.pt
 *.png
+test_data/*

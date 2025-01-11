@@ -51,13 +51,16 @@ A Ferrule (a corruption of Latin viriola "small bracelet", under the influence o
   - [ ] Use Apple vision if macOS
   - [ ] Find good recognition model (onnxtr ??)
 
-- [ ] Batch inference on pages
+- [ ] Add tracing
+- [ ] Configurable inference params: ORTProviders/ batch_size, confidence_score, NMS ..
+- [ ] Create CLI
+
+- [ ] Batch inference on pages (TODO -> )
 
   - [x] Export onnx with dynamic batch_size
   - [ ] Run layout on &[DynamicImage]
-
-- [ ] Add tracing
-- [ ] Configurable inference params: ORTProviders/ batch_size, confidence_score, NMS ..
+  - Explored this onnxruntime on coreml isn't faster for some weird reason
+    - [ ] check on nvidia-gpu if batching is better
 
 - [ ] API
 

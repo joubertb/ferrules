@@ -3,7 +3,7 @@ use std::path::Path;
 use anyhow::Context;
 use image::{imageops::FilterType, DynamicImage, GenericImageView};
 use lazy_static::lazy_static;
-use ndarray::{s, Array, Array4, ArrayBase, Axis, Dim, OwnedRepr};
+use ndarray::{s, Array4, ArrayBase, Axis, Dim, OwnedRepr};
 use ort::{
     execution_providers::CoreMLExecutionProvider,
     session::{builder::GraphOptimizationLevel, Session},
@@ -73,8 +73,6 @@ impl ORTLayoutParser {
     /// It determines the overlap between bounding boxes before suppression.
     pub const IOU_THRESHOLD: f32 = 0.7;
 
-    pub const BATCH_SIZE: usize = 16;
-
     pub fn new<P: AsRef<Path>>(model_path: P) -> anyhow::Result<Self> {
         let session = Session::builder()?
             .with_execution_providers([CoreMLExecutionProvider::default()
@@ -104,42 +102,6 @@ impl ORTLayoutParser {
             input_name,
             output_name,
         })
-    }
-
-    pub fn parse_layout_batch(
-        &self,
-        page_img: &[DynamicImage],
-        _bbox_rescale_factor: &[f32],
-    ) -> anyhow::Result<()> {
-        let input_name = self
-            .session
-            .inputs
-            .first()
-            .map(|i| &i.name)
-            .context("can't find name for first input")?;
-
-        let result: anyhow::Result<Vec<_>> = page_img
-            .chunks(Self::BATCH_SIZE)
-            .enumerate()
-            .map(|(_batch_idx, page_batch)| {
-                let input = self.preprocess_batch(page_batch);
-
-                let outputs = &self.session.run(ort::inputs![input_name=> input.view()]?)?;
-
-                let outputs = outputs
-                    .iter()
-                    .map(|(_k, v)| {
-                        let v = v.try_extract_tensor::<f32>().unwrap().into_owned();
-                        v
-                    })
-                    .collect::<Vec<Array<_, _>>>();
-
-                Ok(outputs)
-            })
-            .collect();
-
-        let _result = result.unwrap();
-        Ok(())
     }
 
     pub fn run(
@@ -325,33 +287,8 @@ fn nms(raw_bboxes: &mut Vec<LayoutBBox>, iou_threshold: f32) {
 
 #[cfg(test)]
 mod tests {
-    use std::iter::repeat;
-
-    use image::RgbaImage;
 
     use super::*;
-
-    #[test]
-    fn test_model_batch() {
-        let layout_model = ORTLayoutParser::new("./models/yolov8s-doclaynet-batch.onnx")
-            .expect("can't load layout model");
-
-        let mut images = Vec::with_capacity(ORTLayoutParser::BATCH_SIZE);
-
-        for _ in 0..ORTLayoutParser::BATCH_SIZE * 10 {
-            let img = DynamicImage::ImageRgba8(RgbaImage::from_pixel(
-                ORTLayoutParser::REQUIRED_WIDTH,
-                ORTLayoutParser::REQUIRED_HEIGHT,
-                image::Rgba([1, 1, 1, 255]),
-            ));
-            images.push(img);
-        }
-        let rescale_factors: Vec<f32> = repeat(1f32).take(ORTLayoutParser::BATCH_SIZE).collect();
-
-        assert!(layout_model
-            .parse_layout_batch(&images, &rescale_factors)
-            .is_ok());
-    }
 
     #[test]
     fn test_nms_no_overlap() {

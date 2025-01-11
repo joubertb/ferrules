@@ -3,11 +3,13 @@
 use layout::model::LayoutBBox;
 use plsfix::fix_text;
 use std::path::Path;
-pub mod ocr;
 pub mod parse;
 
 use pdfium_render::prelude::{PdfFontWeight, PdfPageRenderRotation, PdfPageTextChar, PdfRect};
 pub mod layout;
+
+#[cfg(target_os = "macos")]
+pub mod ocr;
 
 #[derive(Debug, Default, Clone)]
 pub struct BBox {

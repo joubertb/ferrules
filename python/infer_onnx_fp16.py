@@ -9,14 +9,9 @@ def create_session_with_coreml(model_path):
     session_options = ort.SessionOptions()
     session_options.graph_optimization_level = ort.GraphOptimizationLevel.ORT_ENABLE_ALL
 
-    session_options.enable_profiling = True
-
     # Use CoreMLExecutionProvider with settings for ANE only
     # providers = ["CPUExecutionProvider"]
-    providers = [
-        ("CoreMLExecutionProvider", {"use_ane": True}),
-        "CPUExecutionProvider",
-    ]
+    providers = [("CoreMLExecutionProvider", {"use_ane": True})]
 
     session = ort.InferenceSession(
         model_path, sess_options=session_options, providers=providers
@@ -33,16 +28,6 @@ def run_inference(session, input_tensor):
 
 
 if __name__ == "__main__":
-    # Generate random input tensor
-    # onnx_model_path = "./models/yolov8s-doclaynet-batch-16.onnx"
-    # batch_session = create_session_with_coreml(onnx_model_path)
-    # input_tensor = np.random.rand(16, 3, 1024, 1024).astype(np.float32)
-    # s = perf_counter()
-    # for i in range(1):
-    #     outputs = run_inference(batch_session, input_tensor)
-    # e = perf_counter()
-    # print(f"Model {onnx_model_path} took: {e-s:.2f}s")
-
     ##### SINGLE
     onnx_model_path = "./models/yolov8s-doclaynet.onnx"
     single_batch_session = create_session_with_coreml(onnx_model_path)
