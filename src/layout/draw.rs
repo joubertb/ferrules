@@ -8,11 +8,11 @@ use crate::ocr::OCRBBox;
 use super::model::LayoutBBox;
 
 use ab_glyph::FontArc;
+
+static FONT_BYTES: &[u8] = include_bytes!("../../font/Arial.ttf");
+
 pub fn load_font() -> FontArc {
-    use std::path::Path;
-    let font_path = Path::new("./font/Arial.ttf");
-    let buffer = std::fs::read(font_path).unwrap();
-    FontArc::try_from_vec(buffer).unwrap()
+    FontArc::try_from_slice(FONT_BYTES).unwrap()
 }
 
 pub(crate) fn draw_text_lines(

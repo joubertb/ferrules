@@ -38,7 +38,7 @@ impl BBox {
         self.x1 - self.x0
     }
     #[inline(always)]
-    fn area(&self) -> f32 {
+    pub fn area(&self) -> f32 {
         self.height() * self.width()
     }
 

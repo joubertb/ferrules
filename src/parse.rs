@@ -216,19 +216,29 @@ fn merge_line_layout(
         }
     }
 
-    let need_ocr = if !text_lines.is_empty() {
-        let text_line_coverage = total_line_coverage as f32 / text_lines.len() as f32;
+    // let need_ocr = if !text_lines.is_empty() {
+    //     let text_line_coverage = total_line_coverage as f32 / text_lines.len() as f32;
 
-        let matched_blocks: Vec<_> = blocks.iter().map(|b| b.layout_block_id).collect();
+    //     let matched_blocks: Vec<_> = blocks.iter().map(|b| b.layout_block_id).collect();
 
-        let layout_text_no_lines = text_boxes
-            .iter()
-            .filter(|layout_bbox| !matched_blocks.contains(&layout_bbox.id))
-            .count();
-        (text_line_coverage) < layout_coverage_threshold
-            || (layout_text_no_lines as f32 / text_boxes.len() as f32) > 0.8
+    //     let layout_text_no_lines = text_boxes
+    //         .iter()
+    //         .filter(|layout_bbox| !matched_blocks.contains(&layout_bbox.id))
+    //         .count();
+    //     (text_line_coverage) < layout_coverage_threshold
+    //         || (layout_text_no_lines as f32 / text_boxes.len() as f32) > 0.8
+    // } else {
+    //     true
+    // };
+
+    let line_area = text_lines.iter().map(|l| l.bbox.area()).sum::<f32>();
+    let text_layoutbbox_area = text_boxes.iter().map(|l| l.bbox.area()).sum::<f32>();
+
+    let need_ocr = if text_layoutbbox_area > 0f32 {
+        line_area / text_layoutbbox_area < 0.5
     } else {
         true
     };
+
     Ok((need_ocr, blocks))
 }

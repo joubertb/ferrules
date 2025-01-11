@@ -83,4 +83,4 @@ A Ferrule (a corruption of Latin viriola "small bracelet", under the influence o
   - https://docs.rs/objc2-vision/latest/objc2_vision/index.html
   - https://developer.apple.com/documentation/vision/recognizing-text-in-images
 
-- Use onnxruntime IO bindings: https://ort.pyke.io/perf/io-binding
+- Use `onnxruntime` IO bindings: https://ort.pyke.io/perf/io-binding
