@@ -18,7 +18,14 @@ imageproc = "0.25.0"
 ab_glyph = "0.2.29"
 uuid = { version = "1.11.0", features = ["v4"] }
 tracing-subscriber = { version = "0.3.19", features = ["env-filter"] }
+rand = "0.8.5"
 
+[dev-dependencies]
+criterion = { version = "0.5", features = ["html_reports"] }
+
+[[bench]]
+name = "layout"
+harness = false
 
 [profile.release]
 debug = 1

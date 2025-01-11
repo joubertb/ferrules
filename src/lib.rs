@@ -2,7 +2,7 @@
 
 use layout::model::LayoutBBox;
 use plsfix::fix_text;
-use std::path::PathBuf;
+use std::path::Path;
 pub mod ocr;
 pub mod parse;
 
@@ -89,7 +89,8 @@ pub struct TextBlock {
 }
 
 impl TextBlock {
-    pub fn append(&mut self, txt: &str) {
+    pub fn append_line(&mut self, txt: &str) {
+        self.text.push(' ');
         self.text.push_str(txt);
     }
 }
@@ -108,6 +109,20 @@ pub enum BlockType {
     Table,
 }
 
+impl BlockType {
+    fn is_text(&self) -> bool {
+        matches!(
+            self,
+            BlockType::Header(_)
+                | BlockType::FootNote(_)
+                | BlockType::Footer(_)
+                | BlockType::Text(_)
+                | BlockType::Title(_)
+                | BlockType::Subtitle(_)
+                | BlockType::ListItem(_)
+        )
+    }
+}
 #[derive(Debug)]
 struct Block {
     id: usize,
@@ -154,7 +169,7 @@ impl Block {
             | BlockType::Subtitle(text_block)
             | BlockType::ListItem(text_block)
             | BlockType::Caption(text_block) => {
-                text_block.append(&line.text);
+                text_block.append_line(&line.text);
             }
             BlockType::Image | BlockType::Table => {
                 eprintln!("Can't push line to Image or Table block");
@@ -174,9 +189,42 @@ pub struct StructuredPage {
 }
 
 #[derive(Debug)]
-struct Document {
-    path: PathBuf,
+pub struct Document<P: AsRef<Path>> {
+    path: P,
     pages: Vec<StructuredPage>,
+}
+
+impl<P> Document<P>
+where
+    P: AsRef<Path>,
+{
+    pub fn render(&self) -> String {
+        let mut output = String::new();
+
+        for block in self
+            .pages
+            .iter()
+            .flat_map(|p| p.blocks.iter())
+            .filter(|b| matches!(b.kind, BlockType::Text(_)) | b.kind.is_text())
+        {
+            match &block.kind {
+                BlockType::Title(text_block) | BlockType::Subtitle(text_block) => {
+                    output.push_str(&format!("# {}\n", text_block.text));
+                }
+                BlockType::Text(text_block) => {
+                    output.push_str(&text_block.text);
+                    output.push('\n');
+                }
+                BlockType::ListItem(text_block) => {
+                    output.push_str(&format!("- {}\n", text_block.text));
+                }
+                _ => {
+                    output.push('\n');
+                }
+            }
+        }
+        output
+    }
 }
 
 #[derive(Debug)]

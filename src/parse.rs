@@ -8,7 +8,7 @@ use crate::{
         draw::{draw_bboxes, draw_text_lines},
         model::{LayoutBBox, ORTLayoutParser},
     },
-    BBox, Block, CharSpan, Line, StructuredPage,
+    BBox, Block, CharSpan, Document, Line, StructuredPage,
 };
 
 const MIN_LAYOUT_COVERAGE_THRESHOLD: f32 = 0.2;
@@ -61,7 +61,7 @@ pub fn parse_document<P: AsRef<Path>>(
     layout_model: &ORTLayoutParser,
     password: Option<&str>,
     flatten_pdf: bool,
-) -> anyhow::Result<()> {
+) -> anyhow::Result<Document<P>> {
     // Debug directory
     let tmp_dir = PathBuf::from("/tmp").join(format!("ferrules-{}", Uuid::new_v4()));
     std::fs::create_dir_all(&tmp_dir)?;
@@ -134,7 +134,8 @@ pub fn parse_document<P: AsRef<Path>>(
     if std::env::var("FERRULES_DEBUG").is_ok() {
         println!("Saved debug results in {:?}", tmp_dir.as_os_str());
     }
-    Ok(())
+
+    Ok(Document { path, pages })
 }
 
 fn merge_line_layout(

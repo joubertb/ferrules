@@ -3,7 +3,7 @@ use std::path::Path;
 use anyhow::Context;
 use image::{imageops::FilterType, DynamicImage, GenericImageView};
 use lazy_static::lazy_static;
-use ndarray::{s, Array4, ArrayBase, Axis, Dim, OwnedRepr};
+use ndarray::{s, Array, Array4, ArrayBase, Axis, Dim, OwnedRepr};
 use ort::{
     execution_providers::CoreMLExecutionProvider,
     session::{builder::GraphOptimizationLevel, Session},
@@ -41,7 +41,7 @@ impl LayoutBBox {
             || self.label == "Caption"
             || self.label == "Footnote"
             || self.label == "Formula"
-            || self.label == "List-Item"
+            || self.label == "List-item"
             || self.label == "Page-footer"
             || self.label == "Page-header"
             || self.label == "Section-header"
@@ -52,20 +52,8 @@ impl LayoutBBox {
 #[derive(Debug)]
 pub struct ORTLayoutParser {
     session: Session,
-}
-
-impl ORTLayoutParser {
-    pub fn new<P: AsRef<Path>>(model_path: P) -> anyhow::Result<Self> {
-        let session = Session::builder()?
-            .with_execution_providers([CoreMLExecutionProvider::default()
-                .with_ane_only()
-                .with_subgraphs()
-                .build()])?
-            .with_optimization_level(GraphOptimizationLevel::Level3)?
-            .with_intra_threads(8)?
-            .commit_from_file(model_path)?;
-        Ok(Self { session })
-    }
+    input_name: String,
+    output_name: String,
 }
 
 impl ORTLayoutParser {
@@ -80,17 +68,49 @@ impl ORTLayoutParser {
 
     /// Confidence threshold for filtering out low probability bounding boxes.
     /// Bounding boxes with probability below this threshold will be ignored.
-    const CONF_THRESHOLD: f32 = 0.3;
+    pub const CONF_THRESHOLD: f32 = 0.3;
     /// Intersection over Union (IOU) threshold for non-maximum suppression (NMS) algorithm.
     /// It determines the overlap between bounding boxes before suppression.
-    const IOU_THRESHOLD: f32 = 0.7;
+    pub const IOU_THRESHOLD: f32 = 0.7;
 
-    pub fn parse_layout(
+    pub const BATCH_SIZE: usize = 16;
+
+    pub fn new<P: AsRef<Path>>(model_path: P) -> anyhow::Result<Self> {
+        let session = Session::builder()?
+            .with_execution_providers([CoreMLExecutionProvider::default()
+                // .with_ane_only()
+                .with_subgraphs()
+                .build()])?
+            .with_optimization_level(GraphOptimizationLevel::Level3)?
+            .with_intra_threads(8)?
+            .commit_from_file(model_path)?;
+
+        let input_name = session
+            .inputs
+            .first()
+            .map(|i| &i.name)
+            .context("can't find name for first input")?
+            .to_owned();
+
+        let output_name = session
+            .outputs
+            .first()
+            .map(|i| &i.name)
+            .context("can't find name output input")?
+            .to_owned();
+
+        Ok(Self {
+            session,
+            input_name,
+            output_name,
+        })
+    }
+
+    pub fn parse_layout_batch(
         &self,
-        page_img: &DynamicImage,
-        bbox_rescale_factor: f32,
-    ) -> anyhow::Result<Vec<LayoutBBox>> {
-        let (img_width, img_height) = (page_img.width(), page_img.height());
+        page_img: &[DynamicImage],
+        _bbox_rescale_factor: &[f32],
+    ) -> anyhow::Result<()> {
         let input_name = self
             .session
             .inputs
@@ -98,21 +118,40 @@ impl ORTLayoutParser {
             .map(|i| &i.name)
             .context("can't find name for first input")?;
 
-        let input = self.preprocess(page_img);
+        let result: anyhow::Result<Vec<_>> = page_img
+            .chunks(Self::BATCH_SIZE)
+            .enumerate()
+            .map(|(_batch_idx, page_batch)| {
+                let input = self.preprocess_batch(page_batch);
 
+                let outputs = &self.session.run(ort::inputs![input_name=> input.view()]?)?;
+
+                let outputs = outputs
+                    .iter()
+                    .map(|(_k, v)| {
+                        let v = v.try_extract_tensor::<f32>().unwrap().into_owned();
+                        v
+                    })
+                    .collect::<Vec<Array<_, _>>>();
+
+                Ok(outputs)
+            })
+            .collect();
+
+        let _result = result.unwrap();
+        Ok(())
+    }
+
+    pub fn run(
+        &self,
+        input: ArrayBase<OwnedRepr<f32>, Dim<[usize; 4]>>,
+    ) -> anyhow::Result<ArrayBase<OwnedRepr<f32>, Dim<[usize; 3]>>> {
         let outputs = &self
             .session
-            .run(ort::inputs![input_name=> input.clone()]?)?;
-
-        let output_name = self
-            .session
-            .outputs
-            .first()
-            .map(|i| &i.name)
-            .context("can't find name output input")?;
+            .run(ort::inputs![&self.input_name=> input.view()]?)?;
 
         let output_tensor = outputs
-            .get(output_name)
+            .get(&self.output_name)
             .context("can't get the value of first output")?
             .try_extract_tensor::<f32>()?;
 
@@ -120,6 +159,18 @@ impl ORTLayoutParser {
             .to_shape(Self::OUTPUT_SIZE)
             .unwrap()
             .to_owned();
+
+        Ok(output_tensor)
+    }
+
+    pub fn parse_layout(
+        &self,
+        page_img: &DynamicImage,
+        bbox_rescale_factor: f32,
+    ) -> anyhow::Result<Vec<LayoutBBox>> {
+        let (img_width, img_height) = (page_img.width(), page_img.height());
+        let input = self.preprocess(page_img);
+        let output_tensor = self.run(input)?;
         let mut bboxes =
             self.extract_bboxes(output_tensor, img_width, img_height, bbox_rescale_factor);
         nms(&mut bboxes, Self::IOU_THRESHOLD);
@@ -190,6 +241,39 @@ impl ORTLayoutParser {
         (r, (w0 * r).round(), (h0 * r).round())
     }
 
+    fn preprocess_batch(&self, batch_imgs: &[DynamicImage]) -> Array4<f32> {
+        let (w0, h0) = batch_imgs.first().unwrap().dimensions();
+        let (_, w_new, h_new) = self.scale_wh(
+            w0 as f32,
+            h0 as f32,
+            Self::REQUIRED_WIDTH as f32,
+            Self::REQUIRED_HEIGHT as f32,
+        ); // f32 round
+
+        let mut input_tensor = Array4::ones([
+            batch_imgs.len(),
+            3,
+            Self::REQUIRED_HEIGHT as usize,
+            Self::REQUIRED_WIDTH as usize,
+        ]);
+
+        input_tensor.fill(144.0 / 255.0);
+
+        for (idx, img) in batch_imgs.iter().enumerate() {
+            let resized_img = img.resize_exact(w_new as u32, h_new as u32, FilterType::Triangle);
+            for (x, y, pixel) in resized_img.pixels() {
+                let x = x as usize;
+                let y = y as _;
+                let [r, g, b, _] = pixel.0;
+                input_tensor[[idx, 0, y, x]] = r as f32 / 255.0;
+                input_tensor[[idx, 1, y, x]] = g as f32 / 255.0;
+                input_tensor[[idx, 2, y, x]] = b as f32 / 255.0;
+            }
+        }
+
+        input_tensor
+    }
+
     fn preprocess(&self, img: &DynamicImage) -> Array4<f32> {
         let (w0, h0) = img.dimensions();
         let (_, w_new, h_new) = self.scale_wh(
@@ -241,10 +325,33 @@ fn nms(raw_bboxes: &mut Vec<LayoutBBox>, iou_threshold: f32) {
 
 #[cfg(test)]
 mod tests {
+    use std::iter::repeat;
+
+    use image::RgbaImage;
+
     use super::*;
 
     #[test]
-    fn test_model_batch() {}
+    fn test_model_batch() {
+        let layout_model = ORTLayoutParser::new("./models/yolov8s-doclaynet-batch.onnx")
+            .expect("can't load layout model");
+
+        let mut images = Vec::with_capacity(ORTLayoutParser::BATCH_SIZE);
+
+        for _ in 0..ORTLayoutParser::BATCH_SIZE * 10 {
+            let img = DynamicImage::ImageRgba8(RgbaImage::from_pixel(
+                ORTLayoutParser::REQUIRED_WIDTH,
+                ORTLayoutParser::REQUIRED_HEIGHT,
+                image::Rgba([1, 1, 1, 255]),
+            ));
+            images.push(img);
+        }
+        let rescale_factors: Vec<f32> = repeat(1f32).take(ORTLayoutParser::BATCH_SIZE).collect();
+
+        assert!(layout_model
+            .parse_layout_batch(&images, &rescale_factors)
+            .is_ok());
+    }
 
     #[test]
     fn test_nms_no_overlap() {
