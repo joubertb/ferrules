@@ -31,6 +31,8 @@ A Ferrule (a corruption of Latin viriola "small bracelet", under the influence o
     - [ ] Add lines to bbox based on distance
     - [ ] Add remaining layout blocks to blocks
 
+- [x] OCR: Use Apple vision on macOS target
+
 - [ ] Transform to HighLevel Document representation:
 
   - [ ] Group caption/footer blocks with image blocks/tables using minimum gap
@@ -46,14 +48,11 @@ A Ferrule (a corruption of Latin viriola "small bracelet", under the influence o
   - [ ] Markdown renderer
   - [ ] JSON renderer
 
-- [ ] Add OCR (recognition) model
-
-  - [ ] Use Apple vision if macOS
-  - [ ] Find good recognition model (onnxtr ??)
-
 - [ ] Add tracing
+- [ ] Create CLI ferrules
 - [ ] Configurable inference params: ORTProviders/ batch_size, confidence_score, NMS ..
-- [ ] Create CLI
+
+- [ ] OCR: Find good recognition model (onnxtr ??)
 
 - [ ] Batch inference on pages (TODO -> )
 
