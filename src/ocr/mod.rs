@@ -37,10 +37,10 @@ fn cgrect_to_bbox(bbox: &CGRect, img_width: u32, img_height: u32, rescale_factor
 }
 
 #[derive(Debug)]
-pub(crate) struct OCRLines {
-    pub(crate) text: String,
-    pub(crate) confidence: f32,
-    pub(crate) bbox: BBox,
+pub struct OCRLines {
+    pub text: String,
+    pub confidence: f32,
+    pub bbox: BBox,
 }
 
 impl OCRLines {

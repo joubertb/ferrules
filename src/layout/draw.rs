@@ -11,7 +11,7 @@ use ab_glyph::FontArc;
 
 static FONT_BYTES: &[u8] = include_bytes!("../../font/Arial.ttf");
 
-pub fn load_font() -> FontArc {
+fn load_font() -> FontArc {
     FontArc::try_from_slice(FONT_BYTES).unwrap()
 }
 
