@@ -116,7 +116,6 @@ pub fn parse_document<P: AsRef<Path>>(
             MIN_LAYOUT_COVERAGE_THRESHOLD,
         )?;
 
-        dbg!(need_ocr);
         let ocr_result = if need_ocr {
             let ocr_result = parse_image_ocr(&page_image, rescale_factor)?;
             Some(ocr_result)

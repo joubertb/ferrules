@@ -51,8 +51,10 @@ pub(crate) fn parse_image_ocr(
 
     let mut ocr_result = Vec::new();
     unsafe {
-        let req = VNRecognizeTextRequest::new();
-        req.setRecognitionLevel(objc2_vision::VNRequestTextRecognitionLevel::Accurate);
+        let request = VNRecognizeTextRequest::new();
+        request.setRecognitionLevel(objc2_vision::VNRequestTextRecognitionLevel::Accurate);
+        // TODO set the languages array
+        request.setUsesLanguageCorrection(true);
 
         let mut buffer: Cursor<Vec<u8>> = Cursor::new(Vec::new());
         image.write_to(&mut buffer, image::ImageFormat::Png)?;
@@ -62,10 +64,10 @@ pub(crate) fn parse_image_ocr(
             &NSData::with_bytes(buffer.get_ref()),
             &NSDictionary::new(),
         );
-        let requests = NSArray::from_slice(&[req.as_ref() as &VNRequest]);
+        let requests = NSArray::from_slice(&[request.as_ref() as &VNRequest]);
         handler.performRequests_error(&requests)?;
 
-        if let Some(result) = req.results() {
+        if let Some(result) = request.results() {
             for recognized_text_region in result.to_vec() {
                 if (*recognized_text_region).confidence() > CONFIDENCE_THRESHOLD {
                     if let Some(rec_text) = recognized_text_region.topCandidates(1).first() {

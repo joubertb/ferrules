@@ -109,8 +109,8 @@ pub(crate) fn draw_ocr_bboxes(
         let rect = Rect::at(x0, y0).of_size(width, height);
 
         draw_hollow_rect_mut(&mut out_img, rect, Rgba([17u8, 138u8, 1u8, 255u8]));
-        let legend = format!("{} {:.2}", ocr_box.text, ocr_box.confidence);
-        let scale = 50;
+        let legend = format!("{} ({:.2})", ocr_box.text, ocr_box.confidence);
+        let scale = 70;
         let legend_size = page_img.width().max(page_img.height()) / scale;
         imageproc::drawing::draw_text_mut(
             &mut out_img,
