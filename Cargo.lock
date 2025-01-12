@@ -710,6 +710,7 @@ dependencies = [
  "pdfium-render",
  "plsfix",
  "rand",
+ "rayon",
  "tracing",
  "tracing-subscriber",
  "uuid",

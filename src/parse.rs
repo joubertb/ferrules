@@ -1,6 +1,9 @@
+use rayon::prelude::*;
 use std::path::{Path, PathBuf};
 
-use pdfium_render::prelude::{PdfPageRenderRotation, PdfPageTextChar, PdfRenderConfig, Pdfium};
+use pdfium_render::prelude::{
+    PdfPage, PdfPageRenderRotation, PdfPageTextChar, PdfRenderConfig, Pdfium,
+};
 use uuid::Uuid;
 
 use crate::{
@@ -58,6 +61,82 @@ fn parse_text_lines(spans: Vec<CharSpan>) -> Vec<Line> {
     lines
 }
 
+pub fn parse_page(
+    page_idx: usize,
+    page: &mut PdfPage,
+    layout_model: &ORTLayoutParser,
+    tmp_dir: &Path,
+    flatten_pdf: bool,
+) -> anyhow::Result<StructuredPage> {
+    // TODO: deal with document embedded forms?
+    if flatten_pdf {
+        page.flatten()?;
+    }
+    let rescale_factor = {
+        let scale_w = ORTLayoutParser::REQUIRED_WIDTH as f32 / page.width().value;
+        let scale_h = ORTLayoutParser::REQUIRED_HEIGHT as f32 / page.height().value;
+        f32::min(scale_h, scale_w)
+    };
+    let page_bbox = BBox {
+        x0: 0f32,
+        y0: 0f32,
+        x1: page.width().value,
+        y1: page.height().value,
+    };
+    let text_spans = parse_text_spans(page.text()?.chars().iter(), &page_bbox);
+    let text_lines = parse_text_lines(text_spans);
+
+    // FIXME: check that rotation is correct ?
+    // Some page return 90 or 270 rotation but are correct...
+    let page_rotation = page.rotation().unwrap_or(PdfPageRenderRotation::None);
+    let page_image = page
+        .render_with_config(&PdfRenderConfig::default().scale_page_by_factor(rescale_factor))
+        .map(|bitmap| bitmap.as_image())?;
+
+    // TODO(@aminediro): Takes ~25ms per page-> batch and send a [PdfPage; BATCH_SIZE]
+    let page_layout = layout_model.parse_layout(&page_image, 1f32 / rescale_factor)?;
+
+    let (need_ocr, blocks) = merge_line_layout(
+        &page_layout,
+        &text_lines,
+        page_idx,
+        MIN_LAYOUT_COVERAGE_THRESHOLD,
+    )?;
+
+    let ocr_result = if need_ocr {
+        let ocr_result = parse_image_ocr(&page_image, rescale_factor)?;
+        Some(ocr_result)
+    } else {
+        None
+    };
+
+    let structured_page = StructuredPage {
+        id: page_idx,
+        width: page_bbox.width(),
+        height: page_bbox.height(),
+        rotation: page_rotation,
+        blocks,
+        need_ocr,
+    };
+
+    if std::env::var("FERRULES_DEBUG").is_ok() {
+        // TODO: add feature compile debug
+        let output_file = tmp_dir.join(format!("page_{}.png", page_idx));
+        let page_image = page
+            .render_with_config(&PdfRenderConfig::default().scale_page_by_factor(1f32))
+            .map(|bitmap| bitmap.as_image())?;
+        let out_img = draw_text_lines(&text_lines, &page_image)?;
+        let out_img = draw_layout_bboxes(&page_layout, &out_img.into())?;
+        if let Some(ocr_result) = ocr_result {
+            let out_img = draw_ocr_bboxes(&ocr_result, &out_img.into())?;
+            out_img.save(output_file)?;
+        } else {
+            out_img.save(output_file)?;
+        }
+    };
+    Ok(structured_page)
+}
+
 pub fn parse_document<P: AsRef<Path>>(
     path: P,
     layout_model: &ORTLayoutParser,
@@ -79,83 +158,23 @@ pub fn parse_document<P: AsRef<Path>>(
     let pdfium = Pdfium::new(Pdfium::bind_to_statically_linked_library()?);
     let mut document = pdfium.load_pdf_from_file(&path, password)?;
 
-    let mut pages = Vec::with_capacity(document.pages().len() as usize);
-    for (page_idx, mut page) in document.pages_mut().iter().enumerate() {
-        // TODO: deal with document embedded forms?
-        if flatten_pdf {
-            page.flatten()?;
-        }
-        let rescale_factor = {
-            let scale_w = ORTLayoutParser::REQUIRED_WIDTH as f32 / page.width().value;
-            let scale_h = ORTLayoutParser::REQUIRED_HEIGHT as f32 / page.height().value;
-            f32::min(scale_h, scale_w)
-        };
-        let page_bbox = BBox {
-            x0: 0f32,
-            y0: 0f32,
-            x1: page.width().value,
-            y1: page.height().value,
-        };
-        let text_spans = parse_text_spans(page.text()?.chars().iter(), &page_bbox);
-        let text_lines = parse_text_lines(text_spans);
-
-        // FIXME: check that rotation is correct ?
-        // Some page return 90 or 270 rotation but are correct...
-        let page_rotation = page.rotation().unwrap_or(PdfPageRenderRotation::None);
-        let page_image = page
-            .render_with_config(&PdfRenderConfig::default().scale_page_by_factor(rescale_factor))
-            .map(|bitmap| bitmap.as_image())?;
-
-        // TODO(@aminediro): Takes ~25ms per page-> batch and send a [PdfPage; BATCH_SIZE]
-        let page_layout = layout_model.parse_layout(&page_image, 1f32 / rescale_factor)?;
-
-        let (need_ocr, blocks) = merge_line_layout(
-            &page_layout,
-            &text_lines,
-            page_idx,
-            MIN_LAYOUT_COVERAGE_THRESHOLD,
-        )?;
-
-        let ocr_result = if need_ocr {
-            let ocr_result = parse_image_ocr(&page_image, rescale_factor)?;
-            Some(ocr_result)
-        } else {
-            None
-        };
-
-        let structured_page = StructuredPage {
-            id: page_idx,
-            width: page_bbox.width(),
-            height: page_bbox.height(),
-            rotation: page_rotation,
-            blocks,
-            need_ocr,
-        };
-
-        if std::env::var("FERRULES_DEBUG").is_ok() {
-            // TODO: add feature compile debug
-            let output_file = tmp_dir.join(format!("page_{}.png", page_idx));
-            let page_image = page
-                .render_with_config(&PdfRenderConfig::default().scale_page_by_factor(1f32))
-                .map(|bitmap| bitmap.as_image())?;
-            let out_img = draw_text_lines(&text_lines, &page_image)?;
-            let out_img = draw_layout_bboxes(&page_layout, &out_img.into())?;
-            if let Some(ocr_result) = ocr_result {
-                let out_img = draw_ocr_bboxes(&ocr_result, &out_img.into())?;
-                out_img.save(output_file)?;
-            } else {
-                out_img.save(output_file)?;
-            }
-        };
-
-        pages.push(structured_page);
-    }
+    let pages: anyhow::Result<Vec<_>> = document
+        .pages_mut()
+        .iter()
+        .enumerate()
+        .map(|(page_idx, mut page)| {
+            parse_page(page_idx, &mut page, layout_model, &tmp_dir, flatten_pdf)
+        })
+        .collect();
 
     if std::env::var("FERRULES_DEBUG").is_ok() {
         println!("Saved debug results in {:?}", tmp_dir.as_os_str());
     }
 
-    Ok(Document { path, pages })
+    Ok(Document {
+        path,
+        pages: pages?,
+    })
 }
 
 fn merge_line_layout(
