@@ -11,9 +11,11 @@ use crate::{
         draw::{draw_layout_bboxes, draw_ocr_bboxes, draw_text_lines},
         model::{LayoutBBox, ORTLayoutParser},
     },
-    ocr::parse_image_ocr,
     sanitize_doc_name,
 };
+
+#[cfg(target_os = "macos")]
+use crate::ocr::parse_image_ocr;
 
 const MIN_LAYOUT_COVERAGE_THRESHOLD: f32 = 0.2;
 
@@ -103,8 +105,13 @@ pub fn parse_page(
     )?;
 
     let ocr_result = if need_ocr {
-        let ocr_result = parse_image_ocr(&page_image, rescale_factor)?;
-        Some(ocr_result)
+        if cfg!(target_os = "macos") {
+            let ocr_result = parse_image_ocr(&page_image, rescale_factor)?;
+            Some(ocr_result)
+        } else {
+            println!("Target OS not macOS. Skipping OCR for now");
+            None
+        }
     } else {
         None
     };

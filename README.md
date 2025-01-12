@@ -70,6 +70,7 @@ A Ferrule (a corruption of Latin viriola "small bracelet", under the influence o
   - [ ] Unify Config for env/CLI/API
   - [ ] Dynamic batching of document(pages) to process
 
+- [ ] Open document mmap and share range of page between threads
 - [ ] Build pdfium statically for Linux
 - [ ] Determine page orientation + deskew
 - [ ] Optimize layout model for ANE
