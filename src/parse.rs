@@ -1,4 +1,3 @@
-use rayon::prelude::*;
 use std::path::{Path, PathBuf};
 
 use pdfium_render::prelude::{

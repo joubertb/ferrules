@@ -18,8 +18,6 @@ imageproc = "0.25.0"
 ab_glyph = "0.2.29"
 uuid = { version = "1.11.0", features = ["v4"] }
 tracing-subscriber = { version = "0.3.19", features = ["env-filter"] }
-rand = "0.8.5"
-rayon = "1.10.0"
 
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2 = { version = "^0.5.2" }
@@ -35,6 +33,7 @@ objc2-vision = { version = "^0.2.2", features = [
 
 
 [dev-dependencies]
+rand = "0.8.5"
 criterion = { version = "0.5", features = ["html_reports"] }
 
 [[bench]]
