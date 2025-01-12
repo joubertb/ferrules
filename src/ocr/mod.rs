@@ -5,7 +5,7 @@ use objc2::ClassType;
 use objc2_foundation::{CGRect, NSArray, NSData, NSDictionary};
 use objc2_vision::{VNImageRequestHandler, VNRecognizeTextRequest, VNRequest};
 
-use crate::entities::BBox;
+use crate::entities::{BBox, Line};
 
 const CONFIDENCE_THRESHOLD: f32 = 0f32;
 
@@ -37,16 +37,27 @@ fn cgrect_to_bbox(bbox: &CGRect, img_width: u32, img_height: u32, rescale_factor
 }
 
 #[derive(Debug)]
-pub(crate) struct OCRBBox {
+pub(crate) struct OCRLines {
     pub(crate) text: String,
     pub(crate) confidence: f32,
     pub(crate) bbox: BBox,
 }
 
+impl OCRLines {
+    pub(crate) fn to_line(&self) -> Line {
+        Line {
+            text: self.text.to_string(),
+            bbox: self.bbox.clone(),
+            rotation: 0f32,
+            spans: vec![],
+        }
+    }
+}
+
 pub(crate) fn parse_image_ocr(
     image: &DynamicImage,
     rescale_factor: f32,
-) -> anyhow::Result<Vec<OCRBBox>> {
+) -> anyhow::Result<Vec<OCRLines>> {
     let (img_width, img_height) = (image.width(), image.height());
 
     let mut ocr_result = Vec::new();
@@ -73,7 +84,7 @@ pub(crate) fn parse_image_ocr(
                     if let Some(rec_text) = recognized_text_region.topCandidates(1).first() {
                         let bbox = (*recognized_text_region).boundingBox();
                         let bbox = cgrect_to_bbox(&bbox, img_width, img_height, rescale_factor);
-                        ocr_result.push(OCRBBox {
+                        ocr_result.push(OCRLines {
                             text: rec_text.string().to_string(),
                             confidence: rec_text.confidence(),
                             bbox,
@@ -94,13 +105,16 @@ mod tests {
 
     #[test]
     fn test_ocr_apple_vision() {
-        let image = ImageReader::open("./test_data/page.jpg")
+        let image = ImageReader::open("./test_data/double_cols.jpg")
             .unwrap()
             .decode()
             .unwrap();
 
         let s = Instant::now();
-        assert!(parse_image_ocr(&image, 1f32).is_ok());
+        let ocr_result = parse_image_ocr(&image, 1f32);
+        assert!(ocr_result.is_ok());
+
+        dbg!(&ocr_result);
         println!(
             "OCR took: {}ms",
             Instant::now().duration_since(s).as_millis()

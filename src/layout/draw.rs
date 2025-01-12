@@ -3,7 +3,7 @@ use imageproc::drawing::draw_hollow_rect_mut;
 use imageproc::rect::Rect;
 
 use crate::entities::Line;
-use crate::ocr::OCRBBox;
+use crate::ocr::OCRLines;
 
 use super::model::LayoutBBox;
 
@@ -90,7 +90,7 @@ pub(crate) fn draw_layout_bboxes(
 }
 
 pub(crate) fn draw_ocr_bboxes(
-    bboxes: &[OCRBBox],
+    bboxes: &[OCRLines],
     page_img: &DynamicImage,
 ) -> anyhow::Result<ImageBuffer<Rgba<u8>, Vec<u8>>> {
     // Convert the dynamic image to RGBA for in-place drawing.

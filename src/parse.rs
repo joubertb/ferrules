@@ -17,7 +17,18 @@ use crate::{
 #[cfg(target_os = "macos")]
 use crate::ocr::parse_image_ocr;
 
-const MIN_LAYOUT_COVERAGE_THRESHOLD: f32 = 0.2;
+/// This constant defines the minimum ratio between the area of text lines identified
+/// by the pdfium2 and the area of text regions detected through layout analysis.
+/// If this ratio falls below the threshold of 0.5 (or 50%), it indicates that the page
+/// may not have enough __native__ lines, and therefore should
+/// be considered for OCR to ensure accurate text extraction.
+const MIN_LAYOUT_COVERAGE_THRESHOLD: f32 = 0.5;
+
+/// This constant defines the minimum required intersection ratio between the bounding box of an
+/// OCR-detected text line and a text block detected through layout analysis.
+/// This approach ensures that only text lines significantly overlapping with a layout block are
+/// paired, thus improving the accuracy of OCR-text and layout alignment.
+const MIN_INTERSECTION_LAYOUT: f32 = 0.5;
 
 fn parse_text_spans<'a>(
     chars: impl Iterator<Item = PdfPageTextChar<'a>>,
@@ -97,23 +108,31 @@ pub fn parse_page(
     // TODO(@aminediro): Takes ~25ms per page-> batch and send a [PdfPage; BATCH_SIZE]
     let page_layout = layout_model.parse_layout(&page_image, 1f32 / rescale_factor)?;
 
-    let (need_ocr, blocks) = merge_line_layout(
-        &page_layout,
-        &text_lines,
-        page_idx,
-        MIN_LAYOUT_COVERAGE_THRESHOLD,
-    )?;
+    let text_boxes: Vec<&LayoutBBox> = page_layout.iter().filter(|b| b.is_text_block()).collect();
+
+    let need_ocr = page_needs_ocr(&text_boxes, &text_lines);
 
     let ocr_result = if need_ocr {
         if cfg!(target_os = "macos") {
             let ocr_result = parse_image_ocr(&page_image, rescale_factor)?;
             Some(ocr_result)
         } else {
-            println!("Target OS not macOS. Skipping OCR for now");
             None
         }
     } else {
         None
+    };
+
+    let blocks = if need_ocr && ocr_result.is_some() {
+        let lines = ocr_result
+            .as_ref()
+            .unwrap()
+            .iter()
+            .map(|ocr_line| ocr_line.to_line())
+            .collect::<Vec<_>>();
+        merge_lines_layout(&text_boxes, &lines, page_idx)?
+    } else {
+        merge_lines_layout(&text_boxes, &text_lines, page_idx)?
     };
 
     let structured_page = StructuredPage {
@@ -183,17 +202,37 @@ pub fn parse_document<P: AsRef<Path>>(
     })
 }
 
-fn merge_line_layout(
-    page_layout: &[LayoutBBox],
-    text_lines: &[Line],
+fn page_needs_ocr(text_boxes: &[&LayoutBBox], text_lines: &[Line]) -> bool {
+    let line_area = text_lines.iter().map(|l| l.bbox.area()).sum::<f32>();
+    let text_layoutbbox_area = text_boxes.iter().map(|l| l.bbox.area()).sum::<f32>();
+
+    if text_layoutbbox_area > 0f32 {
+        line_area / text_layoutbbox_area < MIN_LAYOUT_COVERAGE_THRESHOLD
+    } else {
+        true
+    }
+    // let need_ocr = if !text_lines.is_empty() {
+    //     let text_line_coverage = total_line_coverage as f32 / text_lines.len() as f32;
+
+    //     let matched_blocks: Vec<_> = blocks.iter().map(|b| b.layout_block_id).collect();
+
+    //     let layout_text_no_lines = text_boxes
+    //         .iter()
+    //         .filter(|layout_bbox| !matched_blocks.contains(&layout_bbox.id))
+    //         .count();
+    //     (text_line_coverage) < layout_coverage_threshold
+    //         || (layout_text_no_lines as f32 / text_boxes.len() as f32) > 0.8
+    // } else {
+    //     true
+    // };
+}
+
+fn merge_lines_layout(
+    text_boxes: &[&LayoutBBox],
+    lines: &[Line],
     page_id: usize,
-    layout_coverage_threshold: f32,
-) -> anyhow::Result<(bool, Vec<Block>)> {
-    let text_boxes: Vec<&LayoutBBox> = page_layout.iter().filter(|b| b.is_text_block()).collect();
-
-    let mut total_line_coverage = 0;
-
-    let line_block_iterator = text_lines.iter().map(|line| {
+) -> anyhow::Result<Vec<Block>> {
+    let line_block_iterator = lines.iter().map(|line| {
         // Get max intersection block for the line
         let max_intersection_bbox = text_boxes.iter().max_by(|a, b| {
             let a_intersection = a.bbox.intersection(&line.bbox);
@@ -202,8 +241,7 @@ fn merge_line_layout(
             a_intersection.partial_cmp(&b_intersection).unwrap()
         });
         let max_intersection_bbox = max_intersection_bbox.and_then(|b| {
-            if b.bbox.intersection(&line.bbox) > 0.5 {
-                total_line_coverage += 1;
+            if b.bbox.intersection(&line.bbox) > MIN_INTERSECTION_LAYOUT {
                 Some(b)
             } else {
                 None
@@ -234,35 +272,10 @@ fn merge_line_layout(
                 }
             }
             None => {
-                // TODO : "Line skipped because no layout bbox intersection");
                 continue;
             }
         }
     }
 
-    // let need_ocr = if !text_lines.is_empty() {
-    //     let text_line_coverage = total_line_coverage as f32 / text_lines.len() as f32;
-
-    //     let matched_blocks: Vec<_> = blocks.iter().map(|b| b.layout_block_id).collect();
-
-    //     let layout_text_no_lines = text_boxes
-    //         .iter()
-    //         .filter(|layout_bbox| !matched_blocks.contains(&layout_bbox.id))
-    //         .count();
-    //     (text_line_coverage) < layout_coverage_threshold
-    //         || (layout_text_no_lines as f32 / text_boxes.len() as f32) > 0.8
-    // } else {
-    //     true
-    // };
-
-    let line_area = text_lines.iter().map(|l| l.bbox.area()).sum::<f32>();
-    let text_layoutbbox_area = text_boxes.iter().map(|l| l.bbox.area()).sum::<f32>();
-
-    let need_ocr = if text_layoutbbox_area > 0f32 {
-        line_area / text_layoutbbox_area < 0.5
-    } else {
-        true
-    };
-
-    Ok((need_ocr, blocks))
+    Ok(blocks)
 }

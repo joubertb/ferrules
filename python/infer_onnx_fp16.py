@@ -11,8 +11,8 @@ def create_session_with_coreml(model_path):
 
     # Use CoreMLExecutionProvider with settings for ANE only
     # providers = ["CPUExecutionProvider"]
-    providers =['CUDAExecutionProvider']
-    # providers = [("CoreMLExecutionProvider", {"use_ane": True})]
+    # providers =['CUDAExecutionProvider']
+    providers = [("CoreMLExecutionProvider", {"use_ane": True})]
 
     session = ort.InferenceSession(
         model_path, sess_options=session_options, providers=providers
@@ -29,7 +29,6 @@ def run_inference(session, input_tensor):
 
 
 if __name__ == "__main__":
-
     ##### SINGLE
     onnx_model_path = "./models/yolov8s-doclaynet.onnx"
     single_batch_session = create_session_with_coreml(onnx_model_path)

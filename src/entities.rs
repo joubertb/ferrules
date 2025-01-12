@@ -283,8 +283,8 @@ impl CharSpan {
 }
 #[derive(Debug, Default)]
 pub struct Line {
-    pub bbox: BBox,
     pub text: String,
+    pub bbox: BBox,
     pub rotation: f32,
     pub spans: Vec<CharSpan>,
 }
