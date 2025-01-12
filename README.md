@@ -32,12 +32,12 @@ Unlike alternatives such as `unstructured` which are slow and Python-based, `fer
 - **⚙️ Advanced Functionalities:**
 
   - Offers configurable inference parameters for optimized processing.
-  - Facilitates batch inference on document pages.
-  - Supports tracing and CLI functionalities for enhanced control.
+  - Batch inference on document pages. (COMING SOON)
 
 - **🛠️ API and CLI:**
 
-  - Provides CLI, and API integration.
+  - Provides both a CLI and API interface
+  - Supports tracing
 
 ## Installation
 
@@ -107,6 +107,7 @@ Unlike alternatives such as `unstructured` which are slow and Python-based, `fer
 - [ ] Determine page orientation + deskew
 - [ ] Optimize layout model for ANE
 - [ ] ORT inference in fp16/mixed precision
+- [ ] Move to other yolo versions: yolov11s seems better with less params [yolo-doclaynet](https://github.com/ppaanngggg/yolo-doclaynet)
 
 ## Resources:
 
@@ -117,3 +118,7 @@ Unlike alternatives such as `unstructured` which are slow and Python-based, `fer
   - https://developer.apple.com/documentation/vision/recognizing-text-in-images
 
 - Use `onnxruntime` IO bindings: https://ort.pyke.io/perf/io-binding
+
+## Credits
+
+This project uses models from the [yolo-doclaynet repository](https://github.com/ppaanngggg/yolo-doclaynet). We are grateful to the contributors of that project.

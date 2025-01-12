@@ -11,6 +11,8 @@ use ort::{
 
 use crate::entities::BBox;
 
+const LAYOUT_MODEL_BYTES: &[u8] = include_bytes!("../../models/yolov8s-doclaynet.onnx");
+
 lazy_static! {
     static ref ID2LABEL: [&'static str; 11] = [
         "Caption",
@@ -73,7 +75,7 @@ impl ORTLayoutParser {
     /// It determines the overlap between bounding boxes before suppression.
     pub const IOU_THRESHOLD: f32 = 0.7;
 
-    pub fn new<P: AsRef<Path>>(model_path: P) -> anyhow::Result<Self> {
+    pub fn new() -> anyhow::Result<Self> {
         let session = Session::builder()?
             .with_execution_providers([CoreMLExecutionProvider::default()
                 // .with_ane_only()
@@ -81,7 +83,7 @@ impl ORTLayoutParser {
                 .build()])?
             .with_optimization_level(GraphOptimizationLevel::Level3)?
             .with_intra_threads(8)?
-            .commit_from_file(model_path)?;
+            .commit_from_memory(LAYOUT_MODEL_BYTES)?;
 
         let input_name = session
             .inputs
