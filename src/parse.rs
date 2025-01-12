@@ -227,6 +227,13 @@ fn page_needs_ocr(text_boxes: &[&LayoutBBox], text_lines: &[Line]) -> bool {
     // };
 }
 
+/// Merges lines into blocks based on their layout, maintaining the order of lines.
+///
+/// This function takes a list of text boxes representing layout bounding boxes that contain text,
+/// and a list of lines (which could be obtained from OCR or  PDF library pdfium2,
+/// and merges these lines into blocks. The merging is done based on the intersection
+/// of each line with the layout bounding boxes. The function prioritizes maintaining
+/// the order of the lines, rather than the layout blocks.
 fn merge_lines_layout(
     text_boxes: &[&LayoutBBox],
     lines: &[Line],
