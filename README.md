@@ -4,7 +4,40 @@
     <img src="./ferrules-logo.png" alt="Ferrules-logo" width="31%"  style="border-radius: 50%; padding-bottom: 20px"/>
 </div>
 
-A Ferrule (a corruption of Latin viriola "small bracelet", under the influence of ferrum "iron"), on a pencil known as a Shoe, is any of a number of types of objects, generally used for fastening, joining, sealing, or reinforcement
+Ferrules is an **opinionated high-performance document parsing library** designed to generate LLM-ready documents efficiently.
+Unlike alternatives such as `unstructured` which are slow and Python-based, `ferrules` is written in Rust and aims to provide a seamless experience with robust deployment across various platforms.
+
+| **NOTE** A ferrule is a corruption of Latin viriola on a pencil known as a Shoe, is any of a number of types of objects, generally used for fastening, joining, sealing, or reinforcement.
+
+## Features
+
+- **📄 PDF Parsing and Layout Extraction:**
+
+  - Utilizes `pdfium2` to parse documents.
+  - Supports OCR using Apple's Vision on macOS (using `objc2` Rust bindings and [`VNRecognizeTextRequest`](https://developer.apple.com/documentation/vision/vnrecognizetextrequest) functionality).
+  - Extracts and analyzes **page layouts** with advanced preprocessing and postprocessing techniques.
+  - Accelerate model inference on Apple Neural Engine (ANE)/GPU (using [`ort`](https://ort.pyke.io/) library).
+  - Merges layout with PDF text lines for comprehensive document understanding.
+
+- **🔄 Document Transformation:**
+
+  - Groups captions, footers, and other elements intelligently.
+  - Structures lists and merges blocks into cohesive sections.
+  - Detects headings and titles using machine learning for logical document structuring.
+
+- **🖨️ Rendering:**
+
+  - Provides HTML, Markdown, and JSON rendering options for versatile use cases.
+
+- **⚙️ Advanced Functionalities:**
+
+  - Offers configurable inference parameters for optimized processing.
+  - Facilitates batch inference on document pages.
+  - Supports tracing and CLI functionalities for enhanced control.
+
+- **🛠️ API and CLI:**
+
+  - Provides CLI, and API integration.
 
 ## Installation
 
@@ -29,22 +62,21 @@ A Ferrule (a corruption of Latin viriola "small bracelet", under the influence o
     - [x] Postprocess tensor -> nms
     - [x] Verify labels
   - [x] Determine pages needing OCR (coverage lines/blocks)
+  - [x] OCR -> Use Apple vision on macOS target_os
   - [x] Merge Layout with pdfium lines
     - [x] Rescale / or / downscale line bbox/ layout bbox
-    - [x] Merge intersection lines with max bbox into blocks
+    - [x] Merge intersection lines (from pdfium and OCR) with max bbox into blocks
     - [ ] Add lines to bbox based on distance
-    - [ ] Add remaining layout blocks to blocks
-
-- [x] OCR: Use Apple vision on macOS target
+    - [ ] Add remaining layout blocks to blocks based on position
 
 - [ ] Transform to HighLevel Document representation:
 
   - [ ] Group caption/footer blocks with image blocks/tables using minimum gap
   - [ ] Group listItems into list : Find first and merge subsequent items
   - [ ] Merge Blocks into sections
-  - [ ] Get PDF Bookmarks (TOC) and reconcile detected titles with TOC
   - [ ] Process SubHeader/Titles using kmeans on line heigths to get the title_level
   - [ ] Run processors (Text, List, PageHeader )
+  - [ ] Get PDF Bookmarks (TOC) and reconcile detected titles with TOC
 
 - [ ] Render Document
 
