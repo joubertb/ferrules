@@ -3,7 +3,6 @@ import numpy as np
 import onnxruntime as ort
 
 
-# Initialize ONNX Runtime session with CoreML Execution Provider
 def create_session_with_coreml(model_path):
     # Create session options
     session_options = ort.SessionOptions()
@@ -13,10 +12,12 @@ def create_session_with_coreml(model_path):
 
     # Use CoreMLExecutionProvider with settings for ANE only
     # providers = ["CPUExecutionProvider"]
-    providers = [
-        ("CoreMLExecutionProvider", {"use_ane": True}),
-        "CPUExecutionProvider",
-    ]
+    # providers = [
+    #     ("CoreMLExecutionProvider", {"use_ane": True}),
+    #     "CPUExecutionProvider",
+    # ]
+
+    providers =['CUDAExecutionProvider']
 
     session = ort.InferenceSession(
         model_path, sess_options=session_options, providers=providers
@@ -33,15 +34,16 @@ def run_inference(session, input_tensor):
 
 
 if __name__ == "__main__":
-    # Generate random input tensor
-    # onnx_model_path = "./models/yolov8s-doclaynet-batch-16.onnx"
-    # batch_session = create_session_with_coreml(onnx_model_path)
-    # input_tensor = np.random.rand(16, 3, 1024, 1024).astype(np.float32)
-    # s = perf_counter()
-    # for i in range(1):
-    #     outputs = run_inference(batch_session, input_tensor)
-    # e = perf_counter()
-    # print(f"Model {onnx_model_path} took: {e-s:.2f}s")
+    ##### BATCH
+    onnx_model_path = "./models/yolov8s-doclaynet-batch-16.onnx"
+    batch_session = create_session_with_coreml(onnx_model_path)
+    input_tensor = np.random.rand(16, 3, 1024, 1024).astype(np.float32)
+    _= run_inference(batch_session, input_tensor)
+    s = perf_counter()
+    for i in range(4):
+        outputs = run_inference(batch_session, input_tensor)
+    e = perf_counter()
+    print(f"Model {onnx_model_path} took: {e-s:.2f}s")
 
     ##### SINGLE
     onnx_model_path = "./models/yolov8s-doclaynet.onnx"
@@ -49,7 +51,7 @@ if __name__ == "__main__":
     input_tensor = np.random.rand(1, 3, 1024, 1024).astype(np.float32)
     _ = run_inference(single_batch_session, input_tensor)
     s = perf_counter()
-    for i in range(100):
+    for i in range(64):
         outputs = run_inference(single_batch_session, input_tensor)
     e = perf_counter()
     print(f"Model {onnx_model_path} took: {e-s:.2f}s")

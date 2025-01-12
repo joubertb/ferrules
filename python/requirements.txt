@@ -4,6 +4,7 @@ torch>=1.8.0
 ipython
 ultralytics
 onnx
+onnxruntime-gpu
 onnxconverter-common
 
-ocrmac
+ocrmac ; sys_platform == "darwin"
