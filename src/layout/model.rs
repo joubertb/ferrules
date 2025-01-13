@@ -1,4 +1,4 @@
-use std::path::Path;
+// use std::path::Path;
 
 use anyhow::Context;
 use image::{imageops::FilterType, DynamicImage, GenericImageView};
@@ -8,10 +8,11 @@ use ort::{
     execution_providers::CoreMLExecutionProvider,
     session::{builder::GraphOptimizationLevel, Session},
 };
+use rayon::prelude::*;
 
 use crate::entities::BBox;
 
-const LAYOUT_MODEL_BYTES: &[u8] = include_bytes!("../../models/yolov8s-doclaynet.onnx");
+pub const LAYOUT_MODEL_BYTES: &[u8] = include_bytes!("../../models/yolov8s-doclaynet.onnx");
 
 lazy_static! {
     static ref ID2LABEL: [&'static str; 11] = [
@@ -126,6 +127,21 @@ impl ORTLayoutParser {
 
         Ok(output_tensor)
     }
+    pub fn parse_layout_batch(
+        &self,
+        page_imgs: &[DynamicImage],
+        bbox_rescale_factors: &[f32],
+    ) -> anyhow::Result<Vec<Vec<LayoutBBox>>> {
+        let bboxes: Result<Vec<_>, _> = page_imgs
+            .into_par_iter()
+            .zip(bbox_rescale_factors.par_iter())
+            .map(|(page_img, bbox_rescale_factor)| {
+                let bboxes = self.parse_layout(page_img, *bbox_rescale_factor)?;
+                Ok(bboxes)
+            })
+            .collect();
+        bboxes
+    }
 
     pub fn parse_layout(
         &self,
@@ -149,7 +165,7 @@ impl ORTLayoutParser {
         original_height: u32,
         rescale_factor: f32,
     ) -> Vec<LayoutBBox> {
-        // Tensor shape: (bs, bbox(4) + classes(15),anchors )
+        // Tensor shape: (bs, bbox(4) + classes(15), anchors )
         let mut result = Vec::new();
         let output = output.slice(s![0, .., ..]);
         let mut bbox_id = 0;
@@ -385,5 +401,26 @@ mod tests {
         // We expect exactly one box left, with proba = 0.95.
         assert_eq!(raw_bboxes.len(), 1);
         assert_eq!(raw_bboxes[0].proba, 0.95);
+    }
+    #[test]
+    fn test_multithreaded() {
+        let session = Session::builder()
+            .unwrap()
+            .with_execution_providers([CoreMLExecutionProvider::default()
+                // .with_ane_only()
+                .with_subgraphs()
+                .build()])
+            .unwrap()
+            .commit_from_memory(LAYOUT_MODEL_BYTES)
+            .unwrap();
+
+        use rayon::prelude::*;
+
+        (0..20).into_par_iter().for_each(|_| {
+            let input: Array4<f32> = Array4::ones([1, 3, 1024, 1024]);
+            session
+                .run(ort::inputs!["images"=> input].unwrap())
+                .unwrap();
+        })
     }
 }

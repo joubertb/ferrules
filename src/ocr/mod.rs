@@ -11,7 +11,7 @@ const CONFIDENCE_THRESHOLD: f32 = 0f32;
 
 /// Convert vision coordinates to Bbox absolute coordinates
 #[inline]
-fn cgrect_to_bbox(bbox: &CGRect, img_width: u32, img_height: u32, rescale_factor: f32) -> BBox {
+fn cgrect_to_bbox(bbox: &CGRect, img_width: u32, img_height: u32, downscale_factor: f32) -> BBox {
     // Change to (upper-left, lower-right)
     let bx0 = bbox.origin.x as f32;
     let by0 = bbox.origin.y as f32;
@@ -29,10 +29,10 @@ fn cgrect_to_bbox(bbox: &CGRect, img_width: u32, img_height: u32, rescale_factor
     assert!(y1 < img_height as f32);
 
     BBox {
-        x0: x0 / rescale_factor,
-        y0: y0 / rescale_factor,
-        x1: x1 / rescale_factor,
-        y1: y1 / rescale_factor,
+        x0: x0 * downscale_factor,
+        y0: y0 * downscale_factor,
+        x1: x1 * downscale_factor,
+        y1: y1 * downscale_factor,
     }
 }
 
@@ -59,6 +59,8 @@ pub(crate) fn parse_image_ocr(
     rescale_factor: f32,
 ) -> anyhow::Result<Vec<OCRLines>> {
     let (img_width, img_height) = (image.width(), image.height());
+    let mut buffer: Cursor<Vec<u8>> = Cursor::new(Vec::new());
+    image.write_to(&mut buffer, image::ImageFormat::Png)?;
 
     let mut ocr_result = Vec::new();
     unsafe {
@@ -66,9 +68,6 @@ pub(crate) fn parse_image_ocr(
         request.setRecognitionLevel(objc2_vision::VNRequestTextRecognitionLevel::Accurate);
         // TODO set the languages array
         request.setUsesLanguageCorrection(true);
-
-        let mut buffer: Cursor<Vec<u8>> = Cursor::new(Vec::new());
-        image.write_to(&mut buffer, image::ImageFormat::Png)?;
 
         let handler = VNImageRequestHandler::initWithData_options(
             VNImageRequestHandler::alloc(),
