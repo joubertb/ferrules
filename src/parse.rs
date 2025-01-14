@@ -1,5 +1,10 @@
-use std::path::{Path, PathBuf};
+use std::{
+    fmt::Write,
+    path::{Path, PathBuf},
+    time::Instant,
+};
 
+use indicatif::{ProgressBar, ProgressState, ProgressStyle};
 use itertools::izip;
 use pdfium_render::prelude::{
     PdfPage, PdfPageRenderRotation, PdfPageTextChar, PdfRenderConfig, Pdfium,
@@ -169,6 +174,7 @@ pub fn parse_pages(
     tmp_dir: &Path,
     flatten_pdf: bool,
     debug: bool,
+    pb: &ProgressBar,
 ) -> anyhow::Result<Vec<StructuredPage>> {
     // TODO: deal with document embedded forms?
     for (_, page) in pages.iter_mut() {
@@ -260,6 +266,9 @@ pub fn parse_pages(
         };
 
         structured_pages.push(structured_page);
+
+        pb.set_message(format!("item #{}", *page_idx + 1));
+        pb.inc(1u64);
         if debug {
             // TODO: add feature compile debug
             let output_file = tmp_dir.join(format!("page_{}.png", page_idx));
@@ -287,6 +296,7 @@ pub fn parse_document<P: AsRef<Path>>(
     flatten_pdf: bool,
     debug: bool,
 ) -> anyhow::Result<Document<P>> {
+    let start_time = Instant::now();
     let doc_name = path
         .as_ref()
         .file_name()
@@ -305,15 +315,30 @@ pub fn parse_document<P: AsRef<Path>>(
     let mut pages: Vec<_> = document.pages_mut().iter().enumerate().collect();
     let chunk_size = 32;
 
+    let pb = ProgressBar::new(pages.len() as u64);
+    pb.set_style(
+        ProgressStyle::with_template(
+            "{spinner:.green} [{elapsed_precise}] [{bar:40.cyan/blue}] {msg}",
+        )
+        .unwrap()
+        .with_key("eta", |state: &ProgressState, w: &mut dyn Write| {
+            write!(w, "{:.1}s", state.eta().as_secs_f64()).unwrap()
+        })
+        .progress_chars("#>-"),
+    );
+
     let pages = pages
         .chunks_mut(chunk_size)
-        .flat_map(|chunk| parse_pages(chunk, layout_model, &tmp_dir, flatten_pdf, debug))
+        .flat_map(|chunk| parse_pages(chunk, layout_model, &tmp_dir, flatten_pdf, debug, &pb))
         .flatten()
         .collect::<Vec<_>>();
 
     if debug {
         println!("Saved debug results in {:?}", tmp_dir.as_os_str());
     }
+
+    let duration = Instant::now().duration_since(start_time).as_millis();
+    pb.finish_with_message(format!("Parsed document in {}ms", duration));
 
     Ok(Document { path, pages })
 }

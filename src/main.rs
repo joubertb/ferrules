@@ -1,4 +1,5 @@
 use clap::Parser;
+use std::path::PathBuf;
 
 #[derive(Parser, Debug)]
 #[command(
@@ -51,10 +52,6 @@ struct Args {
     )]
     debug_dir: Option<PathBuf>,
 }
-use std::{
-    path::PathBuf,
-    time::{self, Instant},
-};
 
 use ferrules::{layout::model::ORTLayoutParser, parse::parse_document};
 
@@ -74,14 +71,9 @@ fn main() {
 
     let layout_model = ORTLayoutParser::new().expect("can't load layout model");
 
-    let start_time = time::Instant::now();
     let doc = parse_document(&args.file_path, &layout_model, None, true, args.debug).unwrap();
     // TODO: Save to output directory
     if args.debug {
         println!("{}", doc.render());
     }
-    println!(
-        "Parsed doc in {} ms",
-        Instant::now().duration_since(start_time).as_millis()
-    )
 }
