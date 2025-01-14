@@ -1,6 +1,7 @@
 .DS_Store
 /target
-models/
+#models/
+model-archive/
 **/.venv/
 *.pt
 test_data/*
