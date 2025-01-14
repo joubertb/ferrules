@@ -119,7 +119,7 @@ Unlike alternatives such as `unstructured` which are slow and Python-based, `fer
   - https://docs.rs/objc2-vision/latest/objc2_vision/index.html
   - https://developer.apple.com/documentation/vision/recognizing-text-in-images
 
-- Use `onnxruntime` IO bindings: https://ort.pyke.io/perf/io-binding
+- `ort` : https://ort.pyke.io/
 
 ## Credits
 
