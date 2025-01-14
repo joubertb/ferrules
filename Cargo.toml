@@ -6,24 +6,28 @@ edition = "2021"
 [dependencies]
 anyhow = "1.0.95"
 tracing = "0.1.41"
-clap = { version = "4.5.23", features = ["derive", "env"] }
-pdfium-render = { version = "0.8.27", features = ["static"] }
-image = "0.25.5"
-# Inference
-ndarray = "0.16.1"
-ort = { version = "=2.0.0-rc.9", features = ["coreml", "fetch-models"] }
-plsfix = "0.1.7"
+tracing-subscriber = { version = "0.3.19", features = ["env-filter"] }
 lazy_static = "1.5.0"
 imageproc = "0.25.0"
 ab_glyph = "0.2.29"
 uuid = { version = "1.11.0", features = ["v4"] }
-tracing-subscriber = { version = "0.3.19", features = ["env-filter"] }
+itertools = "0.14.0"
+rayon = "1.10.0"
+dirs = "6.0.0"
 serde = { version = "1.0.217", features = ["derive"] }
 serde_json = "1.0.135"
-dirs = "6.0.0"
-rayon = "1.10.0"
-itertools = "0.14.0"
+
+# Inference
+pdfium-render = { version = "0.8.27", features = ["static"] }
+image = "0.25.5"
+ndarray = "0.16.1"
+ort = { version = "=2.0.0-rc.9", features = ["coreml", "fetch-models"] }
+plsfix = "0.1.7"
+
+# CLI
+clap = { version = "4.5.23", features = ["derive", "env"] }
 indicatif = "0.17.9"
+colored = "3.0.0"
 
 [target.'cfg(target_os = "macos")'.dependencies]
 objc2 = { version = "^0.5.2" }
@@ -52,4 +56,5 @@ harness = false
 
 [profile.release]
 strip = "symbols"
+opt-level = 3
 # debug = 1

@@ -84,8 +84,9 @@ Unlike alternatives such as `unstructured` which are slow and Python-based, `fer
   - [ ] Markdown renderer
   - [ ] JSON renderer
 
+- [x] Create CLI ferrules
 - [ ] Add tracing
-- [ ] Create CLI ferrules
+- [ ] `eyre` | `thiserror` for custom errosk
 - [ ] Configurable inference params: ORTProviders/ batch_size, confidence_score, NMS ..
 
 - [ ] OCR: Find good recognition model (onnxtr ??)

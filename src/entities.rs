@@ -1,10 +1,11 @@
 use plsfix::fix_text;
-use std::path::Path;
+use serde::{Deserialize, Serialize};
+use std::path::{Path, PathBuf};
 
-use pdfium_render::prelude::{PdfFontWeight, PdfPageRenderRotation, PdfPageTextChar, PdfRect};
+use pdfium_render::prelude::{PdfFontWeight, PdfPageTextChar, PdfRect};
 
 use crate::layout::model::LayoutBBox;
-#[derive(Debug, Default, Clone)]
+#[derive(Debug, Default, Clone, Deserialize, Serialize)]
 pub struct BBox {
     pub x0: f32,
     pub y0: f32,
@@ -88,7 +89,7 @@ impl BBox {
     }
 }
 
-#[derive(Debug, Default)]
+#[derive(Debug, Default, Deserialize, Serialize)]
 pub struct TextBlock {
     text: String,
 }
@@ -100,7 +101,8 @@ impl TextBlock {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Deserialize, Serialize)]
+#[serde(tag = "block_type")]
 pub enum BlockType {
     Header(TextBlock),
     FootNote(TextBlock),
@@ -128,7 +130,7 @@ impl BlockType {
         )
     }
 }
-#[derive(Debug)]
+#[derive(Debug, Deserialize, Serialize)]
 pub struct Block {
     pub id: usize,
     pub layout_block_id: usize,
@@ -183,20 +185,22 @@ impl Block {
     }
 }
 
-#[derive(Debug)]
+#[derive(Debug, Deserialize, Serialize)]
 pub struct StructuredPage {
     pub id: usize,
     pub width: f32,
     pub height: f32,
-    pub rotation: PdfPageRenderRotation,
+    // pub rotation: PdfPageRenderRotation,
     pub need_ocr: bool,
     pub(crate) blocks: Vec<Block>,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Deserialize, Serialize)]
 pub struct Document<P: AsRef<Path>> {
     pub path: P,
+    pub doc_name: String,
     pub pages: Vec<StructuredPage>,
+    pub debug_path: Option<PathBuf>,
 }
 
 impl<P> Document<P>

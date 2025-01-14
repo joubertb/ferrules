@@ -1,14 +1,8 @@
-use std::{
-    fmt::Write,
-    path::{Path, PathBuf},
-    time::Instant,
-};
+use std::{fmt::Write, path::Path, time::Instant};
 
 use indicatif::{ProgressBar, ProgressState, ProgressStyle};
 use itertools::izip;
-use pdfium_render::prelude::{
-    PdfPage, PdfPageRenderRotation, PdfPageTextChar, PdfRenderConfig, Pdfium,
-};
+use pdfium_render::prelude::{PdfPage, PdfPageTextChar, PdfRenderConfig, Pdfium};
 use uuid::Uuid;
 
 use crate::{
@@ -106,7 +100,7 @@ pub fn parse_page(
         let scale_h = ORTLayoutParser::REQUIRED_HEIGHT as f32 / page.height().value;
         f32::min(scale_h, scale_w)
     };
-    let page_rotation = page.rotation().unwrap_or(PdfPageRenderRotation::None);
+    // let page_rotation = page.rotation().unwrap_or(PdfPageRenderRotation::None);
     let page_image = page
         .render_with_config(&PdfRenderConfig::default().scale_page_by_factor(rescale_factor))
         .map(|bitmap| bitmap.as_image())?;
@@ -145,7 +139,7 @@ pub fn parse_page(
         id: page_idx,
         width: page_bbox.width(),
         height: page_bbox.height(),
-        rotation: page_rotation,
+        // rotation: page_rotation,
         blocks,
         need_ocr,
     };
@@ -225,7 +219,7 @@ pub fn parse_pages(
             y1: page.height().value,
         };
 
-        let page_rotation = page.rotation().unwrap_or(PdfPageRenderRotation::None);
+        // let page_rotation = page.rotation().unwrap_or(PdfPageRenderRotation::None);
         let text_spans = parse_text_spans(page.text()?.chars().iter(), &page_bbox);
         let text_lines = parse_text_lines(text_spans);
 
@@ -260,7 +254,7 @@ pub fn parse_pages(
             id: *page_idx,
             width: page_bbox.width(),
             height: page_bbox.height(),
-            rotation: page_rotation,
+            // rotation: page_rotation,
             blocks,
             need_ocr,
         };
@@ -301,10 +295,10 @@ pub fn parse_document<P: AsRef<Path>>(
         .as_ref()
         .file_name()
         .and_then(|name| name.to_str())
-        .unwrap_or(&Uuid::new_v4().to_string())
-        .to_string();
+        .and_then(|name| name.split('.').next().map(|s| s.to_owned()))
+        .unwrap_or(Uuid::new_v4().to_string());
 
-    let tmp_dir = PathBuf::from("/tmp").join(format!("ferrules-{}", sanitize_doc_name(&doc_name)));
+    let tmp_dir = std::env::temp_dir().join(format!("ferrules-{}", sanitize_doc_name(&doc_name)));
     if debug {
         std::fs::create_dir_all(&tmp_dir)?;
     }
@@ -333,14 +327,15 @@ pub fn parse_document<P: AsRef<Path>>(
         .flatten()
         .collect::<Vec<_>>();
 
-    if debug {
-        println!("Saved debug results in {:?}", tmp_dir.as_os_str());
-    }
-
     let duration = Instant::now().duration_since(start_time).as_millis();
     pb.finish_with_message(format!("Parsed document in {}ms", duration));
 
-    Ok(Document { path, pages })
+    Ok(Document {
+        path,
+        doc_name,
+        pages,
+        debug_path: if debug { Some(tmp_dir) } else { None },
+    })
 }
 
 fn page_needs_ocr(text_boxes: &[&LayoutBBox], text_lines: &[Line]) -> bool {

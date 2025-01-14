@@ -1,4 +1,5 @@
 use clap::Parser;
+use ferrules::{layout::model::ORTLayoutParser, parse::parse_document, save_parsed_document};
 use std::path::PathBuf;
 
 #[derive(Parser, Debug)]
@@ -10,6 +11,16 @@ use std::path::PathBuf;
 struct Args {
     /// Path to the PDF file to be parsed
     file_path: PathBuf,
+
+    /// Specifies the target directory where parsing results will be saved
+    ///
+    /// If not specified, defaults to the current working directory.
+    #[arg(
+        long,
+        env = "FERRULES_OUTPUT_DIR",
+        help = "Specify the directory to store parsing result"
+    )]
+    output_dir: Option<PathBuf>,
 
     /// Path to the layout model. If not specified, a default model will be used.
     #[arg(
@@ -53,8 +64,6 @@ struct Args {
     debug_dir: Option<PathBuf>,
 }
 
-use ferrules::{layout::model::ORTLayoutParser, parse::parse_document};
-
 fn main() {
     let args = Args::parse();
 
@@ -72,8 +81,6 @@ fn main() {
     let layout_model = ORTLayoutParser::new().expect("can't load layout model");
 
     let doc = parse_document(&args.file_path, &layout_model, None, true, args.debug).unwrap();
-    // TODO: Save to output directory
-    if args.debug {
-        println!("{}", doc.render());
-    }
+
+    save_parsed_document(&doc, args.output_dir.as_ref()).unwrap();
 }
