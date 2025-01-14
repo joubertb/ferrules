@@ -261,7 +261,7 @@ pub fn parse_pages(
 
         structured_pages.push(structured_page);
 
-        pb.set_message(format!("item #{}", *page_idx + 1));
+        pb.set_message(format!("Page #{}", *page_idx + 1));
         pb.inc(1u64);
         if debug {
             // TODO: add feature compile debug

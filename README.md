@@ -69,7 +69,7 @@ Unlike alternatives such as `unstructured` which are slow and Python-based, `fer
     - [ ] Add lines to bbox based on distance
     - [ ] Add remaining layout blocks to blocks based on position
 
-- [ ] Transform to HighLevel Document representation:
+- [ ] Document IR merge:
 
   - [ ] Group caption/footer blocks with image blocks/tables using minimum gap
   - [ ] Group listItems into list : Find first and merge subsequent items
@@ -83,6 +83,7 @@ Unlike alternatives such as `unstructured` which are slow and Python-based, `fer
   - [ ] HTML renderer
   - [ ] Markdown renderer
   - [ ] JSON renderer
+    - [ ] Crop images and save in directory if `--save_image` flag
 
 - [x] Create CLI ferrules
 - [ ] Add tracing
