@@ -66,10 +66,10 @@ Unlike alternatives such as `unstructured` which are slow and Python-based, `fer
   - [x] Merge Layout with pdfium lines
     - [x] Rescale / or / downscale line bbox/ layout bbox
     - [x] Merge intersection lines (from pdfium and OCR) with max bbox into blocks
-    - [ ] Add lines to bbox based on distance
+    - [x] Add lines to bbox based on distance
     - [ ] Add remaining layout blocks to blocks based on position
 
-- [ ] Document IR merge:
+- [ ] Document merge:
 
   - [ ] Group caption/footer blocks with image blocks/tables using minimum gap
   - [ ] Group listItems into list : Find first and merge subsequent items
@@ -106,6 +106,7 @@ Unlike alternatives such as `unstructured` which are slow and Python-based, `fer
 
 - [ ] Open document mmap and share range of page between threads
 - [ ] Build pdfium statically for Linux
+- [ ]
 - [ ] Determine page orientation + deskew
 - [ ] Optimize layout model for ANE
 - [ ] ORT inference in fp16/mixed precision

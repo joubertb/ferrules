@@ -509,7 +509,6 @@ mod tests {
         let y_weight = 1.0;
 
         // Standard Case
-        dbg!(&bbox2.center());
         let distance = bbox1.distance(&bbox2, x_weight, y_weight);
         assert_eq!(distance, 18.0); // ((4 - 1)^2 + (4 - 1)^2)
 

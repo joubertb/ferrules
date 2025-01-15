@@ -113,7 +113,6 @@ mod tests {
         let ocr_result = parse_image_ocr(&image, 1f32);
         assert!(ocr_result.is_ok());
 
-        dbg!(&ocr_result);
         println!(
             "OCR took: {}ms",
             Instant::now().duration_since(s).as_millis()

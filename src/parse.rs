@@ -30,6 +30,18 @@ const MIN_LAYOUT_COVERAGE_THRESHOLD: f32 = 0.5;
 /// paired, thus improving the accuracy of OCR-text and layout alignment.
 const MIN_INTERSECTION_LAYOUT: f32 = 0.5;
 
+/// Weights used for calculating distances between bounding boxes in layout analysis
+/// X_WEIGHT is weighted higher (5.0) to prioritize horizontal alignment
+/// Y_WEIGHT is weighted lower (1.0) to be more lenient with vertical spacing
+const LAYOUT_DISTANCE_X_WEIGHT: f32 = 5.0;
+const LAYOUT_DISTANCE_Y_WEIGHT: f32 = 1.0;
+
+/// Maximum allowable distance between a text line and a layout block for assignment.
+/// If the weighted distance (using X_WEIGHT and Y_WEIGHT) between a text line and
+/// the nearest layout block exceeds this threshold, the line will not be assigned to any block.
+/// This helps prevent incorrect assignments of text lines that are too far from layout blocks.
+const MAXIMUM_ASSIGNMENT_DISTANCE: f32 = 20.0;
+
 fn parse_text_spans<'a>(
     chars: impl Iterator<Item = PdfPageTextChar<'a>>,
     page_bbox: &BBox,
@@ -109,6 +121,8 @@ pub fn parse_page(
     let page_layout = layout_model.parse_layout(&page_image, 1f32 / rescale_factor)?;
 
     let text_boxes: Vec<&LayoutBBox> = page_layout.iter().filter(|b| b.is_text_block()).collect();
+    // TODO: add to single parse
+    let _: Vec<&LayoutBBox> = page_layout.iter().filter(|b| !b.is_text_block()).collect();
 
     let need_ocr = page_needs_ocr(&text_boxes, &text_lines);
 
@@ -134,6 +148,8 @@ pub fn parse_page(
     } else {
         merge_lines_layout(&text_boxes, &text_lines, page_idx)?
     };
+
+    // Add remaining blocks
 
     let structured_page = StructuredPage {
         id: page_idx,
@@ -223,9 +239,11 @@ pub fn parse_pages(
         let text_spans = parse_text_spans(page.text()?.chars().iter(), &page_bbox);
         let text_lines = parse_text_lines(text_spans);
 
-        let text_boxes: Vec<&LayoutBBox> =
+        let text_layout_box: Vec<&LayoutBBox> =
             page_layout.iter().filter(|b| b.is_text_block()).collect();
-        let need_ocr = page_needs_ocr(&text_boxes, &text_lines);
+        let visual_layout_box: Vec<&LayoutBBox> =
+            page_layout.iter().filter(|b| !b.is_text_block()).collect();
+        let need_ocr = page_needs_ocr(&text_layout_box, &text_lines);
 
         let ocr_result = if need_ocr {
             if cfg!(target_os = "macos") {
@@ -238,17 +256,19 @@ pub fn parse_pages(
             None
         };
 
-        let blocks = if need_ocr && ocr_result.is_some() {
+        let mut blocks = if need_ocr && ocr_result.is_some() {
             let lines = ocr_result
                 .as_ref()
                 .unwrap()
                 .iter()
                 .map(|ocr_line| ocr_line.to_line())
                 .collect::<Vec<_>>();
-            merge_lines_layout(&text_boxes, &lines, *page_idx)?
+            merge_lines_layout(&text_layout_box, &lines, *page_idx)?
         } else {
-            merge_lines_layout(&text_boxes, &text_lines, *page_idx)?
+            merge_lines_layout(&text_layout_box, &text_lines, *page_idx)?
         };
+
+        merge_visual_block(&mut blocks, &visual_layout_box, *page_idx);
 
         let structured_page = StructuredPage {
             id: *page_idx,
@@ -288,6 +308,7 @@ pub fn parse_document<P: AsRef<Path>>(
     layout_model: &ORTLayoutParser,
     password: Option<&str>,
     flatten_pdf: bool,
+    n_page: Option<usize>,
     debug: bool,
 ) -> anyhow::Result<Document<P>> {
     let start_time = Instant::now();
@@ -307,6 +328,10 @@ pub fn parse_document<P: AsRef<Path>>(
     let mut document = pdfium.load_pdf_from_file(&path, password)?;
 
     let mut pages: Vec<_> = document.pages_mut().iter().enumerate().collect();
+    if let Some(n) = n_page {
+        assert!(n < pages.len());
+        pages.truncate(n);
+    }
     let chunk_size = 32;
 
     let pb = ProgressBar::new(pages.len() as u64);
@@ -369,6 +394,20 @@ fn merge_lines_layout(
 
             a_intersection.partial_cmp(&b_intersection).unwrap()
         });
+        // Get min distance block for the line
+        let min_distance_block = text_boxes.iter().min_by(|a, b| {
+            let a_intersection = a.bbox.distance(
+                &line.bbox,
+                LAYOUT_DISTANCE_X_WEIGHT,
+                LAYOUT_DISTANCE_Y_WEIGHT,
+            );
+            let b_intersection = b.bbox.distance(
+                &line.bbox,
+                LAYOUT_DISTANCE_X_WEIGHT,
+                LAYOUT_DISTANCE_Y_WEIGHT,
+            );
+            a_intersection.partial_cmp(&b_intersection).unwrap()
+        });
         let max_intersection_bbox = max_intersection_bbox.and_then(|b| {
             if b.bbox.intersection(&line.bbox) > MIN_INTERSECTION_LAYOUT {
                 Some(b)
@@ -376,10 +415,26 @@ fn merge_lines_layout(
                 None
             }
         });
-        (line, max_intersection_bbox)
+        // Compare based on distance
+        let matched_block = if max_intersection_bbox.is_none() {
+            min_distance_block.and_then(|b| {
+                if b.bbox.distance(
+                    &line.bbox,
+                    LAYOUT_DISTANCE_X_WEIGHT,
+                    LAYOUT_DISTANCE_Y_WEIGHT,
+                ) < MAXIMUM_ASSIGNMENT_DISTANCE
+                {
+                    Some(b)
+                } else {
+                    None
+                }
+            })
+        } else {
+            max_intersection_bbox
+        };
+        (line, matched_block)
     });
 
-    // TODO: Return the page intersection
     let mut blocks = Vec::new();
     for (line, layout_block) in line_block_iterator {
         match layout_block {
@@ -401,10 +456,66 @@ fn merge_lines_layout(
                 }
             }
             None => {
+                println!(
+                    "Page {page_id}: Line not assigned to block: {:?}",
+                    line.text
+                );
                 continue;
             }
         }
     }
 
     Ok(blocks)
+}
+
+fn merge_visual_block(blocks: &mut Vec<Block>, visual_boxes: &[&LayoutBBox], page_id: usize) {
+    for layout_box in visual_boxes {
+        let closest_block = blocks
+            .iter()
+            .enumerate()
+            .min_by(|(_, a), (_, b)| {
+                let a_intersection = a.bbox.distance(
+                    &layout_box.bbox,
+                    LAYOUT_DISTANCE_X_WEIGHT,
+                    LAYOUT_DISTANCE_Y_WEIGHT,
+                );
+                let b_intersection = b.bbox.distance(
+                    &layout_box.bbox,
+                    LAYOUT_DISTANCE_X_WEIGHT,
+                    LAYOUT_DISTANCE_Y_WEIGHT,
+                );
+                a_intersection.partial_cmp(&b_intersection).unwrap()
+            })
+            .map(|(index, _)| index)
+            .unwrap();
+        match layout_box.label {
+            "Table" => {
+                blocks.insert(
+                    closest_block + 1,
+                    Block {
+                        id: blocks.len() + 1,
+                        layout_block_id: layout_box.id,
+                        kind: crate::entities::BlockType::Table,
+                        elements: vec![],
+                        page_id,
+                        bbox: layout_box.bbox.to_owned(),
+                    },
+                );
+            }
+            "Image" => {
+                blocks.insert(
+                    closest_block + 1,
+                    Block {
+                        id: blocks.len() + 1,
+                        layout_block_id: layout_box.id,
+                        kind: crate::entities::BlockType::Table,
+                        elements: vec![],
+                        page_id,
+                        bbox: layout_box.bbox.to_owned(),
+                    },
+                );
+            }
+            _ => unreachable!(),
+        }
+    }
 }

@@ -12,6 +12,9 @@ struct Args {
     /// Path to the PDF file to be parsed
     file_path: PathBuf,
 
+    #[arg(long, help = "Limit parsing to the N first pages")]
+    n_page: Option<usize>,
+
     /// Specifies the target directory where parsing results will be saved
     ///
     /// If not specified, defaults to the current working directory.
@@ -80,7 +83,15 @@ fn main() {
 
     let layout_model = ORTLayoutParser::new().expect("can't load layout model");
 
-    let doc = parse_document(&args.file_path, &layout_model, None, true, args.debug).unwrap();
+    let doc = parse_document(
+        &args.file_path,
+        &layout_model,
+        None,
+        true,
+        args.n_page,
+        args.debug,
+    )
+    .unwrap();
 
     save_parsed_document(&doc, args.output_dir.as_ref()).unwrap();
 }
