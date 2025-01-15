@@ -107,6 +107,11 @@ impl BBox {
 }
 
 #[derive(Debug, Default, Deserialize, Serialize)]
+pub struct ImageBlock {
+    caption: Option<String>,
+}
+
+#[derive(Debug, Default, Deserialize, Serialize)]
 pub struct TextBlock {
     text: String,
 }
@@ -129,7 +134,7 @@ pub enum BlockType {
     Subtitle(TextBlock),
     ListItem(TextBlock),
     Caption(TextBlock),
-    Image,
+    Image(ImageBlock),
     Table,
 }
 
@@ -169,7 +174,7 @@ impl Block {
             "Title" => BlockType::Title(Default::default()),
             "Section-header" => BlockType::Subtitle(Default::default()),
             "Table" => BlockType::Table,
-            "Picture" => BlockType::Image,
+            "Picture" => BlockType::Image(Default::default()),
             _ => {
                 unreachable!("can't have other type of layout bbox")
             }
@@ -195,7 +200,7 @@ impl Block {
             | BlockType::Caption(text_block) => {
                 text_block.append_line(&line.text);
             }
-            BlockType::Image | BlockType::Table => {
+            BlockType::Image(_) | BlockType::Table => {
                 eprintln!("Can't push line to Image or Table block");
             }
         }

@@ -438,28 +438,28 @@ fn merge_lines_layout(
     let mut blocks = Vec::new();
     for (line, layout_block) in line_block_iterator {
         match layout_block {
-            Some(&layoutb) => {
+            Some(&line_layout_block) => {
                 if blocks.is_empty() {
-                    let mut block = Block::from_layout_block(0, layoutb, page_id);
+                    let mut block = Block::from_layout_block(0, line_layout_block, page_id);
                     block.push_line(line);
                     blocks.push(block);
                 }
 
                 let last_block = blocks.last_mut().unwrap();
 
-                if layoutb.id == last_block.layout_block_id {
+                if line_layout_block.id == last_block.layout_block_id {
                     last_block.push_line(line);
                 } else {
-                    let mut block = Block::from_layout_block(blocks.len() + 1, layoutb, page_id);
+                    let mut block =
+                        Block::from_layout_block(blocks.len() + 1, line_layout_block, page_id);
                     block.push_line(line);
                     blocks.push(block);
                 }
             }
             None => {
-                println!(
-                    "Page {page_id}: Line not assigned to block: {:?}",
-                    line.text
-                );
+                // TODO:
+                // Either matching returned nothing (intersection + distance),layout failed in this section
+                // OR we matched are in a non textual block (image or table). Those will be parsed separatly
                 continue;
             }
         }
@@ -487,7 +487,7 @@ fn merge_visual_block(blocks: &mut Vec<Block>, visual_boxes: &[&LayoutBBox], pag
                 a_intersection.partial_cmp(&b_intersection).unwrap()
             })
             .map(|(index, _)| index)
-            .unwrap();
+            .unwrap_or(blocks.len());
         match layout_box.label {
             "Table" => {
                 blocks.insert(
@@ -502,13 +502,13 @@ fn merge_visual_block(blocks: &mut Vec<Block>, visual_boxes: &[&LayoutBBox], pag
                     },
                 );
             }
-            "Image" => {
+            "Picture" => {
                 blocks.insert(
                     closest_block + 1,
                     Block {
                         id: blocks.len() + 1,
                         layout_block_id: layout_box.id,
-                        kind: crate::entities::BlockType::Table,
+                        kind: crate::entities::BlockType::Image(Default::default()),
                         elements: vec![],
                         page_id,
                         bbox: layout_box.bbox.to_owned(),
