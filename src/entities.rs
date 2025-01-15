@@ -30,6 +30,15 @@ impl BBox {
             y1: page_height - bottom.value,
         }
     }
+
+    #[inline(always)]
+    pub fn center(&self) -> (f32, f32) {
+        (
+            self.x0 + self.width() / 2f32,
+            self.y0 + self.height() / 2f32,
+        )
+    }
+
     #[inline(always)]
     pub fn height(&self) -> f32 {
         self.y1 - self.y0
@@ -70,7 +79,7 @@ impl BBox {
     }
 
     #[inline(always)]
-    pub fn iou(&self, other: &Self) -> f32 {
+    pub(crate) fn iou(&self, other: &Self) -> f32 {
         self.intersection(other) / self.union(other)
     }
 
@@ -82,6 +91,14 @@ impl BBox {
     #[inline(always)]
     fn union(&self, other: &Self) -> f32 {
         other.area() + self.area() - self.intersection(other)
+    }
+
+    #[inline(always)]
+    pub(crate) fn distance(&self, other: &Self, x_weight: f32, y_weight: f32) -> f32 {
+        let point_a = self.center();
+        let point_b = other.center();
+
+        (point_a.0 - point_b.0).powi(2) * x_weight + (point_a.1 - point_b.1).powi(2) * y_weight
     }
 
     fn _rotate(self) -> Self {
@@ -466,5 +483,48 @@ mod tests {
         // Overlapping
         assert_eq!(bbox1.iou(&bbox2), 1.0 / 7.0);
         assert_eq!(bbox1.iou(&bbox6), bbox6.area() / bbox1.area()); // bbox6 is inside bbox1
+    }
+    #[test]
+    fn test_distance() {
+        let bbox1 = BBox {
+            x0: 0.0,
+            y0: 0.0,
+            x1: 2.0,
+            y1: 2.0,
+        };
+        let bbox2 = BBox {
+            x0: 3.0,
+            y0: 3.0,
+            x1: 5.0,
+            y1: 5.0,
+        };
+        let bbox3 = BBox {
+            x0: 0.0,
+            y0: 2.0,
+            x1: 2.0,
+            y1: 4.0,
+        };
+
+        let x_weight = 1.0;
+        let y_weight = 1.0;
+
+        // Standard Case
+        dbg!(&bbox2.center());
+        let distance = bbox1.distance(&bbox2, x_weight, y_weight);
+        assert_eq!(distance, 18.0); // ((4 - 1)^2 + (4 - 1)^2)
+
+        // Boxes with Overlapping Edges
+        let distance = bbox1.distance(&bbox3, x_weight, y_weight);
+        assert_eq!(distance, 4.0); // ((1 - 1)^2 + (3 - 1)^2)
+
+        // // Identical Boxes
+        let distance = bbox1.distance(&bbox1, x_weight, y_weight);
+        assert_eq!(distance, 0.0);
+
+        // // Test with different weights
+        let x_weight = 2.0;
+        let y_weight = 3.0;
+        let distance = bbox1.distance(&bbox2, x_weight, y_weight);
+        assert_eq!(distance, 45.0); // (3-1)^2 * 2 + (4-1)^2 * 3
     }
 }

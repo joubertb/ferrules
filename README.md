@@ -96,7 +96,7 @@ Unlike alternatives such as `unstructured` which are slow and Python-based, `fer
 
   - [x] Export onnx with dynamic batch_size
   - [ ] Run layout on &[DynamicImage]
-  - Explored this onnxruntime on coreml isn't faster for some weird reason
+  - Explored batching on onnxruntime on coreml isn't faster for some weird reason (probably batch dim)
     - [ ] check on nvidia-gpu if batching is better
 
 - [ ] API
@@ -110,6 +110,7 @@ Unlike alternatives such as `unstructured` which are slow and Python-based, `fer
 - [ ] Optimize layout model for ANE
 - [ ] ORT inference in fp16/mixed precision
 - [ ] Move to other yolo versions: yolov11s seems better with less params [yolo-doclaynet](https://github.com/ppaanngggg/yolo-doclaynet)
+- [ ] Explore pool allocators for performance
 
 ## Resources:
 
