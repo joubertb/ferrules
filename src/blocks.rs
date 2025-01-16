@@ -1,7 +1,4 @@
-use crate::{
-    entities::{BBox, Element, ElementType},
-    parse::PageID,
-};
+use crate::entities::{BBox, Element, ElementType, PageID};
 use anyhow::bail;
 use serde::{Deserialize, Serialize};
 

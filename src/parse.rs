@@ -7,7 +7,7 @@ use uuid::Uuid;
 
 use crate::{
     blocks::{Block, BlockType, ImageBlock, List, TextBlock},
-    entities::{BBox, CharSpan, Document, Element, Line, Page, StructuredPage},
+    entities::{BBox, CharSpan, Document, Element, Line, Page, PageID, StructuredPage},
     layout::{
         draw::{draw_layout_bboxes, draw_ocr_bboxes, draw_text_lines},
         model::{LayoutBBox, ORTLayoutParser},
@@ -42,8 +42,6 @@ const LAYOUT_DISTANCE_Y_WEIGHT: f32 = 1.0;
 /// the nearest layout block exceeds this threshold, the line will not be assigned to any block.
 /// This helps prevent incorrect assignments of text lines that are too far from layout blocks.
 const MAXIMUM_ASSIGNMENT_DISTANCE: f32 = 20.0;
-
-pub type PageID = usize;
 
 fn parse_text_spans<'a>(
     chars: impl Iterator<Item = PdfPageTextChar<'a>>,
@@ -668,6 +666,19 @@ mod tests {
         }
     }
 
+    fn create_footnote_element(id: usize, page_id: usize, text: &str, bbox: BBox) -> Element {
+        Element {
+            id,
+            layout_block_id: 0,
+            kind: ElementType::FootNote(EntityTextBlock {
+                text: text.to_string(),
+            }),
+            elements: vec![],
+            page_id,
+            bbox,
+        }
+    }
+
     fn create_image_element(id: usize, page_id: usize, bbox: BBox) -> Element {
         Element {
             id,
@@ -929,20 +940,6 @@ mod tests {
             x1: 2.0,
             y1: 4.1,
         };
-
-        // Helper function to create footnote element
-        fn create_footnote_element(id: usize, page_id: usize, text: &str, bbox: BBox) -> Element {
-            Element {
-                id,
-                layout_block_id: 0,
-                kind: ElementType::FootNote(EntityTextBlock {
-                    text: text.to_string(),
-                }),
-                elements: vec![],
-                page_id,
-                bbox,
-            }
-        }
 
         let mut elements = vec![
             create_image_element(0, 1, image_bbox),

@@ -5,6 +5,9 @@ use std::path::{Path, PathBuf};
 use pdfium_render::prelude::{PdfFontWeight, PdfPageTextChar, PdfRect};
 
 use crate::{blocks::Block, layout::model::LayoutBBox};
+
+pub type PageID = usize;
+
 #[derive(Debug, Default, Clone, Deserialize, Serialize)]
 pub struct BBox {
     pub x0: f32,
@@ -190,7 +193,7 @@ impl Element {
 
 #[derive(Debug, Deserialize, Serialize)]
 pub struct StructuredPage {
-    pub id: usize,
+    pub id: PageID,
     pub width: f32,
     pub height: f32,
     // pub rotation: PdfPageRenderRotation,
@@ -200,7 +203,7 @@ pub struct StructuredPage {
 
 #[derive(Debug, Deserialize, Serialize)]
 pub struct Page {
-    pub id: usize,
+    pub id: PageID,
     pub width: f32,
     pub height: f32,
     // pub rotation: PdfPageRenderRotation,
