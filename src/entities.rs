@@ -106,7 +106,7 @@ impl BBox {
     }
 }
 
-#[derive(Debug, Default, Deserialize, Serialize)]
+#[derive(Debug, Clone, Default, Deserialize, Serialize)]
 pub struct TextBlock {
     pub(crate) text: String,
 }
@@ -118,7 +118,7 @@ impl TextBlock {
     }
 }
 
-#[derive(Debug, Deserialize, Serialize)]
+#[derive(Debug, Deserialize, Serialize, Clone)]
 #[serde(tag = "element_type")]
 pub enum ElementType {
     Header(TextBlock),
@@ -133,7 +133,7 @@ pub enum ElementType {
     Table,
 }
 
-#[derive(Debug, Deserialize, Serialize)]
+#[derive(Debug, Deserialize, Serialize, Clone)]
 pub struct Element {
     pub id: usize,
     pub layout_block_id: usize,
@@ -195,14 +195,24 @@ pub struct StructuredPage {
     pub height: f32,
     // pub rotation: PdfPageRenderRotation,
     pub need_ocr: bool,
-    pub(crate) blocks: Vec<Block>,
+    pub elements: Vec<Element>,
+}
+
+#[derive(Debug, Deserialize, Serialize)]
+pub struct Page {
+    pub id: usize,
+    pub width: f32,
+    pub height: f32,
+    // pub rotation: PdfPageRenderRotation,
+    pub need_ocr: bool,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
 pub struct Document<P: AsRef<Path>> {
     pub path: P,
     pub doc_name: String,
-    pub pages: Vec<StructuredPage>,
+    pub pages: Vec<Page>,
+    pub blocks: Vec<Block>,
     pub debug_path: Option<PathBuf>,
 }
 

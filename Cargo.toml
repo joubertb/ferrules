@@ -58,11 +58,10 @@ name = "ocr_mac"
 harness = false
 
 [profile.release]
-strip = "symbols"
+# strip = "symbols"
 opt-level = 3
+debug = 1
 
 [profile.dist]
 inherits = "release"
 lto = "thin"
-opt-level = 3
-# debug = 1

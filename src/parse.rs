@@ -7,7 +7,7 @@ use uuid::Uuid;
 
 use crate::{
     blocks::{Block, BlockType, ImageBlock, List, TextBlock},
-    entities::{BBox, CharSpan, Document, Element, Line, StructuredPage},
+    entities::{BBox, CharSpan, Document, Element, Line, Page, StructuredPage},
     layout::{
         draw::{draw_layout_bboxes, draw_ocr_bboxes, draw_text_lines},
         model::{LayoutBBox, ORTLayoutParser},
@@ -89,7 +89,7 @@ fn parse_text_lines(spans: Vec<CharSpan>) -> Vec<Line> {
 }
 
 pub fn parse_pages(
-    pages: &mut [(PageID, PdfPage)],
+    pdf_pages: &mut [(PageID, PdfPage)],
     layout_model: &ORTLayoutParser,
     tmp_dir: &Path,
     flatten_pdf: bool,
@@ -97,12 +97,12 @@ pub fn parse_pages(
     pb: &ProgressBar,
 ) -> anyhow::Result<Vec<StructuredPage>> {
     // TODO: deal with document embedded forms?
-    for (_, page) in pages.iter_mut() {
+    for (_, page) in pdf_pages.iter_mut() {
         if flatten_pdf {
             page.flatten()?;
         }
     }
-    let rescale_factors: Vec<f32> = pages
+    let rescale_factors: Vec<f32> = pdf_pages
         .iter()
         .map(|(_, page)| {
             let scale_w = ORTLayoutParser::REQUIRED_WIDTH as f32 / page.width().value;
@@ -111,7 +111,7 @@ pub fn parse_pages(
         })
         .collect();
 
-    let page_images: Result<Vec<_>, _> = pages
+    let page_images: Result<Vec<_>, _> = pdf_pages
         .iter()
         .zip(rescale_factors.iter())
         .map(|((_, page), rescale_factor)| {
@@ -130,10 +130,10 @@ pub fn parse_pages(
 
     let pages_layout = layout_model.parse_layout_batch(&page_images, &downscale_factors)?;
 
-    let mut structured_pages = Vec::with_capacity(pages.len());
+    let mut structured_pages = Vec::with_capacity(pdf_pages.len());
 
     for ((page_idx, page), page_layout, page_image, downscale_factor) in izip![
-        pages.iter(),
+        pdf_pages.iter(),
         &pages_layout,
         &page_images,
         &downscale_factors
@@ -180,13 +180,11 @@ pub fn parse_pages(
 
         merge_visual_block(&mut elements, &visual_layout_box, *page_idx);
 
-        let blocks = merge_elements_into_blocks(&mut elements)?;
-
         let structured_page = StructuredPage {
             id: *page_idx,
             width: page_bbox.width(),
             height: page_bbox.height(),
-            blocks,
+            elements,
             need_ocr,
         };
 
@@ -243,7 +241,9 @@ pub fn parse_document<P: AsRef<Path>>(
         assert!(n < pages.len());
         pages.truncate(n);
     }
-    let chunk_size = 32;
+    let chunk_size = std::thread::available_parallelism()
+        .map(|c| c.get())
+        .unwrap_or(4usize);
 
     let pb = ProgressBar::new(pages.len() as u64);
     pb.set_style(
@@ -257,11 +257,28 @@ pub fn parse_document<P: AsRef<Path>>(
         .progress_chars("#>-"),
     );
 
-    let pages = pages
+    let parsed_pages = pages
         .chunks_mut(chunk_size)
         .flat_map(|chunk| parse_pages(chunk, layout_model, &tmp_dir, flatten_pdf, debug, &pb))
         .flatten()
         .collect::<Vec<_>>();
+
+    let pages = parsed_pages
+        .iter()
+        .map(|sp| Page {
+            id: sp.id,
+            width: sp.width,
+            height: sp.height,
+            need_ocr: sp.need_ocr,
+        })
+        .collect();
+
+    let mut all_elements = parsed_pages
+        .into_iter()
+        .flat_map(|p| p.elements)
+        .collect::<Vec<_>>();
+
+    let blocks = merge_elements_into_blocks(all_elements.as_mut_slice())?;
 
     let duration = Instant::now().duration_since(start_time).as_millis();
     pb.finish_with_message(format!("Parsed document in {}ms", duration));
@@ -270,6 +287,7 @@ pub fn parse_document<P: AsRef<Path>>(
         path,
         doc_name,
         pages,
+        blocks,
         debug_path: if debug { Some(tmp_dir) } else { None },
     })
 }
@@ -402,7 +420,7 @@ fn merge_visual_block(blocks: &mut Vec<Element>, visual_boxes: &[&LayoutBBox], p
         match layout_box.label {
             "Table" => {
                 blocks.insert(
-                    closest_block + 1,
+                    closest_block,
                     Element {
                         id: blocks.len() + 1,
                         layout_block_id: layout_box.id,
@@ -415,7 +433,7 @@ fn merge_visual_block(blocks: &mut Vec<Element>, visual_boxes: &[&LayoutBBox], p
             }
             "Picture" => {
                 blocks.insert(
-                    closest_block + 1,
+                    closest_block,
                     Element {
                         id: blocks.len() + 1,
                         layout_block_id: layout_box.id,
