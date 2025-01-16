@@ -4,7 +4,7 @@ use std::path::{Path, PathBuf};
 
 use pdfium_render::prelude::{PdfFontWeight, PdfPageTextChar, PdfRect};
 
-use crate::layout::model::LayoutBBox;
+use crate::{blocks::Block, layout::model::LayoutBBox};
 #[derive(Debug, Default, Clone, Deserialize, Serialize)]
 pub struct BBox {
     pub x0: f32,
@@ -57,7 +57,7 @@ impl BBox {
         (self.width(), self.height())
     }
     #[inline(always)]
-    fn merge(&mut self, other: &Self) {
+    pub(crate) fn merge(&mut self, other: &Self) {
         self.x0 = self.x0.min(other.x0);
         self.y0 = self.y0.min(other.y0);
         self.x1 = self.x1.max(other.x1);
@@ -107,13 +107,8 @@ impl BBox {
 }
 
 #[derive(Debug, Default, Deserialize, Serialize)]
-pub struct ImageBlock {
-    caption: Option<String>,
-}
-
-#[derive(Debug, Default, Deserialize, Serialize)]
 pub struct TextBlock {
-    text: String,
+    pub(crate) text: String,
 }
 
 impl TextBlock {
@@ -124,8 +119,8 @@ impl TextBlock {
 }
 
 #[derive(Debug, Deserialize, Serialize)]
-#[serde(tag = "block_type")]
-pub enum BlockType {
+#[serde(tag = "element_type")]
+pub enum ElementType {
     Header(TextBlock),
     FootNote(TextBlock),
     Footer(TextBlock),
@@ -134,47 +129,33 @@ pub enum BlockType {
     Subtitle(TextBlock),
     ListItem(TextBlock),
     Caption(TextBlock),
-    Image(ImageBlock),
+    Image,
     Table,
 }
 
-impl BlockType {
-    fn is_text(&self) -> bool {
-        matches!(
-            self,
-            BlockType::Header(_)
-                | BlockType::FootNote(_)
-                | BlockType::Footer(_)
-                | BlockType::Text(_)
-                | BlockType::Title(_)
-                | BlockType::Subtitle(_)
-                | BlockType::ListItem(_)
-        )
-    }
-}
 #[derive(Debug, Deserialize, Serialize)]
-pub struct Block {
+pub struct Element {
     pub id: usize,
     pub layout_block_id: usize,
-    pub kind: BlockType,
-    pub elements: Vec<Block>,
+    pub kind: ElementType,
+    pub elements: Vec<Element>,
     pub page_id: usize,
     pub bbox: BBox,
 }
 
-impl Block {
+impl Element {
     pub fn from_layout_block(id: usize, layout_block: &LayoutBBox, page_id: usize) -> Self {
         let kind = match layout_block.label {
-            "Caption" => BlockType::Caption(Default::default()),
-            "Formula" | "Text" => BlockType::Text(Default::default()),
-            "List-item" => BlockType::ListItem(Default::default()),
-            "Footnote" => BlockType::FootNote(Default::default()),
-            "Page-footer" => BlockType::Footer(Default::default()),
-            "Page-header" => BlockType::Header(Default::default()),
-            "Title" => BlockType::Title(Default::default()),
-            "Section-header" => BlockType::Subtitle(Default::default()),
-            "Table" => BlockType::Table,
-            "Picture" => BlockType::Image(Default::default()),
+            "Caption" => ElementType::Caption(Default::default()),
+            "Formula" | "Text" => ElementType::Text(Default::default()),
+            "List-item" => ElementType::ListItem(Default::default()),
+            "Footnote" => ElementType::FootNote(Default::default()),
+            "Page-footer" => ElementType::Footer(Default::default()),
+            "Page-header" => ElementType::Header(Default::default()),
+            "Title" => ElementType::Title(Default::default()),
+            "Section-header" => ElementType::Subtitle(Default::default()),
+            "Table" => ElementType::Table,
+            "Picture" => ElementType::Image,
             _ => {
                 unreachable!("can't have other type of layout bbox")
             }
@@ -190,18 +171,18 @@ impl Block {
     }
     pub fn push_line(&mut self, line: &Line) {
         match &mut self.kind {
-            BlockType::Header(text_block)
-            | BlockType::FootNote(text_block)
-            | BlockType::Footer(text_block)
-            | BlockType::Text(text_block)
-            | BlockType::Title(text_block)
-            | BlockType::Subtitle(text_block)
-            | BlockType::ListItem(text_block)
-            | BlockType::Caption(text_block) => {
+            ElementType::Header(text_block)
+            | ElementType::FootNote(text_block)
+            | ElementType::Footer(text_block)
+            | ElementType::Text(text_block)
+            | ElementType::Title(text_block)
+            | ElementType::Subtitle(text_block)
+            | ElementType::ListItem(text_block)
+            | ElementType::Caption(text_block) => {
                 text_block.append_line(&line.text);
             }
-            BlockType::Image(_) | BlockType::Table => {
-                eprintln!("Can't push line to Image or Table block");
+            ElementType::Image | ElementType::Table => {
+                eprintln!("Can't push line to Image or Table block. Skipping");
             }
         }
     }
@@ -225,38 +206,7 @@ pub struct Document<P: AsRef<Path>> {
     pub debug_path: Option<PathBuf>,
 }
 
-impl<P> Document<P>
-where
-    P: AsRef<Path>,
-{
-    pub fn render(&self) -> String {
-        let mut output = String::new();
-
-        for block in self
-            .pages
-            .iter()
-            .flat_map(|p| p.blocks.iter())
-            .filter(|b| matches!(b.kind, BlockType::Text(_)) | b.kind.is_text())
-        {
-            match &block.kind {
-                BlockType::Title(text_block) | BlockType::Subtitle(text_block) => {
-                    output.push_str(&format!("# {}\n", text_block.text));
-                }
-                BlockType::Text(text_block) => {
-                    output.push_str(&text_block.text);
-                    output.push('\n');
-                }
-                BlockType::ListItem(text_block) => {
-                    output.push_str(&format!("- {}\n", text_block.text));
-                }
-                _ => {
-                    output.push('\n');
-                }
-            }
-        }
-        output
-    }
-}
+impl<P> Document<P> where P: AsRef<Path> {}
 
 #[derive(Debug)]
 pub struct CharSpan {

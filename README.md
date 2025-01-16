@@ -67,15 +67,16 @@ Unlike alternatives such as `unstructured` which are slow and Python-based, `fer
     - [x] Rescale / or / downscale line bbox/ layout bbox
     - [x] Merge intersection lines (from pdfium and OCR) with max bbox into blocks
     - [x] Add lines to bbox based on distance
-    - [ ] Add remaining layout blocks to blocks based on position
+    - [x] Add remaining layout blocks to blocks based on position
 
 - [ ] Document merge:
 
-  - [ ] Group caption/footer blocks with image blocks/tables using minimum gap
-  - [ ] Group listItems into list : Find first and merge subsequent items
-  - [ ] Merge Blocks into sections
+  - [x] Group listItems into list : Find first and merge subsequent items
+  - [x] Group caption/footer blocks with image blocks
+  - [ ] Group Page header / Page footer
   - [ ] Process SubHeader/Titles using kmeans on line heigths to get the title_level
-  - [ ] Run processors (Text, List, PageHeader )
+  - [ ] Merge captions with tables
+  - [ ] Run post processors (Text, List, PageHeader )
   - [ ] Get PDF Bookmarks (TOC) and reconcile detected titles with TOC
 
 - [ ] Render Document
@@ -104,9 +105,9 @@ Unlike alternatives such as `unstructured` which are slow and Python-based, `fer
   - [ ] Unify Config for env/CLI/API
   - [ ] Dynamic batching of document(pages) to process
 
+- [ ] Change NMS with more robust for nested bbox of the same type
 - [ ] Open document mmap and share range of page between threads
 - [ ] Build pdfium statically for Linux
-- [ ]
 - [ ] Determine page orientation + deskew
 - [ ] Optimize layout model for ANE
 - [ ] ORT inference in fp16/mixed precision

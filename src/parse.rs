@@ -6,7 +6,8 @@ use pdfium_render::prelude::{PdfPage, PdfPageTextChar, PdfRenderConfig, Pdfium};
 use uuid::Uuid;
 
 use crate::{
-    entities::{BBox, Block, CharSpan, Document, Line, StructuredPage},
+    blocks::{Block, BlockType, ImageBlock, List, TextBlock},
+    entities::{BBox, CharSpan, Document, Element, Line, StructuredPage},
     layout::{
         draw::{draw_layout_bboxes, draw_ocr_bboxes, draw_text_lines},
         model::{LayoutBBox, ORTLayoutParser},
@@ -41,6 +42,8 @@ const LAYOUT_DISTANCE_Y_WEIGHT: f32 = 1.0;
 /// the nearest layout block exceeds this threshold, the line will not be assigned to any block.
 /// This helps prevent incorrect assignments of text lines that are too far from layout blocks.
 const MAXIMUM_ASSIGNMENT_DISTANCE: f32 = 20.0;
+
+pub type PageID = usize;
 
 fn parse_text_spans<'a>(
     chars: impl Iterator<Item = PdfPageTextChar<'a>>,
@@ -85,101 +88,8 @@ fn parse_text_lines(spans: Vec<CharSpan>) -> Vec<Line> {
     lines
 }
 
-pub fn parse_page(
-    page_idx: usize,
-    page: &mut PdfPage,
-    layout_model: &ORTLayoutParser,
-    tmp_dir: &Path,
-    flatten_pdf: bool,
-) -> anyhow::Result<StructuredPage> {
-    // TODO: deal with document embedded forms?
-    if flatten_pdf {
-        page.flatten()?;
-    }
-    let page_bbox = BBox {
-        x0: 0f32,
-        y0: 0f32,
-        x1: page.width().value,
-        y1: page.height().value,
-    };
-    let text_spans = parse_text_spans(page.text()?.chars().iter(), &page_bbox);
-    let text_lines = parse_text_lines(text_spans);
-
-    // FIXME: check that rotation is correct ?
-    // Some page return 90 or 270 rotation but are correct...
-    let rescale_factor = {
-        let scale_w = ORTLayoutParser::REQUIRED_WIDTH as f32 / page.width().value;
-        let scale_h = ORTLayoutParser::REQUIRED_HEIGHT as f32 / page.height().value;
-        f32::min(scale_h, scale_w)
-    };
-    // let page_rotation = page.rotation().unwrap_or(PdfPageRenderRotation::None);
-    let page_image = page
-        .render_with_config(&PdfRenderConfig::default().scale_page_by_factor(rescale_factor))
-        .map(|bitmap| bitmap.as_image())?;
-
-    // TODO(@aminediro): Takes ~25ms per page-> batch and send a [PdfPage; BATCH_SIZE]
-    let page_layout = layout_model.parse_layout(&page_image, 1f32 / rescale_factor)?;
-
-    let text_boxes: Vec<&LayoutBBox> = page_layout.iter().filter(|b| b.is_text_block()).collect();
-    // TODO: add to single parse
-    let _: Vec<&LayoutBBox> = page_layout.iter().filter(|b| !b.is_text_block()).collect();
-
-    let need_ocr = page_needs_ocr(&text_boxes, &text_lines);
-
-    let ocr_result = if need_ocr {
-        if cfg!(target_os = "macos") {
-            let ocr_result = parse_image_ocr(&page_image, rescale_factor)?;
-            Some(ocr_result)
-        } else {
-            None
-        }
-    } else {
-        None
-    };
-
-    let blocks = if need_ocr && ocr_result.is_some() {
-        let lines = ocr_result
-            .as_ref()
-            .unwrap()
-            .iter()
-            .map(|ocr_line| ocr_line.to_line())
-            .collect::<Vec<_>>();
-        merge_lines_layout(&text_boxes, &lines, page_idx)?
-    } else {
-        merge_lines_layout(&text_boxes, &text_lines, page_idx)?
-    };
-
-    // Add remaining blocks
-
-    let structured_page = StructuredPage {
-        id: page_idx,
-        width: page_bbox.width(),
-        height: page_bbox.height(),
-        // rotation: page_rotation,
-        blocks,
-        need_ocr,
-    };
-
-    if std::env::var("FERRULES_DEBUG").is_ok() {
-        // TODO: add feature compile debug
-        let output_file = tmp_dir.join(format!("page_{}.png", page_idx));
-        let page_image = page
-            .render_with_config(&PdfRenderConfig::default().scale_page_by_factor(1f32))
-            .map(|bitmap| bitmap.as_image())?;
-        let out_img = draw_text_lines(&text_lines, &page_image)?;
-        let out_img = draw_layout_bboxes(&page_layout, &out_img.into())?;
-        if let Some(ocr_result) = ocr_result {
-            let out_img = draw_ocr_bboxes(&ocr_result, &out_img.into())?;
-            out_img.save(output_file)?;
-        } else {
-            out_img.save(output_file)?;
-        }
-    };
-    Ok(structured_page)
-}
-
 pub fn parse_pages(
-    pages: &mut [(usize, PdfPage)],
+    pages: &mut [(PageID, PdfPage)],
     layout_model: &ORTLayoutParser,
     tmp_dir: &Path,
     flatten_pdf: bool,
@@ -256,7 +166,7 @@ pub fn parse_pages(
             None
         };
 
-        let mut blocks = if need_ocr && ocr_result.is_some() {
+        let mut elements = if need_ocr && ocr_result.is_some() {
             let lines = ocr_result
                 .as_ref()
                 .unwrap()
@@ -268,13 +178,14 @@ pub fn parse_pages(
             merge_lines_layout(&text_layout_box, &text_lines, *page_idx)?
         };
 
-        merge_visual_block(&mut blocks, &visual_layout_box, *page_idx);
+        merge_visual_block(&mut elements, &visual_layout_box, *page_idx);
+
+        let blocks = merge_elements_into_blocks(&mut elements)?;
 
         let structured_page = StructuredPage {
             id: *page_idx,
             width: page_bbox.width(),
             height: page_bbox.height(),
-            // rotation: page_rotation,
             blocks,
             need_ocr,
         };
@@ -385,7 +296,7 @@ fn merge_lines_layout(
     text_boxes: &[&LayoutBBox],
     lines: &[Line],
     page_id: usize,
-) -> anyhow::Result<Vec<Block>> {
+) -> anyhow::Result<Vec<Element>> {
     let line_block_iterator = lines.iter().map(|line| {
         // Get max intersection block for the line
         let max_intersection_bbox = text_boxes.iter().max_by(|a, b| {
@@ -440,7 +351,7 @@ fn merge_lines_layout(
         match layout_block {
             Some(&line_layout_block) => {
                 if blocks.is_empty() {
-                    let mut block = Block::from_layout_block(0, line_layout_block, page_id);
+                    let mut block = Element::from_layout_block(0, line_layout_block, page_id);
                     block.push_line(line);
                     blocks.push(block);
                 }
@@ -451,7 +362,7 @@ fn merge_lines_layout(
                     last_block.push_line(line);
                 } else {
                     let mut block =
-                        Block::from_layout_block(blocks.len() + 1, line_layout_block, page_id);
+                        Element::from_layout_block(blocks.len() + 1, line_layout_block, page_id);
                     block.push_line(line);
                     blocks.push(block);
                 }
@@ -468,7 +379,7 @@ fn merge_lines_layout(
     Ok(blocks)
 }
 
-fn merge_visual_block(blocks: &mut Vec<Block>, visual_boxes: &[&LayoutBBox], page_id: usize) {
+fn merge_visual_block(blocks: &mut Vec<Element>, visual_boxes: &[&LayoutBBox], page_id: PageID) {
     for layout_box in visual_boxes {
         let closest_block = blocks
             .iter()
@@ -492,10 +403,10 @@ fn merge_visual_block(blocks: &mut Vec<Block>, visual_boxes: &[&LayoutBBox], pag
             "Table" => {
                 blocks.insert(
                     closest_block + 1,
-                    Block {
+                    Element {
                         id: blocks.len() + 1,
                         layout_block_id: layout_box.id,
-                        kind: crate::entities::BlockType::Table,
+                        kind: crate::entities::ElementType::Table,
                         elements: vec![],
                         page_id,
                         bbox: layout_box.bbox.to_owned(),
@@ -505,10 +416,10 @@ fn merge_visual_block(blocks: &mut Vec<Block>, visual_boxes: &[&LayoutBBox], pag
             "Picture" => {
                 blocks.insert(
                     closest_block + 1,
-                    Block {
+                    Element {
                         id: blocks.len() + 1,
                         layout_block_id: layout_box.id,
-                        kind: crate::entities::BlockType::Image(Default::default()),
+                        kind: crate::entities::ElementType::Image,
                         elements: vec![],
                         page_id,
                         bbox: layout_box.bbox.to_owned(),
@@ -517,5 +428,517 @@ fn merge_visual_block(blocks: &mut Vec<Block>, visual_boxes: &[&LayoutBBox], pag
             }
             _ => unreachable!(),
         }
+    }
+}
+
+fn merge_elements_into_blocks(elements: &mut [Element]) -> anyhow::Result<Vec<Block>> {
+    let mut element_it = elements.iter_mut().peekable();
+
+    let mut blocks = Vec::new();
+    let mut block_id = 0;
+    while let Some(curr_el) = element_it.next() {
+        match &mut curr_el.kind {
+            crate::entities::ElementType::Text(curr_txt_block) => {
+                let mut text_block = Block {
+                    id: block_id,
+                    kind: crate::blocks::BlockType::TextBlock(TextBlock {
+                        text: curr_txt_block.text.to_owned(),
+                    }),
+                    pages_id: vec![curr_el.page_id],
+                    bbox: curr_el.bbox.to_owned(),
+                };
+                // Check to see if we have another text block that is close
+                while let Some(next_el) = element_it.peek() {
+                    if matches!(next_el.kind, crate::entities::ElementType::Text(_))
+                        && (curr_el.bbox.distance(&next_el.bbox, 1.0, 1.0)
+                            < MAXIMUM_ASSIGNMENT_DISTANCE)
+                    {
+                        text_block.merge(next_el)?;
+                        element_it.next();
+                    } else {
+                        break;
+                    }
+                }
+                block_id += 1;
+                blocks.push(text_block);
+            }
+            crate::entities::ElementType::ListItem(curr_txt_block) => {
+                let mut list_block = Block {
+                    id: block_id,
+                    kind: BlockType::ListBlock(List {
+                        items: vec![curr_txt_block.text.to_owned()],
+                    }),
+                    pages_id: vec![curr_el.page_id],
+                    bbox: curr_el.bbox.to_owned(),
+                };
+
+                while let Some(next_el) = element_it.peek() {
+                    if matches!(next_el.kind, crate::entities::ElementType::ListItem(_)) {
+                        list_block.merge(next_el)?;
+                        element_it.next();
+                    } else {
+                        break;
+                    }
+                }
+                block_id += 1;
+                blocks.push(list_block);
+            }
+            crate::entities::ElementType::FootNote(curr_txt_block)
+            | crate::entities::ElementType::Caption(curr_txt_block) => {
+                // We find the closest image and create and image block
+                loop {
+                    match element_it.peek() {
+                        None => {
+                            // last element -> transform to txt block and break
+                            let text_block = Block {
+                                id: block_id,
+                                kind: crate::blocks::BlockType::TextBlock(TextBlock {
+                                    text: curr_txt_block.text.to_owned(),
+                                }),
+                                pages_id: vec![curr_el.page_id],
+                                bbox: curr_el.bbox.to_owned(),
+                            };
+                            element_it.next();
+                            block_id += 1;
+                            blocks.push(text_block);
+                            break;
+                        }
+                        Some(next_el) => {
+                            match &next_el.kind {
+                                crate::entities::ElementType::FootNote(next_txt_block)
+                                | crate::entities::ElementType::Caption(next_txt_block) => {
+                                    // Merge this with a the caption
+                                    curr_txt_block.append_line(&next_txt_block.text);
+                                    element_it.next();
+                                }
+                                crate::entities::ElementType::Image => {
+                                    curr_el.bbox.merge(&next_el.bbox);
+                                    let img_block = Block {
+                                        id: block_id,
+                                        kind: BlockType::Image(ImageBlock {
+                                            caption: Some(curr_txt_block.text.to_owned()),
+                                        }),
+                                        pages_id: vec![next_el.page_id],
+                                        bbox: curr_el.bbox.clone(),
+                                    };
+                                    block_id += 1;
+                                    blocks.push(img_block);
+                                    element_it.next();
+                                    break;
+                                }
+                                _ => {
+                                    // This caption isn't associated with Image/Table, transform to textblock
+                                    let text_block = Block {
+                                        id: block_id,
+                                        kind: crate::blocks::BlockType::TextBlock(TextBlock {
+                                            text: curr_txt_block.text.to_owned(),
+                                        }),
+                                        pages_id: vec![curr_el.page_id],
+                                        bbox: curr_el.bbox.to_owned(),
+                                    };
+                                    block_id += 1;
+                                    blocks.push(text_block);
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+            crate::entities::ElementType::Image => {
+                match element_it.peek() {
+                    None => {
+                        // last element -> transform to txt block and break
+                        let block = Block {
+                            id: block_id,
+                            kind: crate::blocks::BlockType::Image(ImageBlock { caption: None }),
+                            pages_id: vec![curr_el.page_id],
+                            bbox: curr_el.bbox.to_owned(),
+                        };
+                        element_it.next();
+                        block_id += 1;
+                        blocks.push(block);
+                    }
+                    Some(next_el) => {
+                        match &next_el.kind {
+                            crate::entities::ElementType::FootNote(next_txt_block)
+                            | crate::entities::ElementType::Caption(next_txt_block) => {
+                                // TODO: check if there is a case where there is multiple caption associated with the same image
+                                let block = Block {
+                                    id: block_id,
+                                    kind: crate::blocks::BlockType::Image(ImageBlock {
+                                        caption: Some(next_txt_block.text.to_owned()),
+                                    }),
+                                    pages_id: vec![curr_el.page_id],
+                                    bbox: curr_el.bbox.to_owned(),
+                                };
+                                element_it.next();
+                                block_id += 1;
+                                blocks.push(block);
+                            }
+                            _ => {
+                                let block = Block {
+                                    id: block_id,
+                                    kind: crate::blocks::BlockType::Image(ImageBlock {
+                                        caption: None,
+                                    }),
+                                    pages_id: vec![curr_el.page_id],
+                                    bbox: curr_el.bbox.to_owned(),
+                                };
+                                block_id += 1;
+                                blocks.push(block);
+                            }
+                        }
+                    }
+                }
+            }
+            // These are the same
+            // crate::entities::ElementType::Header(text_block) => todo!(),
+            // crate::entities::ElementType::Footer(text_block) => todo!(),
+            // // Handle those via text font size (using kmeans)
+            // crate::entities::ElementType::Title(text_block)
+            // | crate::entities::ElementType::Subtitle(text_block) => todo!(),
+            _ => {
+                continue;
+            }
+        }
+    }
+    Ok(blocks)
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::entities::{BBox, Element, ElementType, TextBlock as EntityTextBlock};
+
+    fn create_text_element(id: usize, page_id: usize, text: &str, bbox: BBox) -> Element {
+        Element {
+            id,
+            layout_block_id: 0,
+            kind: ElementType::Text(EntityTextBlock {
+                text: text.to_string(),
+            }),
+            elements: vec![],
+            page_id,
+            bbox,
+        }
+    }
+
+    fn create_list_element(id: usize, page_id: usize, text: &str, bbox: BBox) -> Element {
+        Element {
+            id,
+            layout_block_id: 0,
+            kind: ElementType::ListItem(EntityTextBlock {
+                text: text.to_string(),
+            }),
+            elements: vec![],
+            page_id,
+            bbox,
+        }
+    }
+
+    fn create_caption_element(id: usize, page_id: usize, text: &str, bbox: BBox) -> Element {
+        Element {
+            id,
+            layout_block_id: 0,
+            kind: ElementType::Caption(EntityTextBlock {
+                text: text.to_string(),
+            }),
+            elements: vec![],
+            page_id,
+            bbox,
+        }
+    }
+
+    fn create_image_element(id: usize, page_id: usize, bbox: BBox) -> Element {
+        Element {
+            id,
+            layout_block_id: 0,
+            kind: ElementType::Image,
+            elements: vec![],
+            page_id,
+            bbox,
+        }
+    }
+
+    #[test]
+    fn test_merge_adjacent_text_blocks() -> anyhow::Result<()> {
+        let bbox1 = BBox {
+            x0: 0.0,
+            y0: 0.0,
+            x1: 2.0,
+            y1: 2.0,
+        };
+        let bbox2 = BBox {
+            x0: 0.0,
+            y0: 2.1,
+            x1: 2.0,
+            y1: 4.1,
+        };
+
+        let mut elements = vec![
+            create_text_element(0, 1, "First paragraph", bbox1),
+            create_text_element(1, 1, "Second paragraph", bbox2),
+        ];
+
+        let blocks = merge_elements_into_blocks(&mut elements)?;
+
+        assert_eq!(blocks.len(), 1);
+        if let BlockType::TextBlock(text) = &blocks[0].kind {
+            assert!(text.text.contains("First paragraph"));
+            assert!(text.text.contains("Second paragraph"));
+        } else {
+            panic!("Expected TextBlock");
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn test_merge_list_items() -> anyhow::Result<()> {
+        let bbox1 = BBox {
+            x0: 0.0,
+            y0: 0.0,
+            x1: 2.0,
+            y1: 2.0,
+        };
+        let bbox2 = BBox {
+            x0: 0.0,
+            y0: 2.1,
+            x1: 2.0,
+            y1: 4.1,
+        };
+
+        let mut elements = vec![
+            create_list_element(0, 1, "First item", bbox1),
+            create_list_element(1, 1, "Second item", bbox2.clone()),
+            create_text_element(2, 1, "Random text", bbox2),
+        ];
+
+        let blocks = merge_elements_into_blocks(&mut elements)?;
+
+        dbg!(&blocks);
+        assert_eq!(blocks.len(), 2);
+        if let BlockType::ListBlock(list) = &blocks[0].kind {
+            assert_eq!(list.items.len(), 2);
+            assert_eq!(list.items[0], "First item");
+            assert_eq!(list.items[1], "Second item");
+        } else {
+            panic!("Expected ListItem");
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn test_merge_caption_with_image() -> anyhow::Result<()> {
+        let caption_bbox = BBox {
+            x0: 0.0,
+            y0: 0.0,
+            x1: 2.0,
+            y1: 2.0,
+        };
+        let image_bbox = BBox {
+            x0: 0.0,
+            y0: 2.1,
+            x1: 2.0,
+            y1: 4.1,
+        };
+
+        let mut elements = vec![
+            create_caption_element(0, 1, "Image caption", caption_bbox),
+            create_image_element(1, 1, image_bbox),
+        ];
+
+        let blocks = merge_elements_into_blocks(&mut elements)?;
+
+        assert_eq!(blocks.len(), 1);
+        if let BlockType::Image(image) = &blocks[0].kind {
+            assert_eq!(image.caption, Some("Image caption".to_string()));
+        } else {
+            panic!("Expected Image");
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn test_merge_orphan_caption_becomes_text() -> anyhow::Result<()> {
+        let caption_bbox = BBox {
+            x0: 0.0,
+            y0: 0.0,
+            x1: 2.0,
+            y1: 2.0,
+        };
+
+        let mut elements = vec![create_caption_element(0, 1, "Orphan caption", caption_bbox)];
+
+        let blocks = merge_elements_into_blocks(&mut elements)?;
+
+        assert_eq!(blocks.len(), 1);
+        if let BlockType::TextBlock(text) = &blocks[0].kind {
+            assert_eq!(text.text, "Orphan caption");
+        } else {
+            panic!("Expected TextBlock");
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn test_merge_distant_text_blocks_not_merged() -> anyhow::Result<()> {
+        let bbox1 = BBox {
+            x0: 0.0,
+            y0: 0.0,
+            x1: 2.0,
+            y1: 2.0,
+        };
+        let bbox2 = BBox {
+            x0: 0.0,
+            y0: 20.0, // Far away
+            x1: 2.0,
+            y1: 22.0,
+        };
+
+        let mut elements = vec![
+            create_text_element(0, 1, "First paragraph", bbox1),
+            create_text_element(1, 1, "Distant paragraph", bbox2),
+        ];
+
+        let blocks = merge_elements_into_blocks(&mut elements)?;
+
+        assert_eq!(blocks.len(), 2);
+        Ok(())
+    }
+
+    #[test]
+    fn test_merge_image_last_element() -> anyhow::Result<()> {
+        let image_bbox = BBox {
+            x0: 0.0,
+            y0: 0.0,
+            x1: 2.0,
+            y1: 2.0,
+        };
+
+        let mut elements = vec![create_image_element(0, 1, image_bbox)];
+
+        let blocks = merge_elements_into_blocks(&mut elements)?;
+
+        assert_eq!(blocks.len(), 1);
+        if let BlockType::Image(image) = &blocks[0].kind {
+            assert_eq!(image.caption, None);
+        } else {
+            panic!("Expected Image block");
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn test_merge_image_with_following_caption() -> anyhow::Result<()> {
+        let image_bbox = BBox {
+            x0: 0.0,
+            y0: 0.0,
+            x1: 2.0,
+            y1: 2.0,
+        };
+        let caption_bbox = BBox {
+            x0: 0.0,
+            y0: 2.1,
+            x1: 2.0,
+            y1: 4.1,
+        };
+
+        let mut elements = vec![
+            create_image_element(0, 1, image_bbox),
+            create_caption_element(1, 1, "Image Description", caption_bbox),
+        ];
+
+        let blocks = merge_elements_into_blocks(&mut elements)?;
+
+        assert_eq!(blocks.len(), 1);
+        if let BlockType::Image(image) = &blocks[0].kind {
+            assert_eq!(image.caption, Some("Image Description".to_string()));
+        } else {
+            panic!("Expected Image block with caption");
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn test_merge_image_with_following_non_caption() -> anyhow::Result<()> {
+        let image_bbox = BBox {
+            x0: 0.0,
+            y0: 0.0,
+            x1: 2.0,
+            y1: 2.0,
+        };
+        let text_bbox = BBox {
+            x0: 0.0,
+            y0: 2.1,
+            x1: 2.0,
+            y1: 4.1,
+        };
+
+        let mut elements = vec![
+            create_image_element(0, 1, image_bbox),
+            create_text_element(1, 1, "Regular text", text_bbox),
+        ];
+
+        let blocks = merge_elements_into_blocks(&mut elements)?;
+
+        assert_eq!(blocks.len(), 2);
+        if let BlockType::Image(image) = &blocks[0].kind {
+            assert_eq!(image.caption, None);
+        } else {
+            panic!("Expected Image block without caption");
+        }
+
+        if let BlockType::TextBlock(text) = &blocks[1].kind {
+            assert_eq!(text.text, "Regular text");
+        } else {
+            panic!("Expected Text block");
+        }
+        Ok(())
+    }
+
+    #[test]
+    fn test_merge_image_with_footnote() -> anyhow::Result<()> {
+        let image_bbox = BBox {
+            x0: 0.0,
+            y0: 0.0,
+            x1: 2.0,
+            y1: 2.0,
+        };
+        let footnote_bbox = BBox {
+            x0: 0.0,
+            y0: 2.1,
+            x1: 2.0,
+            y1: 4.1,
+        };
+
+        // Helper function to create footnote element
+        fn create_footnote_element(id: usize, page_id: usize, text: &str, bbox: BBox) -> Element {
+            Element {
+                id,
+                layout_block_id: 0,
+                kind: ElementType::FootNote(EntityTextBlock {
+                    text: text.to_string(),
+                }),
+                elements: vec![],
+                page_id,
+                bbox,
+            }
+        }
+
+        let mut elements = vec![
+            create_image_element(0, 1, image_bbox),
+            create_footnote_element(1, 1, "Image Footnote", footnote_bbox),
+        ];
+
+        let blocks = merge_elements_into_blocks(&mut elements)?;
+
+        assert_eq!(blocks.len(), 1);
+        if let BlockType::Image(image) = &blocks[0].kind {
+            assert_eq!(image.caption, Some("Image Footnote".to_string()));
+        } else {
+            panic!("Expected Image block with footnote as caption");
+        }
+        Ok(())
     }
 }

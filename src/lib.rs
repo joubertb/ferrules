@@ -10,6 +10,7 @@ use serde::Serialize;
 
 pub mod parse;
 
+pub mod blocks;
 pub mod entities;
 pub mod layout;
 
