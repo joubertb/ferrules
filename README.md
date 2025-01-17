@@ -1,8 +1,12 @@
-# Ferrules
+<div align="center">
+    <img src="./imgs/ferrules-logo.png" alt="Ferrules-logo" width="31%"  style="border-radius: 50%; padding-bottom: 20px"/>
+</div>
 
 <div align="center">
-    <img src="./ferrules-logo.png" alt="Ferrules-logo" width="31%"  style="border-radius: 50%; padding-bottom: 20px"/>
+<h1> Ferrules:  Modern, fast, document parser written in 🦀 </h1>
 </div>
+
+---
 
 Ferrules is an **opinionated high-performance document parsing library** designed to generate LLM-ready documents efficiently.
 Unlike alternatives such as `unstructured` which are slow and Python-based, `ferrules` is written in Rust and aims to provide a seamless experience with robust deployment across various platforms.
@@ -25,9 +29,14 @@ Unlike alternatives such as `unstructured` which are slow and Python-based, `fer
   - Structures lists and merges blocks into cohesive sections.
   - Detects headings and titles using machine learning for logical document structuring.
 
-- **🖨️ Rendering:**
+- **🖨️ Rendering:** Provides HTML, Markdown, and JSON rendering options for versatile use cases.
 
-  - Provides HTML, Markdown, and JSON rendering options for versatile use cases.
+- **⚡ High Performance & Easy Deployment:**
+
+  - Built with **Rust** for maximum speed and efficiency
+  - Zero-dependency deployment (no Python runtime required !)
+  - Hardware-accelerated ML inference (Apple Neural Engine, GPU)
+  - Designed for production environments with minimal setup
 
 - **⚙️ Advanced Functionalities:**
 
@@ -41,78 +50,90 @@ Unlike alternatives such as `unstructured` which are slow and Python-based, `fer
 
 ## Installation
 
-// tocome
+> ⚠️ **Note:** Currently, Ferrules only works on macOS. Linux support (with NVIDIA GPU acceleration) is coming soon !!!
 
-## Roadmap
+```sh
+curl --proto '=https' --tlsv1.2 -LsSf https://github.com/aminediro/ferrules/releases/download/v0.1.0/ferrules-installer.sh | sh
+```
 
-- [x] Build pdfium statically for Macos
+Once installed, you can verify the installation by running:
 
-- [x] Parse document using pdfium
+```sh
+ferrules --version
+```
 
-  - [x] Parse char
-  - [x] Merge chars into CharSpans
-  - [x] Merge spans into Lines
+## Usage
 
-- [ ] Layout:
+Ferrules can be used via command line with various options to control the parsing process.
 
-  - [x] Find Layout Model and run with ORT
-  - [x] Accelerate Model on ANE/GPU
-  - [x] Extract Page Layout
-    - [x] Preprocess pdfium image
-    - [x] Postprocess tensor -> nms
-    - [x] Verify labels
-  - [x] Determine pages needing OCR (coverage lines/blocks)
-  - [x] OCR -> Use Apple vision on macOS target_os
-  - [x] Merge Layout with pdfium lines
-    - [x] Rescale / or / downscale line bbox/ layout bbox
-    - [x] Merge intersection lines (from pdfium and OCR) with max bbox into blocks
-    - [x] Add lines to bbox based on distance
-    - [x] Add remaining layout blocks to blocks based on position
+### Basic Usage
 
-- [ ] Document merge:
+```sh
+ferrules path/to/your.pdf
+```
 
-  - [x] Group listItems into list : Find first and merge subsequent items
-  - [x] Group caption/footer blocks with image blocks
-  - [ ] Group Page header / Page footer
-  - [ ] Process SubHeader/Titles using kmeans on line heigths to get the title_level
-  - [ ] Merge captions with tables
-  - [ ] Run post processors (Text, List, PageHeader )
-  - [ ] Get PDF Bookmarks (TOC) and reconcile detected titles with TOC
+This will parse the PDF and save the results in the current directory:
 
-- [ ] Render Document
+```sh
+ferrules file.pdf
+[00:00:02] [########################################] Parsed document in 108ms
+✓ Results saved in: ./file-results.json
+```
 
-  - [ ] HTML renderer
-  - [ ] Markdown renderer
-  - [ ] JSON renderer
-    - [ ] Crop images and save in directory if `--save_image` flag
+### Debug Mode
 
-- [x] Create CLI ferrules
-- [ ] Add tracing
-- [ ] `eyre` | `thiserror` for custom errosk
-- [ ] Configurable inference params: ORTProviders/ batch_size, confidence_score, NMS ..
+To get detailed processing information and debug outputs:
 
-- [ ] OCR: Find good recognition model (onnxtr ??)
+```sh
+ferrules path/to/your.pdf --debug
+[00:00:02] [########################################] Parsed document in 257ms
+ℹ Debug output saved in: /var/folders/x1/1fktcq215tl73kk60bllw9rc0000gn/T/ferrules-XXXX
+✓ Results saved in: ./megatrends-results.json
+```
 
-- [ ] Batch inference on pages (TODO -> )
+Debug mode generates visual output showing the parsing results for each page:
 
-  - [x] Export onnx with dynamic batch_size
-  - [ ] Run layout on &[DynamicImage]
-  - Explored batching on onnxruntime on coreml isn't faster for some weird reason (probably batch dim)
-    - [ ] check on nvidia-gpu if batching is better
+<div align="center">
+    <img src="./imgs/deep_seek_page.png" alt="Debug Page 1" width="45%" style="margin-right: 2%"/>
+    <img src="./imgs/wizardoz_page.png" alt="Wizard of Oz, Scanned" width="45%"/>
+</div>
 
-- [ ] API
+Each color represents different elements detected in the document:
 
-  - [ ] Unify Config for env/CLI/API
-  - [ ] Dynamic batching of document(pages) to process
+- 🟦 Layout detection
+- 🟩 OCR parsed lines
+- 🟥 Pdfium parsed lines
 
-- [ ] Change NMS with more robust for nested bbox of the same type
-- [ ] Open document mmap and share range of page between threads
-- [ ] Build pdfium statically for Linux
-- [ ] Determine page orientation + deskew
-- [ ] Optimize layout model for ANE
-- [ ] ORT inference in fp16/mixed precision
-- [ ] Move to other yolo versions: yolov11s seems better with less params [yolo-doclaynet](https://github.com/ppaanngggg/yolo-doclaynet)
-- [ ] Explore pool allocators for performance
+### Available Options
+
+```
+Options:
+      --n-page <N_PAGE>
+          Limit parsing to the N first pages
+      --output-dir <OUTPUT_DIR>
+          Specify the directory to store parsing result [env: FERRULES_OUTPUT_DIR=]
+      --layout-model-path <LAYOUT_MODEL_PATH>
+          Specify the path to the layout model for document parsing [env: FERRULES_LAYOUT_MODEL_PATH=]
+      --coreml
+          Enable or disable the use of CoreML for layout inference
+      --cuda
+          Enable or disable the use of CUDA for layout inference
+      --debug
+          Activate debug mode for detailed processing information [env: FERRULES_DEBUG=]
+      --debug-dir <DEBUG_DIR>
+          Specify the directory to store debug output files [env: FERRULES_DEBUG_PATH=]
+  -h, --help
+          Print help (see more with '--help')
+  -V, --version
+          Print version
+```
+
+You can also configure some options through environment variables:
+
+- `FERRULES_OUTPUT_DIR`: Set the output directory
+- `FERRULES_LAYOUT_MODEL_PATH`: Set the layout model path
+- `FERRULES_DEBUG`: Enable debug mode
+- `FERRULES_DEBUG_PATH`: Set the debug output directory
 
 ## Resources:
 

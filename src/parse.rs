@@ -178,6 +178,9 @@ pub fn parse_pages(
 
         merge_visual_block(&mut elements, &visual_layout_box, *page_idx);
 
+        // Move to VecDeque<Element> to do pushfront
+        // move_header_front(&mut elements);
+
         let structured_page = StructuredPage {
             id: *page_idx,
             width: page_bbox.width(),
@@ -209,6 +212,17 @@ pub fn parse_pages(
 
     Ok(structured_pages)
 }
+
+// fn move_header_front(elements: &[Element]) {
+//     for el in elements {
+//         match el.kind {
+//             crate::entities::ElementType::Header(text_block) => {
+//                 elements.mo
+//             }
+//         }
+//     }
+//     todo!()
+// }
 
 pub fn parse_document<P: AsRef<Path>>(
     path: P,
@@ -314,6 +328,9 @@ fn merge_lines_layout(
     page_id: usize,
 ) -> anyhow::Result<Vec<Element>> {
     let line_block_iterator = lines.iter().map(|line| {
+        // TODO: the max here is sometimes very far away from the line.
+        // ex: megatrends.pdf, header is categorized as text-block but the intersection  happens
+        //
         // Get max intersection block for the line
         let max_intersection_bbox = text_boxes.iter().max_by(|a, b| {
             let a_intersection = a.bbox.intersection(&line.bbox);
@@ -336,7 +353,7 @@ fn merge_lines_layout(
             a_intersection.partial_cmp(&b_intersection).unwrap()
         });
         let max_intersection_bbox = max_intersection_bbox.and_then(|b| {
-            if b.bbox.intersection(&line.bbox) > MIN_INTERSECTION_LAYOUT {
+            if line.bbox.intersection(&b.bbox) / line.bbox.area() > MIN_INTERSECTION_LAYOUT {
                 Some(b)
             } else {
                 None
@@ -395,9 +412,9 @@ fn merge_lines_layout(
     Ok(blocks)
 }
 
-fn merge_visual_block(blocks: &mut Vec<Element>, visual_boxes: &[&LayoutBBox], page_id: PageID) {
+fn merge_visual_block(elements: &mut Vec<Element>, visual_boxes: &[&LayoutBBox], page_id: PageID) {
     for layout_box in visual_boxes {
-        let closest_block = blocks
+        let closest_block = elements
             .iter()
             .enumerate()
             .min_by(|(_, a), (_, b)| {
@@ -414,13 +431,13 @@ fn merge_visual_block(blocks: &mut Vec<Element>, visual_boxes: &[&LayoutBBox], p
                 a_intersection.partial_cmp(&b_intersection).unwrap()
             })
             .map(|(index, _)| index)
-            .unwrap_or(blocks.len());
+            .unwrap_or(elements.len());
         match layout_box.label {
             "Table" => {
-                blocks.insert(
+                elements.insert(
                     closest_block,
                     Element {
-                        id: blocks.len() + 1,
+                        id: elements.len() + 1,
                         layout_block_id: layout_box.id,
                         kind: crate::entities::ElementType::Table,
                         elements: vec![],
@@ -430,10 +447,10 @@ fn merge_visual_block(blocks: &mut Vec<Element>, visual_boxes: &[&LayoutBBox], p
                 );
             }
             "Picture" => {
-                blocks.insert(
+                elements.insert(
                     closest_block,
                     Element {
-                        id: blocks.len() + 1,
+                        id: elements.len() + 1,
                         layout_block_id: layout_box.id,
                         kind: crate::entities::ElementType::Image,
                         elements: vec![],
@@ -455,7 +472,7 @@ fn merge_elements_into_blocks(elements: &mut [Element]) -> anyhow::Result<Vec<Bl
     while let Some(curr_el) = element_it.next() {
         match &mut curr_el.kind {
             crate::entities::ElementType::Text(curr_txt_block) => {
-                let mut text_block = Block {
+                let text_block = Block {
                     id: block_id,
                     kind: crate::blocks::BlockType::TextBlock(TextBlock {
                         text: curr_txt_block.text.to_owned(),
@@ -463,18 +480,19 @@ fn merge_elements_into_blocks(elements: &mut [Element]) -> anyhow::Result<Vec<Bl
                     pages_id: vec![curr_el.page_id],
                     bbox: curr_el.bbox.to_owned(),
                 };
+                // TODO : Change this to use some minimum gap
                 // Check to see if we have another text block that is close
-                while let Some(next_el) = element_it.peek() {
-                    if matches!(next_el.kind, crate::entities::ElementType::Text(_))
-                        && (curr_el.bbox.distance(&next_el.bbox, 1.0, 1.0)
-                            < MAXIMUM_ASSIGNMENT_DISTANCE)
-                    {
-                        text_block.merge(next_el)?;
-                        element_it.next();
-                    } else {
-                        break;
-                    }
-                }
+                // while let Some(next_el) = element_it.peek() {
+                //     if matches!(next_el.kind, crate::entities::ElementType::Text(_))
+                //         && (curr_el.bbox.distance(&next_el.bbox, 1.0, 1.0)
+                //             < MAXIMUM_ASSIGNMENT_DISTANCE)
+                //     {
+                //         text_block.merge(next_el)?;
+                //         element_it.next();
+                //     } else {
+                //         break;
+                //     }
+                // }
                 block_id += 1;
                 blocks.push(text_block);
             }
@@ -489,6 +507,7 @@ fn merge_elements_into_blocks(elements: &mut [Element]) -> anyhow::Result<Vec<Bl
                 };
 
                 while let Some(next_el) = element_it.peek() {
+                    // TODO: add constraint on gap between bounding boxes on all dimensions (l,r,b,t)
                     if matches!(next_el.kind, crate::entities::ElementType::ListItem(_)) {
                         list_block.merge(next_el)?;
                         element_it.next();
@@ -609,8 +628,48 @@ fn merge_elements_into_blocks(elements: &mut [Element]) -> anyhow::Result<Vec<Bl
                 }
             }
             // These are the same
-            // crate::entities::ElementType::Header(text_block) => todo!(),
-            // crate::entities::ElementType::Footer(text_block) => todo!(),
+            crate::entities::ElementType::Header(text_block) => {
+                let mut header_block = Block {
+                    id: block_id,
+                    kind: BlockType::Header(TextBlock {
+                        text: text_block.text.to_owned(),
+                    }),
+                    pages_id: vec![curr_el.page_id],
+                    bbox: curr_el.bbox.to_owned(),
+                };
+
+                while let Some(next_el) = element_it.peek() {
+                    if matches!(next_el.kind, crate::entities::ElementType::Header(_)) {
+                        header_block.merge(next_el)?;
+                        element_it.next();
+                    } else {
+                        break;
+                    }
+                }
+                block_id += 1;
+                blocks.push(header_block);
+            }
+            crate::entities::ElementType::Footer(text_block) => {
+                let mut footer_block = Block {
+                    id: block_id,
+                    kind: BlockType::Footer(TextBlock {
+                        text: text_block.text.to_owned(),
+                    }),
+                    pages_id: vec![curr_el.page_id],
+                    bbox: curr_el.bbox.to_owned(),
+                };
+
+                while let Some(next_el) = element_it.peek() {
+                    if matches!(next_el.kind, crate::entities::ElementType::Header(_)) {
+                        footer_block.merge(next_el)?;
+                        element_it.next();
+                    } else {
+                        break;
+                    }
+                }
+                block_id += 1;
+                blocks.push(footer_block);
+            }
             // // Handle those via text font size (using kmeans)
             // crate::entities::ElementType::Title(text_block)
             // | crate::entities::ElementType::Subtitle(text_block) => todo!(),
