@@ -107,8 +107,8 @@ Each color represents different elements detected in the document:
 
 ```
 Options:
-      --n-page <N_PAGE>
-          Limit parsing to the N first pages
+      --page-range <PAGE_RANGE>
+          Specify pages to parse (e.g., '1-5' or '1' for single page)
       --output-dir <OUTPUT_DIR>
           Specify the directory to store parsing result [env: FERRULES_OUTPUT_DIR=]
       --layout-model-path <LAYOUT_MODEL_PATH>
