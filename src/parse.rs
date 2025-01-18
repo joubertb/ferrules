@@ -1,4 +1,4 @@
-use std::{fmt::Write, path::Path, time::Instant};
+use std::{fmt::Write, ops::Range, path::Path, time::Instant};
 
 use indicatif::{ProgressBar, ProgressState, ProgressStyle};
 use itertools::izip;
@@ -7,9 +7,12 @@ use uuid::Uuid;
 
 use crate::{
     blocks::{Block, BlockType, ImageBlock, List, TextBlock},
-    entities::{BBox, CharSpan, Document, Element, Line, Page, PageID, StructuredPage},
+    entities::{
+        BBox, CharSpan, Document, Element, ElementText, ElementType, Line, Page, PageID,
+        StructuredPage,
+    },
     layout::{
-        draw::{draw_layout_bboxes, draw_ocr_bboxes, draw_text_lines},
+        draw::{draw_blocks, draw_layout_bboxes, draw_ocr_bboxes, draw_text_lines},
         model::{LayoutBBox, ORTLayoutParser},
     },
     sanitize_doc_name,
@@ -149,8 +152,6 @@ pub fn parse_pages(
 
         let text_layout_box: Vec<&LayoutBBox> =
             page_layout.iter().filter(|b| b.is_text_block()).collect();
-        let visual_layout_box: Vec<&LayoutBBox> =
-            page_layout.iter().filter(|b| !b.is_text_block()).collect();
         let need_ocr = page_needs_ocr(&text_layout_box, &text_lines);
 
         let ocr_result = if need_ocr {
@@ -171,15 +172,48 @@ pub fn parse_pages(
                 .iter()
                 .map(|ocr_line| ocr_line.to_line())
                 .collect::<Vec<_>>();
-            merge_lines_layout(&text_layout_box, &lines, *page_idx)?
+            merge_lines_layout(page_layout, &lines, *page_idx)?
         } else {
-            merge_lines_layout(&text_layout_box, &text_lines, *page_idx)?
+            merge_lines_layout(page_layout, &text_lines, *page_idx)?
         };
 
-        merge_visual_block(&mut elements, &visual_layout_box, *page_idx);
+        let merge_layout_blocks_ids = elements
+            .iter()
+            .map(|e| e.layout_block_id)
+            .collect::<Vec<_>>();
+        let unmerged_layout_boxes: Vec<&LayoutBBox> = page_layout
+            .iter()
+            .filter(|&b| merge_layout_blocks_ids.contains(&b.id))
+            .collect();
+
+        merge_remaining(&mut elements, &unmerged_layout_boxes, *page_idx);
 
         // Move to VecDeque<Element> to do pushfront
         // move_header_front(&mut elements);
+
+        if debug {
+            // TODO: add feature compile debug
+            let output_file = tmp_dir.join(format!("page_{}.png", page_idx));
+            let final_output_file = tmp_dir.join(format!("page_blocks_{}.png", page_idx));
+            let page_image = page
+                .render_with_config(&PdfRenderConfig::default().scale_page_by_factor(1f32))
+                .map(|bitmap| bitmap.as_image())?;
+            let out_img = draw_text_lines(&text_lines, &page_image)?;
+            let out_img = draw_layout_bboxes(page_layout, &out_img.into())?;
+            // Draw the final prediction -
+            let blocks = merge_elements_into_blocks(&mut elements.clone())?;
+
+            let final_img = draw_blocks(&blocks, &page_image)?;
+
+            if let Some(ocr_result) = ocr_result {
+                let out_img = draw_ocr_bboxes(&ocr_result, &out_img.into())?;
+                out_img.save(output_file)?;
+            } else {
+                out_img.save(output_file)?;
+            }
+
+            final_img.save(final_output_file)?;
+        };
 
         let structured_page = StructuredPage {
             id: *page_idx,
@@ -193,21 +227,6 @@ pub fn parse_pages(
 
         pb.set_message(format!("Page #{}", *page_idx + 1));
         pb.inc(1u64);
-        if debug {
-            // TODO: add feature compile debug
-            let output_file = tmp_dir.join(format!("page_{}.png", page_idx));
-            let page_image = page
-                .render_with_config(&PdfRenderConfig::default().scale_page_by_factor(1f32))
-                .map(|bitmap| bitmap.as_image())?;
-            let out_img = draw_text_lines(&text_lines, &page_image)?;
-            let out_img = draw_layout_bboxes(page_layout, &out_img.into())?;
-            if let Some(ocr_result) = ocr_result {
-                let out_img = draw_ocr_bboxes(&ocr_result, &out_img.into())?;
-                out_img.save(output_file)?;
-            } else {
-                out_img.save(output_file)?;
-            }
-        };
     }
 
     Ok(structured_pages)
@@ -216,7 +235,7 @@ pub fn parse_pages(
 // fn move_header_front(elements: &[Element]) {
 //     for el in elements {
 //         match el.kind {
-//             crate::entities::ElementType::Header(text_block) => {
+//             ElementType::Header(text_block) => {
 //                 elements.mo
 //             }
 //         }
@@ -229,7 +248,7 @@ pub fn parse_document<P: AsRef<Path>>(
     layout_model: &ORTLayoutParser,
     password: Option<&str>,
     flatten_pdf: bool,
-    n_page: Option<usize>,
+    page_range: Option<Range<usize>>,
     debug: bool,
 ) -> anyhow::Result<Document<P>> {
     let start_time = Instant::now();
@@ -249,10 +268,20 @@ pub fn parse_document<P: AsRef<Path>>(
     let mut document = pdfium.load_pdf_from_file(&path, password)?;
 
     let mut pages: Vec<_> = document.pages_mut().iter().enumerate().collect();
-    if let Some(n) = n_page {
-        assert!(n < pages.len());
-        pages.truncate(n);
-    }
+
+    let mut pages = if let Some(range) = page_range {
+        if range.end > pages.len() {
+            anyhow::bail!(
+                "Page range end ({}) exceeds document length ({})",
+                range.end,
+                pages.len()
+            );
+        }
+        pages.drain(range).collect()
+    } else {
+        pages
+    };
+
     let chunk_size = std::thread::available_parallelism()
         .map(|c| c.get())
         .unwrap_or(4usize);
@@ -323,7 +352,7 @@ fn page_needs_ocr(text_boxes: &[&LayoutBBox], text_lines: &[Line]) -> bool {
 /// of each line with the layout bounding boxes. The function prioritizes maintaining
 /// the order of the lines, rather than the layout blocks.
 fn merge_lines_layout(
-    text_boxes: &[&LayoutBBox],
+    layout_boxes: &[LayoutBBox],
     lines: &[Line],
     page_id: usize,
 ) -> anyhow::Result<Vec<Element>> {
@@ -332,14 +361,14 @@ fn merge_lines_layout(
         // ex: megatrends.pdf, header is categorized as text-block but the intersection  happens
         //
         // Get max intersection block for the line
-        let max_intersection_bbox = text_boxes.iter().max_by(|a, b| {
+        let max_intersection_bbox = layout_boxes.iter().max_by(|a, b| {
             let a_intersection = a.bbox.intersection(&line.bbox);
             let b_intersection = b.bbox.intersection(&line.bbox);
 
             a_intersection.partial_cmp(&b_intersection).unwrap()
         });
         // Get min distance block for the line
-        let min_distance_block = text_boxes.iter().min_by(|a, b| {
+        let min_distance_block = layout_boxes.iter().min_by(|a, b| {
             let a_intersection = a.bbox.distance(
                 &line.bbox,
                 LAYOUT_DISTANCE_X_WEIGHT,
@@ -379,40 +408,50 @@ fn merge_lines_layout(
         (line, matched_block)
     });
 
-    let mut blocks = Vec::new();
+    let mut elements = Vec::new();
     for (line, layout_block) in line_block_iterator {
-        match layout_block {
+        match &layout_block.as_ref() {
             Some(&line_layout_block) => {
-                if blocks.is_empty() {
-                    let mut block = Element::from_layout_block(0, line_layout_block, page_id);
-                    block.push_line(line);
-                    blocks.push(block);
+                if elements.is_empty() {
+                    let mut el = Element::from_layout_block(0, line_layout_block, page_id);
+                    el.push_line(line);
+                    elements.push(el);
                 }
 
-                let last_block = blocks.last_mut().unwrap();
+                let last_el = elements.last_mut().unwrap();
 
-                if line_layout_block.id == last_block.layout_block_id {
-                    last_block.push_line(line);
+                if line_layout_block.id == last_el.layout_block_id {
+                    last_el.push_line(line);
                 } else {
-                    let mut block =
-                        Element::from_layout_block(blocks.len() + 1, line_layout_block, page_id);
-                    block.push_line(line);
-                    blocks.push(block);
+                    let mut element =
+                        Element::from_layout_block(elements.len() + 1, line_layout_block, page_id);
+                    element.push_line(line);
+                    elements.push(element);
                 }
             }
+            // Line is detected but isn't assignable to some layout element
             None => {
+                let el = Element {
+                    id: 0,
+                    layout_block_id: 0,
+                    text_block: ElementText {
+                        text: line.text.to_owned(),
+                    },
+                    kind: ElementType::Text,
+                    page_id,
+                    bbox: line.bbox.clone(),
+                };
+                elements.push(el);
                 // TODO:
-                // Either matching returned nothing (intersection + distance),layout failed in this section
-                // OR we matched are in a non textual block (image or table). Those will be parsed separatly
-                continue;
+                // Check distance between line and the last element
             }
         }
     }
 
-    Ok(blocks)
+    Ok(elements)
 }
 
-fn merge_visual_block(elements: &mut Vec<Element>, visual_boxes: &[&LayoutBBox], page_id: PageID) {
+fn merge_remaining(elements: &mut Vec<Element>, visual_boxes: &[&LayoutBBox], page_id: PageID) {
     for layout_box in visual_boxes {
         let closest_block = elements
             .iter()
@@ -432,35 +471,11 @@ fn merge_visual_block(elements: &mut Vec<Element>, visual_boxes: &[&LayoutBBox],
             })
             .map(|(index, _)| index)
             .unwrap_or(elements.len());
-        match layout_box.label {
-            "Table" => {
-                elements.insert(
-                    closest_block,
-                    Element {
-                        id: elements.len() + 1,
-                        layout_block_id: layout_box.id,
-                        kind: crate::entities::ElementType::Table,
-                        elements: vec![],
-                        page_id,
-                        bbox: layout_box.bbox.to_owned(),
-                    },
-                );
-            }
-            "Picture" => {
-                elements.insert(
-                    closest_block,
-                    Element {
-                        id: elements.len() + 1,
-                        layout_block_id: layout_box.id,
-                        kind: crate::entities::ElementType::Image,
-                        elements: vec![],
-                        page_id,
-                        bbox: layout_box.bbox.to_owned(),
-                    },
-                );
-            }
-            _ => unreachable!(),
-        }
+
+        elements.insert(
+            closest_block,
+            Element::from_layout_block(elements.len(), layout_box, page_id),
+        );
     }
 }
 
@@ -471,11 +486,11 @@ fn merge_elements_into_blocks(elements: &mut [Element]) -> anyhow::Result<Vec<Bl
     let mut block_id = 0;
     while let Some(curr_el) = element_it.next() {
         match &mut curr_el.kind {
-            crate::entities::ElementType::Text(curr_txt_block) => {
+            crate::entities::ElementType::Text => {
                 let text_block = Block {
                     id: block_id,
                     kind: crate::blocks::BlockType::TextBlock(TextBlock {
-                        text: curr_txt_block.text.to_owned(),
+                        text: curr_el.text_block.text.to_owned(),
                     }),
                     pages_id: vec![curr_el.page_id],
                     bbox: curr_el.bbox.to_owned(),
@@ -496,11 +511,11 @@ fn merge_elements_into_blocks(elements: &mut [Element]) -> anyhow::Result<Vec<Bl
                 block_id += 1;
                 blocks.push(text_block);
             }
-            crate::entities::ElementType::ListItem(curr_txt_block) => {
+            crate::entities::ElementType::ListItem => {
                 let mut list_block = Block {
                     id: block_id,
                     kind: BlockType::ListBlock(List {
-                        items: vec![curr_txt_block.text.to_owned()],
+                        items: vec![curr_el.text_block.text.to_owned()],
                     }),
                     pages_id: vec![curr_el.page_id],
                     bbox: curr_el.bbox.to_owned(),
@@ -508,7 +523,7 @@ fn merge_elements_into_blocks(elements: &mut [Element]) -> anyhow::Result<Vec<Bl
 
                 while let Some(next_el) = element_it.peek() {
                     // TODO: add constraint on gap between bounding boxes on all dimensions (l,r,b,t)
-                    if matches!(next_el.kind, crate::entities::ElementType::ListItem(_)) {
+                    if matches!(next_el.kind, crate::entities::ElementType::ListItem) {
                         list_block.merge(next_el)?;
                         element_it.next();
                     } else {
@@ -518,8 +533,7 @@ fn merge_elements_into_blocks(elements: &mut [Element]) -> anyhow::Result<Vec<Bl
                 block_id += 1;
                 blocks.push(list_block);
             }
-            crate::entities::ElementType::FootNote(curr_txt_block)
-            | crate::entities::ElementType::Caption(curr_txt_block) => {
+            ElementType::FootNote | ElementType::Caption => {
                 // We find the closest image and create and image block
                 loop {
                     match element_it.peek() {
@@ -528,7 +542,7 @@ fn merge_elements_into_blocks(elements: &mut [Element]) -> anyhow::Result<Vec<Bl
                             let text_block = Block {
                                 id: block_id,
                                 kind: crate::blocks::BlockType::TextBlock(TextBlock {
-                                    text: curr_txt_block.text.to_owned(),
+                                    text: curr_el.text_block.text.to_owned(),
                                 }),
                                 pages_id: vec![curr_el.page_id],
                                 bbox: curr_el.bbox.to_owned(),
@@ -540,10 +554,10 @@ fn merge_elements_into_blocks(elements: &mut [Element]) -> anyhow::Result<Vec<Bl
                         }
                         Some(next_el) => {
                             match &next_el.kind {
-                                crate::entities::ElementType::FootNote(next_txt_block)
-                                | crate::entities::ElementType::Caption(next_txt_block) => {
+                                crate::entities::ElementType::FootNote
+                                | crate::entities::ElementType::Caption => {
                                     // Merge this with a the caption
-                                    curr_txt_block.append_line(&next_txt_block.text);
+                                    curr_el.text_block.append_line(&next_el.text_block.text);
                                     element_it.next();
                                 }
                                 crate::entities::ElementType::Image => {
@@ -551,7 +565,7 @@ fn merge_elements_into_blocks(elements: &mut [Element]) -> anyhow::Result<Vec<Bl
                                     let img_block = Block {
                                         id: block_id,
                                         kind: BlockType::Image(ImageBlock {
-                                            caption: Some(curr_txt_block.text.to_owned()),
+                                            caption: Some(curr_el.text_block.text.to_owned()),
                                         }),
                                         pages_id: vec![next_el.page_id],
                                         bbox: curr_el.bbox.clone(),
@@ -566,7 +580,7 @@ fn merge_elements_into_blocks(elements: &mut [Element]) -> anyhow::Result<Vec<Bl
                                     let text_block = Block {
                                         id: block_id,
                                         kind: crate::blocks::BlockType::TextBlock(TextBlock {
-                                            text: curr_txt_block.text.to_owned(),
+                                            text: curr_el.text_block.text.to_owned(),
                                         }),
                                         pages_id: vec![curr_el.page_id],
                                         bbox: curr_el.bbox.to_owned(),
@@ -596,13 +610,14 @@ fn merge_elements_into_blocks(elements: &mut [Element]) -> anyhow::Result<Vec<Bl
                     }
                     Some(next_el) => {
                         match &next_el.kind {
-                            crate::entities::ElementType::FootNote(next_txt_block)
-                            | crate::entities::ElementType::Caption(next_txt_block) => {
+                            crate::entities::ElementType::FootNote
+                            | crate::entities::ElementType::Caption => {
                                 // TODO: check if there is a case where there is multiple caption associated with the same image
+                                curr_el.bbox.merge(&next_el.bbox);
                                 let block = Block {
                                     id: block_id,
                                     kind: crate::blocks::BlockType::Image(ImageBlock {
-                                        caption: Some(next_txt_block.text.to_owned()),
+                                        caption: Some(next_el.text_block.text.to_owned()),
                                     }),
                                     pages_id: vec![curr_el.page_id],
                                     bbox: curr_el.bbox.to_owned(),
@@ -627,19 +642,18 @@ fn merge_elements_into_blocks(elements: &mut [Element]) -> anyhow::Result<Vec<Bl
                     }
                 }
             }
-            // These are the same
-            crate::entities::ElementType::Header(text_block) => {
+            ElementType::Header => {
                 let mut header_block = Block {
                     id: block_id,
                     kind: BlockType::Header(TextBlock {
-                        text: text_block.text.to_owned(),
+                        text: curr_el.text_block.text.to_owned(),
                     }),
                     pages_id: vec![curr_el.page_id],
                     bbox: curr_el.bbox.to_owned(),
                 };
 
                 while let Some(next_el) = element_it.peek() {
-                    if matches!(next_el.kind, crate::entities::ElementType::Header(_)) {
+                    if matches!(next_el.kind, crate::entities::ElementType::Header) {
                         header_block.merge(next_el)?;
                         element_it.next();
                     } else {
@@ -649,18 +663,18 @@ fn merge_elements_into_blocks(elements: &mut [Element]) -> anyhow::Result<Vec<Bl
                 block_id += 1;
                 blocks.push(header_block);
             }
-            crate::entities::ElementType::Footer(text_block) => {
+            ElementType::Footer => {
                 let mut footer_block = Block {
                     id: block_id,
                     kind: BlockType::Footer(TextBlock {
-                        text: text_block.text.to_owned(),
+                        text: curr_el.text_block.text.to_owned(),
                     }),
                     pages_id: vec![curr_el.page_id],
                     bbox: curr_el.bbox.to_owned(),
                 };
 
                 while let Some(next_el) = element_it.peek() {
-                    if matches!(next_el.kind, crate::entities::ElementType::Header(_)) {
+                    if matches!(next_el.kind, ElementType::Header) {
                         footer_block.merge(next_el)?;
                         element_it.next();
                     } else {
@@ -671,8 +685,8 @@ fn merge_elements_into_blocks(elements: &mut [Element]) -> anyhow::Result<Vec<Bl
                 blocks.push(footer_block);
             }
             // // Handle those via text font size (using kmeans)
-            // crate::entities::ElementType::Title(text_block)
-            // | crate::entities::ElementType::Subtitle(text_block) => todo!(),
+            // ElementType::Title(text_block)
+            // | ElementType::Subtitle(text_block) => todo!(),
             _ => {
                 continue;
             }
@@ -683,17 +697,20 @@ fn merge_elements_into_blocks(elements: &mut [Element]) -> anyhow::Result<Vec<Bl
 
 #[cfg(test)]
 mod tests {
+
+    use crate::entities::ElementText;
+
     use super::*;
-    use crate::entities::{BBox, Element, ElementType, TextBlock as EntityTextBlock};
+    use {BBox, Element, ElementType};
 
     fn create_text_element(id: usize, page_id: usize, text: &str, bbox: BBox) -> Element {
         Element {
             id,
             layout_block_id: 0,
-            kind: ElementType::Text(EntityTextBlock {
-                text: text.to_string(),
-            }),
-            elements: vec![],
+            kind: ElementType::Text,
+            text_block: ElementText {
+                text: text.to_owned(),
+            },
             page_id,
             bbox,
         }
@@ -703,10 +720,10 @@ mod tests {
         Element {
             id,
             layout_block_id: 0,
-            kind: ElementType::ListItem(EntityTextBlock {
+            kind: ElementType::ListItem,
+            text_block: ElementText {
                 text: text.to_string(),
-            }),
-            elements: vec![],
+            },
             page_id,
             bbox,
         }
@@ -716,10 +733,10 @@ mod tests {
         Element {
             id,
             layout_block_id: 0,
-            kind: ElementType::Caption(EntityTextBlock {
+            kind: ElementType::Caption,
+            text_block: ElementText {
                 text: text.to_string(),
-            }),
-            elements: vec![],
+            },
             page_id,
             bbox,
         }
@@ -729,21 +746,20 @@ mod tests {
         Element {
             id,
             layout_block_id: 0,
-            kind: ElementType::FootNote(EntityTextBlock {
+            kind: ElementType::FootNote,
+            text_block: ElementText {
                 text: text.to_string(),
-            }),
-            elements: vec![],
+            },
             page_id,
             bbox,
         }
     }
-
     fn create_image_element(id: usize, page_id: usize, bbox: BBox) -> Element {
         Element {
             id,
             layout_block_id: 0,
             kind: ElementType::Image,
-            elements: vec![],
+            text_block: ElementText::default(),
             page_id,
             bbox,
         }

@@ -1,6 +1,6 @@
 use clap::Parser;
 use ferrules::{layout::model::ORTLayoutParser, parse::parse_document, save_parsed_document};
-use std::path::PathBuf;
+use std::{ops::Range, path::PathBuf};
 
 #[derive(Parser, Debug)]
 #[command(
@@ -12,8 +12,11 @@ struct Args {
     /// Path to the PDF file to be parsed
     file_path: PathBuf,
 
-    #[arg(long, help = "Limit parsing to the N first pages")]
-    n_page: Option<usize>,
+    #[arg(
+        long,
+        help = "Specify pages to parse (e.g., '1-5' or '1' for single page)"
+    )]
+    page_range: Option<String>,
 
     /// Specifies the target directory where parsing results will be saved
     ///
@@ -67,6 +70,32 @@ struct Args {
     debug_dir: Option<PathBuf>,
 }
 
+fn parse_page_range(range_str: &str) -> anyhow::Result<Range<usize>> {
+    if let Some((start, end)) = range_str.split_once('-') {
+        let start: usize = start.trim().parse()?;
+        let end: usize = end.trim().parse()?;
+        if start > 0 && end >= start {
+            Ok(Range {
+                start: start - 1,
+                end,
+            })
+        } else {
+            anyhow::bail!("Invalid page range: start must be > 0 and end must be >= start")
+        }
+    } else {
+        // Single page
+        let page: usize = range_str.trim().parse()?;
+        if page > 0 {
+            Ok(Range {
+                start: page - 1,
+                end: page,
+            })
+        } else {
+            anyhow::bail!("Page number must be greater than 0")
+        }
+    }
+}
+
 fn main() {
     let args = Args::parse();
 
@@ -83,12 +112,16 @@ fn main() {
 
     let layout_model = ORTLayoutParser::new().expect("can't load layout model");
 
+    let page_range = args
+        .page_range
+        .map(|page_range_str| parse_page_range(&page_range_str).unwrap());
+
     let doc = parse_document(
         &args.file_path,
         &layout_model,
         None,
         true,
-        args.n_page,
+        page_range,
         args.debug,
     )
     .unwrap();

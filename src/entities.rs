@@ -110,11 +110,11 @@ impl BBox {
 }
 
 #[derive(Debug, Clone, Default, Deserialize, Serialize)]
-pub struct TextBlock {
+pub struct ElementText {
     pub(crate) text: String,
 }
 
-impl TextBlock {
+impl ElementText {
     pub fn append_line(&mut self, txt: &str) {
         self.text.push(' ');
         self.text.push_str(txt);
@@ -124,14 +124,14 @@ impl TextBlock {
 #[derive(Debug, Deserialize, Serialize, Clone)]
 #[serde(tag = "element_type")]
 pub enum ElementType {
-    Header(TextBlock),
-    FootNote(TextBlock),
-    Footer(TextBlock),
-    Text(TextBlock),
-    Title(TextBlock),
-    Subtitle(TextBlock),
-    ListItem(TextBlock),
-    Caption(TextBlock),
+    Header,
+    FootNote,
+    Footer,
+    Text,
+    Title,
+    Subtitle,
+    ListItem,
+    Caption,
     Image,
     Table,
 }
@@ -140,8 +140,8 @@ pub enum ElementType {
 pub struct Element {
     pub id: usize,
     pub layout_block_id: usize,
+    pub text_block: ElementText,
     pub kind: ElementType,
-    pub elements: Vec<Element>,
     pub page_id: usize,
     pub bbox: BBox,
 }
@@ -149,14 +149,14 @@ pub struct Element {
 impl Element {
     pub fn from_layout_block(id: usize, layout_block: &LayoutBBox, page_id: usize) -> Self {
         let kind = match layout_block.label {
-            "Caption" => ElementType::Caption(Default::default()),
-            "Formula" | "Text" => ElementType::Text(Default::default()),
-            "List-item" => ElementType::ListItem(Default::default()),
-            "Footnote" => ElementType::FootNote(Default::default()),
-            "Page-footer" => ElementType::Footer(Default::default()),
-            "Page-header" => ElementType::Header(Default::default()),
-            "Title" => ElementType::Title(Default::default()),
-            "Section-header" => ElementType::Subtitle(Default::default()),
+            "Caption" => ElementType::Caption,
+            "Formula" | "Text" => ElementType::Text,
+            "List-item" => ElementType::ListItem,
+            "Footnote" => ElementType::FootNote,
+            "Page-footer" => ElementType::Footer,
+            "Page-header" => ElementType::Header,
+            "Title" => ElementType::Title,
+            "Section-header" => ElementType::Subtitle,
             "Table" => ElementType::Table,
             "Picture" => ElementType::Image,
             _ => {
@@ -167,27 +167,14 @@ impl Element {
             id,
             kind,
             layout_block_id: layout_block.id,
-            elements: vec![],
             page_id,
+            text_block: Default::default(),
             bbox: layout_block.bbox.to_owned(),
         }
     }
     pub fn push_line(&mut self, line: &Line) {
-        match &mut self.kind {
-            ElementType::Header(text_block)
-            | ElementType::FootNote(text_block)
-            | ElementType::Footer(text_block)
-            | ElementType::Text(text_block)
-            | ElementType::Title(text_block)
-            | ElementType::Subtitle(text_block)
-            | ElementType::ListItem(text_block)
-            | ElementType::Caption(text_block) => {
-                text_block.append_line(&line.text);
-            }
-            ElementType::Image | ElementType::Table => {
-                eprintln!("Can't push line to Image or Table block. Skipping");
-            }
-        }
+        self.bbox.merge(&line.bbox);
+        self.text_block.append_line(&line.text);
     }
 }
 
