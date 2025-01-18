@@ -33,40 +33,47 @@
   - [ ] Group Page header / Page footer
   - [ ] Process SubHeader/Titles using kmeans on line heigths to get the title_level
   - [ ] Merge captions with tables
-  - [ ] Run post processors (Text, List, PageHeader )
+  - [ ] Run Block processors (Text, List, PageHeader )
   - [ ] Get PDF Bookmarks (TOC) and reconcile detected titles with TOC
 
 - [ ] Render Document
 
+  - [/] JSON renderer
+    - [ ] Crop images and save in directory if `--save_image` flag
   - [ ] HTML renderer
   - [ ] Markdown renderer
-  - [ ] JSON renderer
-    - [ ] Crop images and save in directory if `--save_image` flag
 
 - [x] Create CLI ferrules
+
+  - [x] Add variables
+  - [x] Add debug flag
+  - [x] Add range flag
+  - [ ] Add export format
+  - [ ] Configure hyperparams/execution providers
+
 - [ ] Add tracing
 - [ ] `eyre` | `thiserror` for custom errosk
 - [ ] Configurable inference params: ORTProviders/ batch_size, confidence_score, NMS ..
 
-- [ ] OCR: Find good recognition model (onnxtr ??)
+- [ ] OCR: Find good recognition model for (target_os != macos)
 
-- [ ] Batch inference on pages (TODO -> )
+- [ ] Batch inference on pages (For Nvidia GPU, batch_size on macos didn't yield good results)
 
   - [x] Export onnx with dynamic batch_size
-  - [ ] Run layout on &[DynamicImage]
-  - Explored batching on onnxruntime on coreml isn't faster for some weird reason (probably batch dim)
-    - [ ] check on nvidia-gpu if batching is better
+  - [x] Run layout on &[DynamicImage]
+  - [ ] Implement Linux/Cuda inference (EP)
 
 - [ ] API
 
   - [ ] Unify Config for env/CLI/API
   - [ ] Dynamic batching of document(pages) to process
 
-- [ ] Change NMS with more robust for nested bbox of the same type
-- [ ] Open document mmap and share range of page between threads
+- [ ] Add postprocessing of bbox with more robustness for nested bbox of the same type
 - [ ] Build pdfium statically for Linux
 - [ ] Determine page orientation + deskew
-- [ ] Optimize layout model for ANE
-- [ ] ORT inference in fp16/mixed precision
-- [ ] Move to other yolo versions: yolov11s seems better with less params [yolo-doclaynet](https://github.com/ppaanngggg/yolo-doclaynet)
-- [ ] Explore arena allocators (one per page)
+
+- LowLvl
+  - [ ] Optimize layout model for ANE
+  - [ ] ORT inference in fp16/mixed precision
+  - [ ] Move to other yolo versions: yolov11s seems better with less params [yolo-doclaynet](https://github.com/ppaanngggg/yolo-doclaynet)
+  - [ ] Explore arena allocators (one per page)

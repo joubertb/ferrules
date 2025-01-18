@@ -8,6 +8,8 @@
 
 ---
 
+> 🚧 **Work in Progress**: Check out our [roadmap](./ROADMAP.md) for upcoming features and development plans.
+
 Ferrules is an **opinionated high-performance document parsing library** designed to generate LLM-ready documents efficiently.
 Unlike alternatives such as `unstructured` which are slow and Python-based, `ferrules` is written in Rust and aims to provide a seamless experience with robust deployment across various platforms.
 
@@ -38,10 +40,7 @@ Unlike alternatives such as `unstructured` which are slow and Python-based, `fer
   - Hardware-accelerated ML inference (Apple Neural Engine, GPU)
   - Designed for production environments with minimal setup
 
-- **⚙️ Advanced Functionalities:**
-
-  - Offers configurable inference parameters for optimized processing.
-  - Batch inference on document pages. (COMING SOON)
+- **⚙️ Advanced Functionalities:** : Offers configurable inference parameters for optimized processing (COMING SOON)
 
 - **🛠️ API and CLI:**
 
