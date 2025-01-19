@@ -49,17 +49,37 @@ Unlike alternatives such as `unstructured` which are slow and Python-based, `fer
 
 ## Installation
 
-> ⚠️ **Note:** Currently, Ferrules only works on macOS. Linux support (with NVIDIA GPU acceleration) is coming soon !!!
+Ferrules provides precompiled binaries for macOS, available for download from the [GitHub Releases](https://github.com/aminediro/ferrules/releases) page.
 
-```sh
-curl --proto '=https' --tlsv1.2 -LsSf https://github.com/aminediro/ferrules/releases/download/v0.1.0/ferrules-installer.sh | sh
-```
+### macOS Installation
 
-Once installed, you can verify the installation by running:
+1. Download the latest `ferrules-macos` binary from the [releases](https://github.com/aminediro/ferrules/releases).
 
-```sh
-ferrules --version
-```
+2. Make the binary executable:
+
+   ```sh
+   chmod +x ferrules-macos
+   ```
+
+3. Move the binary to a directory in your PATH, for example `/usr/local/bin`:
+
+   ```sh
+   sudo mv ferrules-macos /usr/local/bin/ferrules
+   ```
+
+4. Verify the installation:
+
+   ```sh
+   ferrules --version
+   ```
+
+### Linux Installation (COMING SOON)
+
+Linux support with NVIDIA GPU acceleration will be available soon. Keep an eye out for updates on the [releases](https://github.com/aminediro/ferrules/releases) page.
+
+> ⚠️ **Note:** Ensure that you have the necessary permissions to execute and move files to system directories.
+
+Visit the [GitHub Releases](https://github.com/aminediro/ferrules/releases) page to find the latest version suitable for your operating system.
 
 ## Usage
 
