@@ -1,3 +1,4 @@
+use image::DynamicImage;
 use plsfix::fix_text;
 use serde::{Deserialize, Serialize};
 use std::path::{Path, PathBuf};
@@ -82,7 +83,19 @@ impl BBox {
     }
 
     #[inline(always)]
-    pub(crate) fn iou(&self, other: &Self) -> f32 {
+    pub fn contains(&self, other: &Self) -> bool {
+        other.x0 >= self.x0 && other.y0 >= self.y0 && other.x1 <= self.x1 && other.y1 <= self.y1
+    }
+
+    #[inline(always)]
+    pub fn relaxed_iou(&self, other: &Self) -> f32 {
+        let a = self.intersection(other);
+        let b = self.area().min(other.area());
+        a / b
+    }
+
+    #[inline(always)]
+    pub fn iou(&self, other: &Self) -> f32 {
         self.intersection(other) / self.union(other)
     }
 
@@ -139,7 +152,7 @@ pub enum ElementType {
 #[derive(Debug, Deserialize, Serialize, Clone)]
 pub struct Element {
     pub id: usize,
-    pub layout_block_id: usize,
+    pub layout_block_id: i32,
     pub text_block: ElementText,
     pub kind: ElementType,
     pub page_id: usize,
@@ -173,18 +186,19 @@ impl Element {
         }
     }
     pub fn push_line(&mut self, line: &Line) {
-        self.bbox.merge(&line.bbox);
+        // self.bbox.merge(&line.bbox);
         self.text_block.append_line(&line.text);
     }
 }
 
-#[derive(Debug, Deserialize, Serialize)]
+#[derive(Debug)]
 pub struct StructuredPage {
     pub id: PageID,
     pub width: f32,
     pub height: f32,
     // pub rotation: PdfPageRenderRotation,
     pub need_ocr: bool,
+    pub image: DynamicImage,
     pub elements: Vec<Element>,
 }
 
@@ -193,6 +207,9 @@ pub struct Page {
     pub id: PageID,
     pub width: f32,
     pub height: f32,
+
+    #[serde(skip_serializing, skip_deserializing)]
+    pub image: DynamicImage,
     // pub rotation: PdfPageRenderRotation,
     pub need_ocr: bool,
 }

@@ -72,8 +72,9 @@
 - [ ] Build pdfium statically for Linux
 - [ ] Determine page orientation + deskew
 
-- LowLvl
+- Optim
   - [ ] Optimize layout model for ANE
   - [ ] ORT inference in fp16/mixed precision
   - [ ] Move to other yolo versions: yolov11s seems better with less params [yolo-doclaynet](https://github.com/ppaanngggg/yolo-doclaynet)
   - [ ] Explore arena allocators (one per page)
+  - [ ] strig -> CowStr

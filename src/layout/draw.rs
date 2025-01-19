@@ -96,8 +96,8 @@ pub(crate) fn draw_ocr_bboxes(
         let x1 = ocr_box.bbox.x1 as i32;
         let y1 = ocr_box.bbox.y1 as i32;
 
-        let width = (x1 - x0).max(0) as u32;
-        let height = (y1 - y0).max(0) as u32;
+        let width = (x1 - x0).max(1) as u32;
+        let height = (y1 - y0).max(1) as u32;
 
         let rect = Rect::at(x0, y0).of_size(width, height);
 
@@ -133,8 +133,8 @@ pub(crate) fn draw_blocks(
         let x1 = block.bbox.x1 as i32;
         let y1 = block.bbox.y1 as i32;
 
-        let width = (x1 - x0).max(0) as u32;
-        let height = (y1 - y0).max(0) as u32;
+        let width = (x1 - x0).max(1) as u32;
+        let height = (y1 - y0).max(1) as u32;
 
         let rect = Rect::at(x0, y0).of_size(width, height);
 

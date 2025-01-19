@@ -32,7 +32,7 @@ lazy_static! {
 
 #[derive(Debug, Default, Clone)]
 pub struct LayoutBBox {
-    pub id: usize,
+    pub id: i32,
     pub bbox: BBox,
     pub label: &'static str,
     pub proba: f32,
@@ -72,6 +72,7 @@ impl ORTLayoutParser {
     /// Confidence threshold for filtering out low probability bounding boxes.
     /// Bounding boxes with probability below this threshold will be ignored.
     pub const CONF_THRESHOLD: f32 = 0.3;
+
     /// Intersection over Union (IOU) threshold for non-maximum suppression (NMS) algorithm.
     /// It determines the overlap between bounding boxes before suppression.
     pub const IOU_THRESHOLD: f32 = 0.7;
@@ -289,7 +290,9 @@ fn nms(raw_bboxes: &mut Vec<LayoutBBox>, iou_threshold: f32) {
     for index in 0..raw_bboxes.len() {
         let mut drop = false;
         for prev_index in 0..current_index {
-            let iou = raw_bboxes[index].bbox.iou(&raw_bboxes[prev_index].bbox);
+            let iou = raw_bboxes[prev_index]
+                .bbox
+                .relaxed_iou(&raw_bboxes[index].bbox);
             if iou > iou_threshold {
                 drop = true;
                 break;
@@ -300,6 +303,7 @@ fn nms(raw_bboxes: &mut Vec<LayoutBBox>, iou_threshold: f32) {
             current_index += 1;
         }
     }
+    // Everything after has been swapped
     raw_bboxes.truncate(current_index);
 }
 
@@ -307,6 +311,41 @@ fn nms(raw_bboxes: &mut Vec<LayoutBBox>, iou_threshold: f32) {
 mod tests {
 
     use super::*;
+
+    #[test]
+    fn test_nms_high_overlap_contained_box() {
+        let mut raw_bboxes = vec![
+            LayoutBBox {
+                id: 0,
+                bbox: BBox {
+                    x0: 0.0,
+                    y0: 0.0,
+                    x1: 3.0,
+                    y1: 3.0,
+                },
+                label: "A",
+                proba: 0.85,
+            },
+            LayoutBBox {
+                id: 1,
+                // Box fully contained within box #0
+                bbox: BBox {
+                    x0: 1.0,
+                    y0: 1.0,
+                    x1: 2.0,
+                    y1: 2.0,
+                },
+                label: "A",
+                proba: 0.95,
+            },
+        ];
+
+        let iou_threshold = 0.5;
+        nms(&mut raw_bboxes, iou_threshold);
+
+        assert_eq!(raw_bboxes.len(), 1);
+        // assert_eq!(raw_bboxes[0].id, 1);
+    }
 
     #[test]
     fn test_nms_no_overlap() {
@@ -350,7 +389,6 @@ mod tests {
         nms(&mut raw_bboxes, iou_threshold);
 
         assert_eq!(raw_bboxes.len(), 3);
-        // No boxes should be eliminated as there is no overlap
     }
 
     #[test]
@@ -402,6 +440,7 @@ mod tests {
         assert_eq!(raw_bboxes.len(), 1);
         assert_eq!(raw_bboxes[0].proba, 0.95);
     }
+
     #[test]
     fn test_multithreaded() {
         let session = Session::builder()

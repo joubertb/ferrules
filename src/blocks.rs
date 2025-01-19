@@ -19,8 +19,8 @@ pub struct List {
 
 #[derive(Debug, Default, Deserialize, Serialize)]
 pub struct Title {
-    level: u8,
-    text: String,
+    pub level: u8,
+    pub text: String,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -67,8 +67,24 @@ impl Block {
                     bail!("can't merge element in Listblock")
                 }
             }
-            BlockType::Header(_) => todo!(),
-            BlockType::Footer(_text_block) => todo!(),
+            BlockType::Header(header) => {
+                if let ElementType::Header = &element.kind {
+                    self.bbox.merge(&element.bbox);
+                    header.text.push_str(&element.text_block.text);
+                    Ok(())
+                } else {
+                    bail!("can't merge element in Header")
+                }
+            }
+            BlockType::Footer(footer) => {
+                if let ElementType::Footer = &element.kind {
+                    self.bbox.merge(&element.bbox);
+                    footer.text.push_str(&element.text_block.text);
+                    Ok(())
+                } else {
+                    bail!("can't merge element in Footer")
+                }
+            }
             BlockType::Title(_title) => todo!(),
             BlockType::Image(_image_block) => todo!(),
             BlockType::Table => todo!(),

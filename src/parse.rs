@@ -6,7 +6,7 @@ use pdfium_render::prelude::{PdfPage, PdfPageTextChar, PdfRenderConfig, Pdfium};
 use uuid::Uuid;
 
 use crate::{
-    blocks::{Block, BlockType, ImageBlock, List, TextBlock},
+    blocks::{Block, BlockType, ImageBlock, List, TextBlock, Title},
     entities::{
         BBox, CharSpan, Document, Element, ElementText, ElementType, Line, Page, PageID,
         StructuredPage,
@@ -136,7 +136,7 @@ pub fn parse_pages(
     for ((page_idx, page), page_layout, page_image, downscale_factor) in izip![
         pdf_pages.iter(),
         &pages_layout,
-        &page_images,
+        page_images,
         &downscale_factors
     ] {
         let page_bbox = BBox {
@@ -156,7 +156,7 @@ pub fn parse_pages(
 
         let ocr_result = if need_ocr {
             if cfg!(target_os = "macos") {
-                let ocr_result = parse_image_ocr(page_image, *downscale_factor)?;
+                let ocr_result = parse_image_ocr(&page_image, *downscale_factor)?;
                 Some(ocr_result)
             } else {
                 None
@@ -165,25 +165,27 @@ pub fn parse_pages(
             None
         };
 
-        let mut elements = if need_ocr && ocr_result.is_some() {
+        let text_lines = if need_ocr && ocr_result.is_some() {
             let lines = ocr_result
                 .as_ref()
                 .unwrap()
                 .iter()
                 .map(|ocr_line| ocr_line.to_line())
                 .collect::<Vec<_>>();
-            merge_lines_layout(page_layout, &lines, *page_idx)?
+            lines
         } else {
-            merge_lines_layout(page_layout, &text_lines, *page_idx)?
+            text_lines
         };
 
-        let merge_layout_blocks_ids = elements
+        // Merging elements with layout
+        let mut elements = merge_lines_layout(page_layout, &text_lines, *page_idx)?;
+        let merged_layout_blocks_ids = elements
             .iter()
             .map(|e| e.layout_block_id)
             .collect::<Vec<_>>();
         let unmerged_layout_boxes: Vec<&LayoutBBox> = page_layout
             .iter()
-            .filter(|&b| merge_layout_blocks_ids.contains(&b.id))
+            .filter(|&b| !merged_layout_blocks_ids.contains(&b.id))
             .collect();
 
         merge_remaining(&mut elements, &unmerged_layout_boxes, *page_idx);
@@ -191,13 +193,13 @@ pub fn parse_pages(
         // Move to VecDeque<Element> to do pushfront
         // move_header_front(&mut elements);
 
+        let page_image = page
+            .render_with_config(&PdfRenderConfig::default().scale_page_by_factor(1f32))
+            .map(|bitmap| bitmap.as_image())?;
         if debug {
             // TODO: add feature compile debug
             let output_file = tmp_dir.join(format!("page_{}.png", page_idx));
             let final_output_file = tmp_dir.join(format!("page_blocks_{}.png", page_idx));
-            let page_image = page
-                .render_with_config(&PdfRenderConfig::default().scale_page_by_factor(1f32))
-                .map(|bitmap| bitmap.as_image())?;
             let out_img = draw_text_lines(&text_lines, &page_image)?;
             let out_img = draw_layout_bboxes(page_layout, &out_img.into())?;
             // Draw the final prediction -
@@ -219,6 +221,7 @@ pub fn parse_pages(
             id: *page_idx,
             width: page_bbox.width(),
             height: page_bbox.height(),
+            image: page_image.to_owned(),
             elements,
             need_ocr,
         };
@@ -304,20 +307,22 @@ pub fn parse_document<P: AsRef<Path>>(
         .flatten()
         .collect::<Vec<_>>();
 
-    let pages = parsed_pages
+    // TODO: clone might be huge here
+    let mut all_elements = parsed_pages
         .iter()
+        .flat_map(|p| p.elements.clone())
+        .collect::<Vec<_>>();
+
+    let pages = parsed_pages
+        .into_iter()
         .map(|sp| Page {
             id: sp.id,
             width: sp.width,
             height: sp.height,
             need_ocr: sp.need_ocr,
+            image: sp.image,
         })
         .collect();
-
-    let mut all_elements = parsed_pages
-        .into_iter()
-        .flat_map(|p| p.elements)
-        .collect::<Vec<_>>();
 
     let blocks = merge_elements_into_blocks(all_elements.as_mut_slice())?;
 
@@ -418,41 +423,50 @@ fn merge_lines_layout(
                     elements.push(el);
                 }
 
-                let last_el = elements.last_mut().unwrap();
+                // let last_el = elements.last_mut().unwrap();
+                let matched_element = elements
+                    .iter_mut()
+                    .find(|e| e.layout_block_id == line_layout_block.id);
 
-                if line_layout_block.id == last_el.layout_block_id {
-                    last_el.push_line(line);
-                } else {
-                    let mut element =
-                        Element::from_layout_block(elements.len() + 1, line_layout_block, page_id);
-                    element.push_line(line);
-                    elements.push(element);
+                match matched_element {
+                    Some(el) => {
+                        el.push_line(line);
+                    }
+                    None => {
+                        let mut element = Element::from_layout_block(
+                            elements.len() + 1,
+                            line_layout_block,
+                            page_id,
+                        );
+                        element.push_line(line);
+                        elements.push(element);
+                    }
                 }
             }
             // Line is detected but isn't assignable to some layout element
             None => {
-                let el = Element {
-                    id: 0,
-                    layout_block_id: 0,
-                    text_block: ElementText {
-                        text: line.text.to_owned(),
-                    },
-                    kind: ElementType::Text,
-                    page_id,
-                    bbox: line.bbox.clone(),
-                };
-                elements.push(el);
                 // TODO:
                 // Check distance between line and the last element
+
+                // let el = Element {
+                //     id: 0,
+                //     layout_block_id: -1,
+                //     text_block: ElementText {
+                //         text: line.text.to_owned(),
+                //     },
+                //     kind: ElementType::Text,
+                //     page_id,
+                //     bbox: line.bbox.clone(),
+                // };
+                // elements.push(el);
             }
         }
     }
-
     Ok(elements)
 }
 
-fn merge_remaining(elements: &mut Vec<Element>, visual_boxes: &[&LayoutBBox], page_id: PageID) {
-    for layout_box in visual_boxes {
+fn merge_remaining(elements: &mut Vec<Element>, remaining: &[&LayoutBBox], page_id: PageID) {
+    for layout_box in remaining {
         let closest_block = elements
             .iter()
             .enumerate()
@@ -674,7 +688,7 @@ fn merge_elements_into_blocks(elements: &mut [Element]) -> anyhow::Result<Vec<Bl
                 };
 
                 while let Some(next_el) = element_it.peek() {
-                    if matches!(next_el.kind, ElementType::Header) {
+                    if matches!(next_el.kind, ElementType::Footer) {
                         footer_block.merge(next_el)?;
                         element_it.next();
                     } else {
@@ -684,9 +698,21 @@ fn merge_elements_into_blocks(elements: &mut [Element]) -> anyhow::Result<Vec<Bl
                 block_id += 1;
                 blocks.push(footer_block);
             }
-            // // Handle those via text font size (using kmeans)
-            // ElementType::Title(text_block)
-            // | ElementType::Subtitle(text_block) => todo!(),
+            ElementType::Title | ElementType::Subtitle => {
+                let title = Block {
+                    id: block_id,
+                    kind: BlockType::Title(Title {
+                        // TODO:
+                        // Handle those via text font size (using kmeans)
+                        level: 0,
+                        text: curr_el.text_block.text.to_owned(),
+                    }),
+                    pages_id: vec![curr_el.page_id],
+                    bbox: curr_el.bbox.to_owned(),
+                };
+                block_id += 1;
+                blocks.push(title);
+            }
             _ => {
                 continue;
             }
@@ -820,7 +846,6 @@ mod tests {
 
         let blocks = merge_elements_into_blocks(&mut elements)?;
 
-        dbg!(&blocks);
         assert_eq!(blocks.len(), 2);
         if let BlockType::ListBlock(list) = &blocks[0].kind {
             assert_eq!(list.items.len(), 2);
