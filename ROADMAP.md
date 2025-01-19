@@ -26,22 +26,22 @@
 
 - [ ] Document merge:
 
-  - [ ] Move header element to the top of the page
-  - [ ] Merge text block based on gap distance
   - [x] Group listItems into list : Find first and merge subsequent items
   - [x] Group caption/footer blocks with image blocks
-  - [ ] Group Page header / Page footer
+  - [x] Group Page header / Page footer
+  - [ ] Move header element to the top of the page
+  - [ ] Merge text block based on gap distance
+  - [ ] Group captions with tables
   - [ ] Process SubHeader/Titles using kmeans on line heigths to get the title_level
-  - [ ] Merge captions with tables
   - [ ] Run Block processors (Text, List, PageHeader )
   - [ ] Get PDF Bookmarks (TOC) and reconcile detected titles with TOC
 
 - [ ] Render Document
 
-  - [/] JSON renderer
-    - [ ] Crop images and save in directory if `--save_image` flag
+  - [x] JSON renderer
+    - [x] Crop images and save in directory if `--save_image` flag
   - [ ] HTML renderer
-  - [ ] Markdown renderer
+  - [ ] Markdown renderer (based on html renderer)
 
 - [x] Create CLI ferrules
 
@@ -59,9 +59,9 @@
 
 - [ ] Batch inference on pages (For Nvidia GPU, batch_size on macos didn't yield good results)
 
-  - [x] Export onnx with dynamic batch_size
+  - [x] Export onnx layout model with dynamic `batch_size`
   - [x] Run layout on &[DynamicImage]
-  - [ ] Implement Linux/Cuda inference (EP)
+  - [ ] Implement Linux/CUDA inference (EP)
 
 - [ ] API
 
@@ -73,7 +73,7 @@
 - [ ] Determine page orientation + deskew
 
 - Optim
-  - [ ] Optimize layout model for ANE
+  - [ ] Optimize layout model for ANE -> Look at changing shapes and operators to maximize ANE perf
   - [ ] ORT inference in fp16/mixed precision
   - [ ] Move to other yolo versions: yolov11s seems better with less params [yolo-doclaynet](https://github.com/ppaanngggg/yolo-doclaynet)
   - [ ] Explore arena allocators (one per page)
