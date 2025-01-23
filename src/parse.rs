@@ -8,8 +8,7 @@ use uuid::Uuid;
 use crate::{
     blocks::{Block, BlockType, ImageBlock, List, TextBlock, Title},
     entities::{
-        BBox, CharSpan, Document, Element, ElementText, ElementType, Line, Page, PageID,
-        StructuredPage,
+        BBox, CharSpan, Document, Element, ElementType, Line, Page, PageID, StructuredPage,
     },
     layout::{
         draw::{draw_blocks, draw_layout_bboxes, draw_ocr_bboxes, draw_text_lines},
@@ -190,9 +189,6 @@ pub fn parse_pages(
 
         merge_remaining(&mut elements, &unmerged_layout_boxes, *page_idx);
 
-        // Move to VecDeque<Element> to do pushfront
-        // move_header_front(&mut elements);
-
         let page_image = page
             .render_with_config(&PdfRenderConfig::default().scale_page_by_factor(1f32))
             .map(|bitmap| bitmap.as_image())?;
@@ -234,17 +230,6 @@ pub fn parse_pages(
 
     Ok(structured_pages)
 }
-
-// fn move_header_front(elements: &[Element]) {
-//     for el in elements {
-//         match el.kind {
-//             ElementType::Header(text_block) => {
-//                 elements.mo
-//             }
-//         }
-//     }
-//     todo!()
-// }
 
 pub fn parse_document<P: AsRef<Path>>(
     path: P,
@@ -349,6 +334,35 @@ fn page_needs_ocr(text_boxes: &[&LayoutBBox], text_lines: &[Line]) -> bool {
     }
 }
 
+fn merge_or_create_elements(
+    elements: &mut Vec<Element>,
+    line: &Line,
+    line_layout_block: &LayoutBBox,
+    page_id: PageID,
+) {
+    if elements.is_empty() {
+        let mut el = Element::from_layout_block(0, line_layout_block, page_id);
+        el.push_line(line);
+        elements.push(el);
+    }
+
+    // let last_el = elements.last_mut().unwrap();
+    let matched_element = elements
+        .iter_mut()
+        .find(|e| e.layout_block_id == line_layout_block.id);
+
+    match matched_element {
+        Some(el) => {
+            el.push_line(line);
+        }
+        None => {
+            let mut element =
+                Element::from_layout_block(elements.len() + 1, line_layout_block, page_id);
+            element.push_line(line);
+            elements.push(element);
+        }
+    }
+}
 /// Merges lines into blocks based on their layout, maintaining the order of lines.
 ///
 /// This function takes a list of text boxes representing layout bounding boxes that contain text,
@@ -413,36 +427,22 @@ fn merge_lines_layout(
         (line, matched_block)
     });
 
+    let mut headers = Vec::new();
     let mut elements = Vec::new();
+    let mut footers = Vec::new();
     for (line, layout_block) in line_block_iterator {
         match &layout_block.as_ref() {
-            Some(&line_layout_block) => {
-                if elements.is_empty() {
-                    let mut el = Element::from_layout_block(0, line_layout_block, page_id);
-                    el.push_line(line);
-                    elements.push(el);
+            Some(&line_layout_block) => match line_layout_block.label {
+                "Page-header" => {
+                    merge_or_create_elements(&mut headers, line, line_layout_block, page_id);
                 }
-
-                // let last_el = elements.last_mut().unwrap();
-                let matched_element = elements
-                    .iter_mut()
-                    .find(|e| e.layout_block_id == line_layout_block.id);
-
-                match matched_element {
-                    Some(el) => {
-                        el.push_line(line);
-                    }
-                    None => {
-                        let mut element = Element::from_layout_block(
-                            elements.len() + 1,
-                            line_layout_block,
-                            page_id,
-                        );
-                        element.push_line(line);
-                        elements.push(element);
-                    }
+                "Page-footer" => {
+                    merge_or_create_elements(&mut footers, line, line_layout_block, page_id);
                 }
-            }
+                _ => {
+                    merge_or_create_elements(&mut elements, line, line_layout_block, page_id);
+                }
+            },
             // Line is detected but isn't assignable to some layout element
             None => {
                 // TODO:
@@ -462,7 +462,9 @@ fn merge_lines_layout(
             }
         }
     }
-    Ok(elements)
+    elements.append(&mut footers);
+    headers.append(&mut elements);
+    Ok(headers)
 }
 
 fn merge_remaining(elements: &mut Vec<Element>, remaining: &[&LayoutBBox], page_id: PageID) {
