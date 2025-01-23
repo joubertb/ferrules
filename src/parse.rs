@@ -193,7 +193,7 @@ pub fn parse_pages(
             let out_img = draw_text_lines(&text_lines, &page_image)?;
             let out_img = draw_layout_bboxes(page_layout, &out_img.into())?;
             // Draw the final prediction -
-            let blocks = merge_elements_into_blocks(&mut elements.clone())?;
+            let blocks = merge_elements_into_blocks(elements.clone())?;
 
             let final_img = draw_blocks(&blocks, &page_image)?;
 
@@ -308,7 +308,7 @@ pub fn parse_document<P: AsRef<Path>>(
         .collect::<Vec<_>>();
 
     // TODO: clone might be huge here
-    let mut all_elements = parsed_pages
+    let all_elements = parsed_pages
         .iter()
         .flat_map(|p| p.elements.clone())
         .collect::<Vec<_>>();
@@ -324,7 +324,7 @@ pub fn parse_document<P: AsRef<Path>>(
         })
         .collect();
 
-    let blocks = merge_elements_into_blocks(all_elements.as_mut_slice())?;
+    let blocks = merge_elements_into_blocks(all_elements)?;
 
     let duration = Instant::now().duration_since(start_time).as_millis();
     pb.finish_with_message(format!("Parsed document in {}ms", duration));
@@ -510,12 +510,12 @@ fn merge_remaining(elements: &mut Vec<Element>, remaining: &[&LayoutBBox], page_
     }
 }
 
-fn merge_elements_into_blocks(elements: &mut [Element]) -> anyhow::Result<Vec<Block>> {
-    let mut element_it = elements.iter_mut().peekable();
+fn merge_elements_into_blocks(elements: Vec<Element>) -> anyhow::Result<Vec<Block>> {
+    let mut element_it = elements.into_iter().peekable();
 
     let mut blocks = Vec::new();
     let mut block_id = 0;
-    while let Some(curr_el) = element_it.next() {
+    while let Some(mut curr_el) = element_it.next() {
         match &mut curr_el.kind {
             crate::entities::ElementType::Text => {
                 let text_block = Block {
@@ -555,8 +555,8 @@ fn merge_elements_into_blocks(elements: &mut [Element]) -> anyhow::Result<Vec<Bl
                 while let Some(next_el) = element_it.peek() {
                     // TODO: add constraint on gap between bounding boxes on all dimensions (l,r,b,t)
                     if matches!(next_el.kind, crate::entities::ElementType::ListItem) {
+                        let next_el = element_it.next().unwrap();
                         list_block.merge(next_el)?;
-                        element_it.next();
                     } else {
                         break;
                     }
@@ -685,8 +685,8 @@ fn merge_elements_into_blocks(elements: &mut [Element]) -> anyhow::Result<Vec<Bl
 
                 while let Some(next_el) = element_it.peek() {
                     if matches!(next_el.kind, crate::entities::ElementType::Header) {
+                        let next_el = element_it.next().unwrap();
                         header_block.merge(next_el)?;
-                        element_it.next();
                     } else {
                         break;
                     }
@@ -706,8 +706,8 @@ fn merge_elements_into_blocks(elements: &mut [Element]) -> anyhow::Result<Vec<Bl
 
                 while let Some(next_el) = element_it.peek() {
                     if matches!(next_el.kind, ElementType::Footer) {
+                        let next_el = element_it.next().unwrap();
                         footer_block.merge(next_el)?;
-                        element_it.next();
                     } else {
                         break;
                     }
@@ -716,11 +716,11 @@ fn merge_elements_into_blocks(elements: &mut [Element]) -> anyhow::Result<Vec<Bl
                 blocks.push(footer_block);
             }
             ElementType::Title | ElementType::Subtitle => {
+                // TODO:
+                // Handle title level via text font size (using kmeans)
                 let title = Block {
                     id: block_id,
                     kind: BlockType::Title(Title {
-                        // TODO:
-                        // Handle those via text font size (using kmeans)
                         level: 0,
                         text: curr_el.text_block.text.to_owned(),
                     }),
@@ -823,12 +823,12 @@ mod tests {
             y1: 4.1,
         };
 
-        let mut elements = vec![
+        let elements = vec![
             create_text_element(0, 1, "First paragraph", bbox1),
             create_text_element(1, 1, "Second paragraph", bbox2),
         ];
 
-        let blocks = merge_elements_into_blocks(&mut elements)?;
+        let blocks = merge_elements_into_blocks(elements)?;
 
         assert_eq!(blocks.len(), 1);
         if let BlockType::TextBlock(text) = &blocks[0].kind {
@@ -855,13 +855,13 @@ mod tests {
             y1: 4.1,
         };
 
-        let mut elements = vec![
+        let elements = vec![
             create_list_element(0, 1, "First item", bbox1),
             create_list_element(1, 1, "Second item", bbox2.clone()),
             create_text_element(2, 1, "Random text", bbox2),
         ];
 
-        let blocks = merge_elements_into_blocks(&mut elements)?;
+        let blocks = merge_elements_into_blocks(elements)?;
 
         assert_eq!(blocks.len(), 2);
         if let BlockType::ListBlock(list) = &blocks[0].kind {
@@ -889,12 +889,12 @@ mod tests {
             y1: 4.1,
         };
 
-        let mut elements = vec![
+        let elements = vec![
             create_caption_element(0, 1, "Image caption", caption_bbox),
             create_image_element(1, 1, image_bbox),
         ];
 
-        let blocks = merge_elements_into_blocks(&mut elements)?;
+        let blocks = merge_elements_into_blocks(elements)?;
 
         assert_eq!(blocks.len(), 1);
         if let BlockType::Image(image) = &blocks[0].kind {
@@ -914,9 +914,9 @@ mod tests {
             y1: 2.0,
         };
 
-        let mut elements = vec![create_caption_element(0, 1, "Orphan caption", caption_bbox)];
+        let elements = vec![create_caption_element(0, 1, "Orphan caption", caption_bbox)];
 
-        let blocks = merge_elements_into_blocks(&mut elements)?;
+        let blocks = merge_elements_into_blocks(elements)?;
 
         assert_eq!(blocks.len(), 1);
         if let BlockType::TextBlock(text) = &blocks[0].kind {
@@ -942,12 +942,12 @@ mod tests {
             y1: 22.0,
         };
 
-        let mut elements = vec![
+        let elements = vec![
             create_text_element(0, 1, "First paragraph", bbox1),
             create_text_element(1, 1, "Distant paragraph", bbox2),
         ];
 
-        let blocks = merge_elements_into_blocks(&mut elements)?;
+        let blocks = merge_elements_into_blocks(elements)?;
 
         assert_eq!(blocks.len(), 2);
         Ok(())
@@ -962,9 +962,9 @@ mod tests {
             y1: 2.0,
         };
 
-        let mut elements = vec![create_image_element(0, 1, image_bbox)];
+        let elements = vec![create_image_element(0, 1, image_bbox)];
 
-        let blocks = merge_elements_into_blocks(&mut elements)?;
+        let blocks = merge_elements_into_blocks(elements)?;
 
         assert_eq!(blocks.len(), 1);
         if let BlockType::Image(image) = &blocks[0].kind {
@@ -990,12 +990,12 @@ mod tests {
             y1: 4.1,
         };
 
-        let mut elements = vec![
+        let elements = vec![
             create_image_element(0, 1, image_bbox),
             create_caption_element(1, 1, "Image Description", caption_bbox),
         ];
 
-        let blocks = merge_elements_into_blocks(&mut elements)?;
+        let blocks = merge_elements_into_blocks(elements)?;
 
         assert_eq!(blocks.len(), 1);
         if let BlockType::Image(image) = &blocks[0].kind {
@@ -1021,12 +1021,12 @@ mod tests {
             y1: 4.1,
         };
 
-        let mut elements = vec![
+        let elements = vec![
             create_image_element(0, 1, image_bbox),
             create_text_element(1, 1, "Regular text", text_bbox),
         ];
 
-        let blocks = merge_elements_into_blocks(&mut elements)?;
+        let blocks = merge_elements_into_blocks(elements)?;
 
         assert_eq!(blocks.len(), 2);
         if let BlockType::Image(image) = &blocks[0].kind {
@@ -1058,12 +1058,12 @@ mod tests {
             y1: 4.1,
         };
 
-        let mut elements = vec![
+        let elements = vec![
             create_image_element(0, 1, image_bbox),
             create_footnote_element(1, 1, "Image Footnote", footnote_bbox),
         ];
 
-        let blocks = merge_elements_into_blocks(&mut elements)?;
+        let blocks = merge_elements_into_blocks(elements)?;
 
         assert_eq!(blocks.len(), 1);
         if let BlockType::Image(image) = &blocks[0].kind {

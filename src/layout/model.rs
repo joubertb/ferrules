@@ -78,7 +78,7 @@ impl ORTLayoutParser {
 
     /// Intersection over Union (IOU) threshold for non-maximum suppression (NMS) algorithm.
     /// It determines the overlap between bounding boxes before suppression.
-    pub const IOU_THRESHOLD: f32 = 0.7;
+    pub const IOU_THRESHOLD: f32 = 0.8;
 
     pub fn new() -> anyhow::Result<Self> {
         let session = Session::builder()?
