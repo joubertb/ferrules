@@ -211,7 +211,7 @@ pub fn parse_pages(
             id: *page_idx,
             width: page_bbox.width(),
             height: page_bbox.height(),
-            image: page_image.to_owned(),
+            image: page_image,
             elements,
             need_ocr,
         };
@@ -521,10 +521,10 @@ fn merge_elements_into_blocks(elements: Vec<Element>) -> anyhow::Result<Vec<Bloc
                 let text_block = Block {
                     id: block_id,
                     kind: crate::blocks::BlockType::TextBlock(TextBlock {
-                        text: curr_el.text_block.text.to_owned(),
+                        text: curr_el.text_block.text,
                     }),
                     pages_id: vec![curr_el.page_id],
-                    bbox: curr_el.bbox.to_owned(),
+                    bbox: curr_el.bbox,
                 };
                 // TODO : Change this to use some minimum gap
                 // Check to see if we have another text block that is close
@@ -546,10 +546,10 @@ fn merge_elements_into_blocks(elements: Vec<Element>) -> anyhow::Result<Vec<Bloc
                 let mut list_block = Block {
                     id: block_id,
                     kind: BlockType::ListBlock(List {
-                        items: vec![curr_el.text_block.text.to_owned()],
+                        items: vec![curr_el.text_block.text],
                     }),
                     pages_id: vec![curr_el.page_id],
-                    bbox: curr_el.bbox.to_owned(),
+                    bbox: curr_el.bbox,
                 };
 
                 while let Some(next_el) = element_it.peek() {
@@ -573,10 +573,10 @@ fn merge_elements_into_blocks(elements: Vec<Element>) -> anyhow::Result<Vec<Bloc
                             let text_block = Block {
                                 id: block_id,
                                 kind: crate::blocks::BlockType::TextBlock(TextBlock {
-                                    text: curr_el.text_block.text.to_owned(),
+                                    text: curr_el.text_block.text,
                                 }),
                                 pages_id: vec![curr_el.page_id],
-                                bbox: curr_el.bbox.to_owned(),
+                                bbox: curr_el.bbox,
                             };
                             element_it.next();
                             block_id += 1;
@@ -596,10 +596,10 @@ fn merge_elements_into_blocks(elements: Vec<Element>) -> anyhow::Result<Vec<Bloc
                                     let img_block = Block {
                                         id: block_id,
                                         kind: BlockType::Image(ImageBlock {
-                                            caption: Some(curr_el.text_block.text.to_owned()),
+                                            caption: Some(curr_el.text_block.text),
                                         }),
                                         pages_id: vec![next_el.page_id],
-                                        bbox: curr_el.bbox.clone(),
+                                        bbox: curr_el.bbox,
                                     };
                                     block_id += 1;
                                     blocks.push(img_block);
@@ -611,10 +611,10 @@ fn merge_elements_into_blocks(elements: Vec<Element>) -> anyhow::Result<Vec<Bloc
                                     let text_block = Block {
                                         id: block_id,
                                         kind: crate::blocks::BlockType::TextBlock(TextBlock {
-                                            text: curr_el.text_block.text.to_owned(),
+                                            text: curr_el.text_block.text,
                                         }),
                                         pages_id: vec![curr_el.page_id],
-                                        bbox: curr_el.bbox.to_owned(),
+                                        bbox: curr_el.bbox,
                                     };
                                     block_id += 1;
                                     blocks.push(text_block);
@@ -633,7 +633,7 @@ fn merge_elements_into_blocks(elements: Vec<Element>) -> anyhow::Result<Vec<Bloc
                             id: block_id,
                             kind: crate::blocks::BlockType::Image(ImageBlock { caption: None }),
                             pages_id: vec![curr_el.page_id],
-                            bbox: curr_el.bbox.to_owned(),
+                            bbox: curr_el.bbox,
                         };
                         element_it.next();
                         block_id += 1;
@@ -644,16 +644,16 @@ fn merge_elements_into_blocks(elements: Vec<Element>) -> anyhow::Result<Vec<Bloc
                             crate::entities::ElementType::FootNote
                             | crate::entities::ElementType::Caption => {
                                 // TODO: check if there is a case where there is multiple caption associated with the same image
+                                let next_el = element_it.next().unwrap();
                                 curr_el.bbox.merge(&next_el.bbox);
                                 let block = Block {
                                     id: block_id,
                                     kind: crate::blocks::BlockType::Image(ImageBlock {
-                                        caption: Some(next_el.text_block.text.to_owned()),
+                                        caption: Some(next_el.text_block.text),
                                     }),
                                     pages_id: vec![curr_el.page_id],
-                                    bbox: curr_el.bbox.to_owned(),
+                                    bbox: curr_el.bbox,
                                 };
-                                element_it.next();
                                 block_id += 1;
                                 blocks.push(block);
                             }
@@ -664,7 +664,7 @@ fn merge_elements_into_blocks(elements: Vec<Element>) -> anyhow::Result<Vec<Bloc
                                         caption: None,
                                     }),
                                     pages_id: vec![curr_el.page_id],
-                                    bbox: curr_el.bbox.to_owned(),
+                                    bbox: curr_el.bbox,
                                 };
                                 block_id += 1;
                                 blocks.push(block);
@@ -677,10 +677,10 @@ fn merge_elements_into_blocks(elements: Vec<Element>) -> anyhow::Result<Vec<Bloc
                 let mut header_block = Block {
                     id: block_id,
                     kind: BlockType::Header(TextBlock {
-                        text: curr_el.text_block.text.to_owned(),
+                        text: curr_el.text_block.text,
                     }),
                     pages_id: vec![curr_el.page_id],
-                    bbox: curr_el.bbox.to_owned(),
+                    bbox: curr_el.bbox,
                 };
 
                 while let Some(next_el) = element_it.peek() {
@@ -698,10 +698,10 @@ fn merge_elements_into_blocks(elements: Vec<Element>) -> anyhow::Result<Vec<Bloc
                 let mut footer_block = Block {
                     id: block_id,
                     kind: BlockType::Footer(TextBlock {
-                        text: curr_el.text_block.text.to_owned(),
+                        text: curr_el.text_block.text,
                     }),
                     pages_id: vec![curr_el.page_id],
-                    bbox: curr_el.bbox.to_owned(),
+                    bbox: curr_el.bbox,
                 };
 
                 while let Some(next_el) = element_it.peek() {
@@ -722,10 +722,10 @@ fn merge_elements_into_blocks(elements: Vec<Element>) -> anyhow::Result<Vec<Bloc
                     id: block_id,
                     kind: BlockType::Title(Title {
                         level: 0,
-                        text: curr_el.text_block.text.to_owned(),
+                        text: curr_el.text_block.text,
                     }),
                     pages_id: vec![curr_el.page_id],
-                    bbox: curr_el.bbox.to_owned(),
+                    bbox: curr_el.bbox,
                 };
                 block_id += 1;
                 blocks.push(title);
