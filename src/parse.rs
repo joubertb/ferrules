@@ -14,11 +14,9 @@ use crate::{
         draw::{draw_blocks, draw_layout_bboxes, draw_ocr_bboxes, draw_text_lines},
         model::{LayoutBBox, ORTLayoutParser},
     },
+    ocr::parse_image_ocr,
     sanitize_doc_name,
 };
-
-#[cfg(target_os = "macos")]
-use crate::ocr::parse_image_ocr;
 
 /// This constant defines the minimum ratio between the area of text lines identified
 /// by the pdfium2 and the area of text regions detected through layout analysis.
@@ -154,12 +152,7 @@ pub fn parse_pages(
         let need_ocr = page_needs_ocr(&text_layout_box, &text_lines);
 
         let ocr_result = if need_ocr {
-            if cfg!(target_os = "macos") {
-                let ocr_result = parse_image_ocr(&page_image, *downscale_factor)?;
-                Some(ocr_result)
-            } else {
-                None
-            }
+            parse_image_ocr(&page_image, *downscale_factor).ok()
         } else {
             None
         };
@@ -253,6 +246,7 @@ pub fn parse_document<P: AsRef<Path>>(
     }
 
     let pdfium = Pdfium::new(Pdfium::bind_to_statically_linked_library()?);
+
     let mut document = pdfium.load_pdf_from_file(&path, password)?;
 
     let mut pages: Vec<_> = document.pages_mut().iter().enumerate().collect();

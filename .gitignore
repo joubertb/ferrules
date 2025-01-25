@@ -5,3 +5,5 @@ model-archive/
 **/.venv/
 *.pt
 test_data/*
+
+models/

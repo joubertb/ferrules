@@ -12,6 +12,7 @@ fn run_iter(session: &Session, input: &[Array4<f32>]) {
         session.run(inputs!["images"=>i.view()].unwrap()).unwrap();
     });
 }
+
 fn run_par_iter(session: &Session, input: &[Array4<f32>]) {
     input.par_iter().for_each(|i| {
         session.run(inputs!["images"=>i.view()].unwrap()).unwrap();

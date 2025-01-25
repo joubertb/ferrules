@@ -1,14 +1,21 @@
+#[allow(dead_code)]
+fn cfg_macos() {
+    println!("cargo:rustc-link-search=native=./libs/pdfium-static-arm64-v6694/lib");
+    println!("cargo:rustc-link-arg=-fapple-link-rtlib");
+    println!("cargo:rustc-link-lib=static=pdfium");
+    println!("cargo:rustc-link-lib=dylib=c++");
+    println!("cargo:rustc-link-lib=framework=CoreGraphics");
+}
+
+#[allow(dead_code)]
+fn cfg_linux_x86() {
+    println!("cargo:rustc-link-lib=static=pdfium");
+    println!("cargo:rustc-link-search=native=./libs/pdfium-linux-static");
+}
 fn main() {
     #[cfg(target_os = "macos")]
-    println!("cargo:rustc-link-arg=-fapple-link-rtlib");
+    cfg_macos();
 
-    println!("cargo:rustc-link-lib=static=pdfium");
-    #[cfg(target_os = "macos")]
-    println!("cargo:rustc-link-search=native=./libs/pdfium-static-arm64-v6694/lib");
     #[cfg(target_os = "linux")]
-    println!("cargo:rustc-link-search=native=./libs/pdfium-linux-x86-134.0/lib");
-    println!("cargo:rustc-link-lib=dylib=c++");
-    // https://github.com/ajrcarey/pdfium-render/issues/126
-    #[cfg(target_os = "macos")]
-    println!("cargo:rustc-link-lib=framework=CoreGraphics");
+    cfg_linux_x86();
 }

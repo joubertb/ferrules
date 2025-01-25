@@ -5,7 +5,10 @@ use image::{imageops::FilterType, DynamicImage, GenericImageView};
 use lazy_static::lazy_static;
 use ndarray::{s, Array4, ArrayBase, Axis, Dim, OwnedRepr};
 use ort::{
-    execution_providers::CoreMLExecutionProvider,
+    execution_providers::{
+        CPUExecutionProvider, CUDAExecutionProvider, CoreMLExecutionProvider,
+        TensorRTExecutionProvider,
+    },
     session::{builder::GraphOptimizationLevel, Session},
 };
 use rayon::prelude::*;
@@ -79,10 +82,15 @@ impl ORTLayoutParser {
 
     pub fn new() -> anyhow::Result<Self> {
         let session = Session::builder()?
-            .with_execution_providers([CoreMLExecutionProvider::default()
-                // .with_ane_only()
-                .with_subgraphs()
-                .build()])?
+            .with_execution_providers([
+                TensorRTExecutionProvider::default().build(),
+                CUDAExecutionProvider::default().build(),
+                CoreMLExecutionProvider::default()
+                    // .with_ane_only()
+                    .with_subgraphs()
+                    .build(),
+                CPUExecutionProvider::default().build(),
+            ])?
             .with_optimization_level(GraphOptimizationLevel::Level3)?
             .with_intra_threads(8)?
             .commit_from_memory(LAYOUT_MODEL_BYTES)?;

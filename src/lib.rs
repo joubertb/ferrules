@@ -15,7 +15,6 @@ pub mod blocks;
 pub mod entities;
 pub mod layout;
 
-#[cfg(target_os = "macos")]
 pub mod ocr;
 
 const IMAGE_PADDING: u32 = 5;
