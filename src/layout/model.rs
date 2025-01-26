@@ -200,14 +200,18 @@ impl ORTLayoutParser {
             let w = bbox[2_usize] / ratio;
             let h = bbox[3_usize] / ratio;
             // Change to (upper-left, lower-right)
-            let x0 = (xc - (w / 2.0)).max(0f32).min(original_width as f32);
-            let y0 = (yc - (h / 2.0)).max(0f32).min(original_height as f32);
+            let x0 = (xc - (w / 2.0)).min(original_width as f32).max(0f32);
+            let y0 = (yc - (h / 2.0)).min(original_height as f32).max(0f32);
             let x1 = (xc + (w / 2.0)).max(0f32).min(original_width as f32);
             let y1 = (yc + (h / 2.0)).max(0f32).min(original_height as f32);
 
-            assert!(x0 <= x1 && x1 <= original_width as f32);
-            assert!(y0 <= y1);
-            assert!(y1 <= original_height as f32);
+            debug_assert!(x0 <= x1 && x1 <= original_width as f32);
+            debug_assert!(y0 <= y1 && y1 <= original_height as f32);
+
+            if x0 > x1 || y0 > y1 {
+                eprintln!("bbox error: ({x0},{y1}), ({x1},{y1})");
+                continue;
+            }
 
             result.push(LayoutBBox {
                 id: bbox_id,
@@ -272,6 +276,7 @@ impl ORTLayoutParser {
             Self::REQUIRED_HEIGHT as f32,
         ); // f32 round
         let resized_img = img.resize_exact(w_new as u32, h_new as u32, FilterType::Triangle);
+        // TODO: reuse this buffer between batches
         let mut input_tensor = Array4::ones([
             1,
             3,

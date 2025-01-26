@@ -26,11 +26,13 @@ pdfium-render = { version = "0.8.27", features = ["static", "bindings"] }
 image = "0.25.5"
 ndarray = "0.16.1"
 plsfix = "0.1.7"
+ort = { version = "=2.0.0-rc.9", features = ["fetch-models"] }
 
 # CLI
 clap = { version = "4.5.23", features = ["derive", "env"] }
 indicatif = "0.17.9"
 colored = "3.0.0"
+memmap2 = "0.9.5"
 
 [target.'cfg(target_os = "macos")'.dependencies]
 ort = { version = "=2.0.0-rc.9", features = ["coreml", "fetch-models"] }
@@ -51,6 +53,7 @@ ort = { version = "=2.0.0-rc.9", features = [
     "half",
     "cuda",
     "tensorrt",
+    "load-dynamic",
 ] }
 
 [dev-dependencies]
@@ -62,7 +65,7 @@ criterion = { version = "0.5", features = ["html_reports"] }
 # harness = false
 
 [[bench]]
-name = "ocr_mac"
+name = "onnx_batch"
 harness = false
 
 [profile.release]

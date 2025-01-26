@@ -2,6 +2,7 @@ use std::{fmt::Write, ops::Range, path::Path, time::Instant};
 
 use indicatif::{ProgressBar, ProgressState, ProgressStyle};
 use itertools::izip;
+use memmap2::Mmap;
 use pdfium_render::prelude::{PdfPage, PdfPageTextChar, PdfRenderConfig, Pdfium};
 use uuid::Uuid;
 
@@ -222,6 +223,26 @@ pub fn parse_pages(
     }
 
     Ok(structured_pages)
+}
+
+fn doc_chunks(
+    n_pages: usize,
+    n_workers: usize,
+    page_range: Option<Range<usize>>,
+) -> Vec<Range<usize>> {
+    let page_range: Vec<usize> = match page_range {
+        Some(range) => range.collect(),
+        None => (0..n_pages).collect(),
+    };
+
+    if page_range.len() > n_workers {
+        page_range
+            .chunks(n_pages / n_workers)
+            .map(|c| (*c.first().unwrap()..*c.last().unwrap()))
+            .collect()
+    } else {
+        vec![(0..n_pages)]
+    }
 }
 
 pub fn parse_document<P: AsRef<Path>>(
