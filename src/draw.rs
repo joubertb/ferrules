@@ -4,13 +4,12 @@ use imageproc::rect::Rect;
 
 use crate::blocks::Block;
 use crate::entities::Line;
+use crate::layout::model::LayoutBBox;
 use crate::ocr::OCRLines;
-
-use super::model::LayoutBBox;
 
 use ab_glyph::FontArc;
 
-static FONT_BYTES: &[u8] = include_bytes!("../../font/Arial.ttf");
+static FONT_BYTES: &[u8] = include_bytes!("../font/Arial.ttf");
 
 const BLOCK_COLOR: [u8; 4] = [209, 139, 0, 255];
 const LAYOUT_COLOR: [u8; 4] = [0, 0, 255, 255];
@@ -24,10 +23,16 @@ fn load_font() -> FontArc {
 pub(crate) fn draw_text_lines(
     lines: &[Line],
     page_img: &DynamicImage,
+    is_ocr: bool,
 ) -> anyhow::Result<ImageBuffer<Rgba<u8>, Vec<u8>>> {
     // Convert the dynamic image to RGBA for in-place drawing.
     let mut out_img = page_img.to_rgba8();
 
+    let color = if is_ocr {
+        Rgba(LINE_PDFIRUM_COLOR)
+    } else {
+        Rgba(LINE_OCR_COLOR)
+    };
     // Iterate over all bounding boxes and draw them.
     for line in lines {
         let x0 = (line.bbox.x0) as i32;
@@ -39,7 +44,7 @@ pub(crate) fn draw_text_lines(
         let height = (y1 - y0).max(1) as u32;
 
         let rect = Rect::at(x0, y0).of_size(width, height);
-        draw_hollow_rect_mut(&mut out_img, rect, Rgba(LINE_PDFIRUM_COLOR));
+        draw_hollow_rect_mut(&mut out_img, rect, color);
     }
 
     Ok(out_img)
@@ -82,6 +87,7 @@ pub(crate) fn draw_layout_bboxes(
     Ok(out_img)
 }
 
+#[allow(dead_code)]
 pub(crate) fn draw_ocr_bboxes(
     bboxes: &[OCRLines],
     page_img: &DynamicImage,

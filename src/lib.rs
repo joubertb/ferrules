@@ -9,6 +9,7 @@ use std::{
 use entities::Document;
 use serde::Serialize;
 
+pub(crate) mod draw;
 pub mod parse;
 
 pub mod blocks;

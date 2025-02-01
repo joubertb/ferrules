@@ -1,30 +1,8 @@
-use std::{fmt::Write, ops::Range, path::Path, time::Instant};
-
-use indicatif::{ProgressBar, ProgressState, ProgressStyle};
-use itertools::izip;
-use memmap2::Mmap;
-use pdfium_render::prelude::{PdfPage, PdfPageTextChar, PdfRenderConfig, Pdfium};
-use uuid::Uuid;
-
 use crate::{
     blocks::{Block, BlockType, ImageBlock, List, TextBlock, Title},
-    entities::{
-        BBox, CharSpan, Document, Element, ElementType, Line, Page, PageID, StructuredPage,
-    },
-    layout::{
-        draw::{draw_blocks, draw_layout_bboxes, draw_ocr_bboxes, draw_text_lines},
-        model::{LayoutBBox, ORTLayoutParser},
-    },
-    ocr::parse_image_ocr,
-    sanitize_doc_name,
+    entities::{Element, ElementType, Line, PageID},
+    layout::model::LayoutBBox,
 };
-
-/// This constant defines the minimum ratio between the area of text lines identified
-/// by the pdfium2 and the area of text regions detected through layout analysis.
-/// If this ratio falls below the threshold of 0.5 (or 50%), it indicates that the page
-/// may not have enough __native__ lines, and therefore should
-/// be considered for OCR to ensure accurate text extraction.
-const MIN_LAYOUT_COVERAGE_THRESHOLD: f32 = 0.5;
 
 /// This constant defines the minimum required intersection ratio between the bounding box of an
 /// OCR-detected text line and a text block detected through layout analysis.
@@ -43,311 +21,6 @@ const LAYOUT_DISTANCE_Y_WEIGHT: f32 = 1.0;
 /// the nearest layout block exceeds this threshold, the line will not be assigned to any block.
 /// This helps prevent incorrect assignments of text lines that are too far from layout blocks.
 const MAXIMUM_ASSIGNMENT_DISTANCE: f32 = 20.0;
-
-fn parse_text_spans<'a>(
-    chars: impl Iterator<Item = PdfPageTextChar<'a>>,
-    page_bbox: &BBox,
-) -> Vec<CharSpan> {
-    let mut spans: Vec<CharSpan> = Vec::new();
-
-    for char in chars {
-        if spans.is_empty() {
-            let span = CharSpan::new_from_char(&char, page_bbox);
-            spans.push(span);
-        } else {
-            let span = spans.last_mut().unwrap();
-            match span.append(&char, page_bbox) {
-                Some(_) => {}
-                None => {
-                    let span = CharSpan::new_from_char(&char, page_bbox);
-                    spans.push(span);
-                }
-            };
-        }
-    }
-
-    spans
-}
-
-fn parse_text_lines(spans: Vec<CharSpan>) -> Vec<Line> {
-    let mut lines = Vec::new();
-    for span in spans {
-        if lines.is_empty() {
-            let line = Line::new_from_span(span);
-            lines.push(line);
-        } else {
-            let line = lines.last_mut().unwrap();
-            if let Err(span) = line.append(span) {
-                let line = Line::new_from_span(span);
-                lines.push(line)
-            }
-        }
-    }
-
-    lines
-}
-
-pub fn parse_pages(
-    pdf_pages: &mut [(PageID, PdfPage)],
-    layout_model: &ORTLayoutParser,
-    tmp_dir: &Path,
-    flatten_pdf: bool,
-    debug: bool,
-    pb: &ProgressBar,
-) -> anyhow::Result<Vec<StructuredPage>> {
-    // TODO: deal with document embedded forms?
-    for (_, page) in pdf_pages.iter_mut() {
-        if flatten_pdf {
-            page.flatten()?;
-        }
-    }
-    let rescale_factors: Vec<f32> = pdf_pages
-        .iter()
-        .map(|(_, page)| {
-            let scale_w = ORTLayoutParser::REQUIRED_WIDTH as f32 / page.width().value;
-            let scale_h = ORTLayoutParser::REQUIRED_HEIGHT as f32 / page.height().value;
-            f32::min(scale_h, scale_w)
-        })
-        .collect();
-
-    let page_images: Result<Vec<_>, _> = pdf_pages
-        .iter()
-        .zip(rescale_factors.iter())
-        .map(|((_, page), rescale_factor)| {
-            page.render_with_config(
-                &PdfRenderConfig::default().scale_page_by_factor(*rescale_factor),
-            )
-            .map(|bitmap| bitmap.as_image())
-        })
-        .collect();
-    let page_images = page_images?;
-
-    let downscale_factors = rescale_factors
-        .iter()
-        .map(|f| 1f32 / *f)
-        .collect::<Vec<f32>>();
-
-    let pages_layout = layout_model.parse_layout_batch(&page_images, &downscale_factors)?;
-
-    let mut structured_pages = Vec::with_capacity(pdf_pages.len());
-
-    for ((page_idx, page), page_layout, page_image, downscale_factor) in izip![
-        pdf_pages.iter(),
-        &pages_layout,
-        page_images,
-        &downscale_factors
-    ] {
-        let page_bbox = BBox {
-            x0: 0f32,
-            y0: 0f32,
-            x1: page.width().value,
-            y1: page.height().value,
-        };
-
-        // let page_rotation = page.rotation().unwrap_or(PdfPageRenderRotation::None);
-        let text_spans = parse_text_spans(page.text()?.chars().iter(), &page_bbox);
-        let text_lines = parse_text_lines(text_spans);
-
-        let text_layout_box: Vec<&LayoutBBox> =
-            page_layout.iter().filter(|b| b.is_text_block()).collect();
-        let need_ocr = page_needs_ocr(&text_layout_box, &text_lines);
-
-        let ocr_result = if need_ocr {
-            parse_image_ocr(&page_image, *downscale_factor).ok()
-        } else {
-            None
-        };
-
-        let text_lines = if need_ocr && ocr_result.is_some() {
-            let lines = ocr_result
-                .as_ref()
-                .unwrap()
-                .iter()
-                .map(|ocr_line| ocr_line.to_line())
-                .collect::<Vec<_>>();
-            lines
-        } else {
-            text_lines
-        };
-
-        // Merging elements with layout
-        let mut elements = merge_lines_layout(page_layout, &text_lines, *page_idx)?;
-        let merged_layout_blocks_ids = elements
-            .iter()
-            .map(|e| e.layout_block_id)
-            .collect::<Vec<_>>();
-        let unmerged_layout_boxes: Vec<&LayoutBBox> = page_layout
-            .iter()
-            .filter(|&b| !merged_layout_blocks_ids.contains(&b.id))
-            .collect();
-
-        merge_remaining(&mut elements, &unmerged_layout_boxes, *page_idx);
-
-        let page_image = page
-            .render_with_config(&PdfRenderConfig::default().scale_page_by_factor(1f32))
-            .map(|bitmap| bitmap.as_image())?;
-        if debug {
-            // TODO: add feature compile debug
-            let output_file = tmp_dir.join(format!("page_{}.png", page_idx));
-            let final_output_file = tmp_dir.join(format!("page_blocks_{}.png", page_idx));
-            let out_img = draw_text_lines(&text_lines, &page_image)?;
-            let out_img = draw_layout_bboxes(page_layout, &out_img.into())?;
-            // Draw the final prediction -
-            let blocks = merge_elements_into_blocks(elements.clone())?;
-
-            let final_img = draw_blocks(&blocks, &page_image)?;
-
-            if let Some(ocr_result) = ocr_result {
-                let out_img = draw_ocr_bboxes(&ocr_result, &out_img.into())?;
-                out_img.save(output_file)?;
-            } else {
-                out_img.save(output_file)?;
-            }
-
-            final_img.save(final_output_file)?;
-        };
-
-        let structured_page = StructuredPage {
-            id: *page_idx,
-            width: page_bbox.width(),
-            height: page_bbox.height(),
-            image: page_image,
-            elements,
-            need_ocr,
-        };
-
-        structured_pages.push(structured_page);
-
-        pb.set_message(format!("Page #{}", *page_idx + 1));
-        pb.inc(1u64);
-    }
-
-    Ok(structured_pages)
-}
-
-fn doc_chunks(
-    n_pages: usize,
-    n_workers: usize,
-    page_range: Option<Range<usize>>,
-) -> Vec<Range<usize>> {
-    let page_range: Vec<usize> = match page_range {
-        Some(range) => range.collect(),
-        None => (0..n_pages).collect(),
-    };
-
-    if page_range.len() > n_workers {
-        page_range
-            .chunks(n_pages / n_workers)
-            .map(|c| (*c.first().unwrap()..*c.last().unwrap()))
-            .collect()
-    } else {
-        vec![(0..n_pages)]
-    }
-}
-
-pub fn parse_document<P: AsRef<Path>>(
-    path: P,
-    layout_model: &ORTLayoutParser,
-    password: Option<&str>,
-    flatten_pdf: bool,
-    page_range: Option<Range<usize>>,
-    debug: bool,
-) -> anyhow::Result<Document<P>> {
-    let start_time = Instant::now();
-    let doc_name = path
-        .as_ref()
-        .file_name()
-        .and_then(|name| name.to_str())
-        .and_then(|name| name.split('.').next().map(|s| s.to_owned()))
-        .unwrap_or(Uuid::new_v4().to_string());
-
-    let tmp_dir = std::env::temp_dir().join(format!("ferrules-{}", sanitize_doc_name(&doc_name)));
-    if debug {
-        std::fs::create_dir_all(&tmp_dir)?;
-    }
-
-    let pdfium = Pdfium::new(Pdfium::bind_to_statically_linked_library()?);
-
-    let mut document = pdfium.load_pdf_from_file(&path, password)?;
-
-    let mut pages: Vec<_> = document.pages_mut().iter().enumerate().collect();
-
-    let mut pages = if let Some(range) = page_range {
-        if range.end > pages.len() {
-            anyhow::bail!(
-                "Page range end ({}) exceeds document length ({})",
-                range.end,
-                pages.len()
-            );
-        }
-        pages.drain(range).collect()
-    } else {
-        pages
-    };
-
-    let chunk_size = std::thread::available_parallelism()
-        .map(|c| c.get())
-        .unwrap_or(4usize);
-
-    let pb = ProgressBar::new(pages.len() as u64);
-    pb.set_style(
-        ProgressStyle::with_template(
-            "{spinner:.green} [{elapsed_precise}] [{bar:40.cyan/blue}] {msg}",
-        )
-        .unwrap()
-        .with_key("eta", |state: &ProgressState, w: &mut dyn Write| {
-            write!(w, "{:.1}s", state.eta().as_secs_f64()).unwrap()
-        })
-        .progress_chars("#>-"),
-    );
-
-    let parsed_pages = pages
-        .chunks_mut(chunk_size)
-        .flat_map(|chunk| parse_pages(chunk, layout_model, &tmp_dir, flatten_pdf, debug, &pb))
-        .flatten()
-        .collect::<Vec<_>>();
-
-    // TODO: clone might be huge here
-    let all_elements = parsed_pages
-        .iter()
-        .flat_map(|p| p.elements.clone())
-        .collect::<Vec<_>>();
-
-    let pages = parsed_pages
-        .into_iter()
-        .map(|sp| Page {
-            id: sp.id,
-            width: sp.width,
-            height: sp.height,
-            need_ocr: sp.need_ocr,
-            image: sp.image,
-        })
-        .collect();
-
-    let blocks = merge_elements_into_blocks(all_elements)?;
-
-    let duration = Instant::now().duration_since(start_time).as_millis();
-    pb.finish_with_message(format!("Parsed document in {}ms", duration));
-
-    Ok(Document {
-        path,
-        doc_name,
-        pages,
-        blocks,
-        debug_path: if debug { Some(tmp_dir) } else { None },
-    })
-}
-
-fn page_needs_ocr(text_boxes: &[&LayoutBBox], text_lines: &[Line]) -> bool {
-    let line_area = text_lines.iter().map(|l| l.bbox.area()).sum::<f32>();
-    let text_layoutbbox_area = text_boxes.iter().map(|l| l.bbox.area()).sum::<f32>();
-
-    if text_layoutbbox_area > 0f32 {
-        line_area / text_layoutbbox_area < MIN_LAYOUT_COVERAGE_THRESHOLD
-    } else {
-        true
-    }
-}
 
 fn merge_or_create_elements(
     elements: &mut Vec<Element>,
@@ -385,7 +58,7 @@ fn merge_or_create_elements(
 /// and merges these lines into blocks. The merging is done based on the intersection
 /// of each line with the layout bounding boxes. The function prioritizes maintaining
 /// the order of the lines, rather than the layout blocks.
-fn merge_lines_layout(
+pub(crate) fn merge_lines_layout(
     layout_boxes: &[LayoutBBox],
     lines: &[Line],
     page_id: usize,
@@ -482,7 +155,11 @@ fn merge_lines_layout(
     Ok(headers)
 }
 
-fn merge_remaining(elements: &mut Vec<Element>, remaining: &[&LayoutBBox], page_id: PageID) {
+pub(crate) fn merge_remaining(
+    elements: &mut Vec<Element>,
+    remaining: &[&LayoutBBox],
+    page_id: PageID,
+) {
     for layout_box in remaining {
         let closest_block = elements
             .iter()
@@ -510,7 +187,7 @@ fn merge_remaining(elements: &mut Vec<Element>, remaining: &[&LayoutBBox], page_
     }
 }
 
-fn merge_elements_into_blocks(elements: Vec<Element>) -> anyhow::Result<Vec<Block>> {
+pub(crate) fn merge_elements_into_blocks(elements: Vec<Element>) -> anyhow::Result<Vec<Block>> {
     let mut element_it = elements.into_iter().peekable();
 
     let mut blocks = Vec::new();
@@ -741,10 +418,9 @@ fn merge_elements_into_blocks(elements: Vec<Element>) -> anyhow::Result<Vec<Bloc
 #[cfg(test)]
 mod tests {
 
-    use crate::entities::ElementText;
-
     use super::*;
-    use {BBox, Element, ElementType};
+    use crate::entities::BBox;
+    use crate::entities::ElementText;
 
     fn create_text_element(id: usize, page_id: usize, text: &str, bbox: BBox) -> Element {
         Element {

@@ -1,4 +1,4 @@
-// use std::path::Path;
+use std::{sync::Arc, time::Instant};
 
 use anyhow::Context;
 use image::{imageops::FilterType, DynamicImage, GenericImageView};
@@ -13,7 +13,7 @@ use ort::{
 };
 use rayon::prelude::*;
 
-use crate::entities::BBox;
+use crate::entities::{BBox, PageID};
 
 pub const LAYOUT_MODEL_BYTES: &[u8] = include_bytes!("../../models/yolov8s-doclaynet.onnx");
 
@@ -56,10 +56,59 @@ impl LayoutBBox {
 }
 
 #[derive(Debug)]
+pub struct Metadata {
+    pub(crate) response_tx: tokio::sync::oneshot::Sender<anyhow::Result<Vec<LayoutBBox>>>,
+    pub(crate) queue_time: Instant,
+}
+
+#[derive(Debug)]
+pub(crate) struct ParseLayoutRequest {
+    pub(crate) page_id: PageID,
+    pub(crate) page_image: Arc<DynamicImage>,
+    pub(crate) downscale_factor: f32,
+    pub(crate) metadata: Metadata,
+}
+
+#[derive(Debug)]
 pub struct ORTLayoutParser {
     session: Session,
     input_name: String,
     output_name: String,
+}
+
+impl ORTLayoutParser {
+    pub async fn parse_layout_async(
+        &self,
+        page_img: &DynamicImage,
+        bbox_rescale_factor: f32,
+    ) -> anyhow::Result<Vec<LayoutBBox>> {
+        let (img_width, img_height) = (page_img.width(), page_img.height());
+        let input = self.preprocess(page_img);
+        let output_tensor = self.run_async(input).await?;
+        let mut bboxes =
+            self.extract_bboxes(output_tensor, img_width, img_height, bbox_rescale_factor);
+        nms(&mut bboxes, Self::IOU_THRESHOLD);
+        Ok(bboxes)
+    }
+
+    async fn run_async(
+        &self,
+        input: ArrayBase<OwnedRepr<f32>, Dim<[usize; 4]>>,
+    ) -> anyhow::Result<ArrayBase<OwnedRepr<f32>, Dim<[usize; 3]>>> {
+        let outputs = &self.session.run_async(ort::inputs![input]?)?.await?;
+
+        let output_tensor = outputs
+            .get(&self.output_name)
+            .context("can't get the value of first output")?
+            .try_extract_tensor::<f32>()?;
+
+        let output_tensor = output_tensor
+            .to_shape(Self::OUTPUT_SIZE)
+            .unwrap()
+            .to_owned();
+
+        Ok(output_tensor)
+    }
 }
 
 impl ORTLayoutParser {
@@ -92,7 +141,7 @@ impl ORTLayoutParser {
                 CPUExecutionProvider::default().build(),
             ])?
             .with_optimization_level(GraphOptimizationLevel::Level3)?
-            .with_intra_threads(8)?
+            .with_intra_threads(14)?
             .commit_from_memory(LAYOUT_MODEL_BYTES)?;
 
         let input_name = session
@@ -120,9 +169,7 @@ impl ORTLayoutParser {
         &self,
         input: ArrayBase<OwnedRepr<f32>, Dim<[usize; 4]>>,
     ) -> anyhow::Result<ArrayBase<OwnedRepr<f32>, Dim<[usize; 3]>>> {
-        let outputs = &self
-            .session
-            .run(ort::inputs![&self.input_name=> input.view()]?)?;
+        let outputs = &self.session.run(ort::inputs![input]?)?;
 
         let output_tensor = outputs
             .get(&self.output_name)
