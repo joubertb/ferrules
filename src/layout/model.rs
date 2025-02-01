@@ -141,7 +141,7 @@ impl ORTLayoutParser {
                 CPUExecutionProvider::default().build(),
             ])?
             .with_optimization_level(GraphOptimizationLevel::Level3)?
-            .with_intra_threads(8)?
+            .with_intra_threads(14)?
             .commit_from_memory(LAYOUT_MODEL_BYTES)?;
 
         let input_name = session

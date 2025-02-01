@@ -17,7 +17,7 @@ impl ParseLayoutQueue {
     pub fn new(layout_parser: Arc<ORTLayoutParser>) -> Self {
         let (queue_sender, queue_receiver) = mpsc::channel(MAX_CONCURRENT_LAYOUT_REQS);
 
-        std::thread::spawn(move || start_layout_parser(layout_parser, queue_receiver));
+        tokio::spawn(start_layout_parser(layout_parser, queue_receiver));
         Self {
             queue: queue_sender,
         }
@@ -31,7 +31,7 @@ impl ParseLayoutQueue {
     }
 }
 
-fn start_layout_parser(
+async fn start_layout_parser(
     layout_parser: Arc<ORTLayoutParser>,
     mut input_rx: Receiver<ParseLayoutRequest>,
 ) {
@@ -41,7 +41,7 @@ fn start_layout_parser(
         page_image,
         downscale_factor,
         metadata,
-    }) = input_rx.blocking_recv()
+    }) = input_rx.recv().await
     {
         let parser = Arc::clone(&layout_parser);
         // TODO:  create session options to cancel inference if sender withdraws

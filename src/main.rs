@@ -1,5 +1,5 @@
 use clap::Parser;
-use ferrules::{layout::model::ORTLayoutParser, parse::parse_document, save_parsed_document};
+use ferrules::{parse::document::parse_document_async, save_parsed_document};
 use std::{ops::Range, path::PathBuf};
 
 #[derive(Parser, Debug)]
@@ -108,21 +108,13 @@ fn parse_page_range(range_str: &str) -> anyhow::Result<Range<usize>> {
 async fn main() {
     let args = Args::parse();
 
-    let layout_model = ORTLayoutParser::new().expect("can't load layout model");
-
     let page_range = args
         .page_range
         .map(|page_range_str| parse_page_range(&page_range_str).unwrap());
 
-    let doc = parse_document(
-        &args.file_path,
-        &layout_model,
-        None,
-        true,
-        page_range,
-        args.debug,
-    )
-    .unwrap();
+    let doc = parse_document_async(&args.file_path, None, true, page_range, args.debug)
+        .await
+        .unwrap();
 
     save_parsed_document(&doc, args.output_dir.as_ref(), args.save_images).unwrap();
 }

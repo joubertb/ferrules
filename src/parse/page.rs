@@ -41,7 +41,7 @@ fn page_needs_ocr(text_boxes: &[&LayoutBBox], text_lines: &[Line]) -> bool {
 }
 
 fn build_page_elements(
-    page_layout: &Vec<LayoutBBox>,
+    page_layout: &[LayoutBBox],
     text_lines: &[Line],
     page_idx: PageID,
 ) -> anyhow::Result<Vec<Element>> {
