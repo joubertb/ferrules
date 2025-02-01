@@ -33,6 +33,8 @@ clap = { version = "4.5.23", features = ["derive", "env"] }
 indicatif = "0.17.9"
 colored = "3.0.0"
 memmap2 = "0.9.5"
+tokio = { version = "1.43.0", features = ["full"] }
+futures = "0.3.31"
 
 [target.'cfg(target_os = "macos")'.dependencies]
 ort = { version = "=2.0.0-rc.9", features = ["coreml", "fetch-models"] }

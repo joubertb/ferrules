@@ -1,6 +1,13 @@
 use image::DynamicImage;
 
 use crate::entities::{BBox, Line};
+
+#[cfg(target_os = "linux")]
+use ocr_linux::parse_image_ocr as parse_image_ocr_inner;
+
+#[cfg(target_os = "macos")]
+use ocr_mac::parse_image_ocr as parse_image_ocr_inner;
+
 #[derive(Debug)]
 pub struct OCRLines {
     pub text: String,
@@ -18,11 +25,6 @@ impl OCRLines {
         }
     }
 }
-#[cfg(not(target_os = "macos"))]
-use ocr_linux::parse_image_ocr as parse_image_ocr_inner;
-
-#[cfg(target_os = "macos")]
-use ocr_mac::parse_image_ocr as parse_image_ocr_inner;
 
 pub(crate) fn parse_image_ocr(
     image: &DynamicImage,

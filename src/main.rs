@@ -104,7 +104,8 @@ fn parse_page_range(range_str: &str) -> anyhow::Result<Range<usize>> {
     }
 }
 
-fn main() {
+#[tokio::main]
+async fn main() {
     let args = Args::parse();
 
     let layout_model = ORTLayoutParser::new().expect("can't load layout model");
