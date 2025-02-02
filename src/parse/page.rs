@@ -229,7 +229,7 @@ where
             .map(|bitmap| bitmap.as_image())?,
     );
 
-    let (layout_tx, layout_rx) = flume::bounded(1);
+    let (layout_tx, layout_rx) = tokio::sync::oneshot::channel();
     let layout_req = ParseLayoutRequest {
         page_id,
         page_image: Arc::clone(&page_image),
@@ -243,7 +243,6 @@ where
     layout_queue.push(layout_req).await?;
 
     let page_layout = layout_rx
-        .recv_async()
         .await
         .context("error receiving layout on oneshot channel")?
         .context("error parsing page")?;

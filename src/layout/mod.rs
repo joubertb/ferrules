@@ -60,8 +60,5 @@ async fn handle_request(parser: Arc<ORTLayoutParser>, req: ParseLayoutRequest) {
     let inference_duration = start.elapsed().as_millis();
     tracing::info!("layout inference time for page {page_id} took: {inference_duration} ms");
     // Once you have the result:
-    let _ = metadata
-        .response_tx
-        .send_async(layout_result.unwrap())
-        .await;
+    let _ = metadata.response_tx.send(layout_result.unwrap());
 }
