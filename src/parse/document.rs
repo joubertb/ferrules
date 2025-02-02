@@ -2,6 +2,7 @@ use std::{fmt::Write, ops::Range, path::Path, sync::Arc, time::Instant};
 
 use futures::future::join_all;
 use indicatif::{ProgressBar, ProgressState, ProgressStyle};
+use itertools::Itertools;
 use pdfium_render::prelude::Pdfium;
 use uuid::Uuid;
 
@@ -66,7 +67,6 @@ pub async fn parse_document_async<P: AsRef<Path>>(
 
     // Start layout model in separate task
     let layout_model = Arc::new(ORTLayoutParser::new().expect("can't load layout model"));
-
     let layout_queue = ParseLayoutQueue::new(layout_model);
 
     let parsed_pages_fut = pages
@@ -88,7 +88,15 @@ pub async fn parse_document_async<P: AsRef<Path>>(
         .collect::<Vec<_>>();
 
     let parsed_pages: Result<Vec<_>, _> = join_all(parsed_pages_fut).await.into_iter().collect();
-    let parsed_pages = parsed_pages.expect("error occured while parsing pages");
+    let parsed_pages = parsed_pages
+        .map(|ppages| {
+            ppages
+                .into_iter()
+                .sorted_by(|p1, p2| p1.id.cmp(&p2.id))
+                .collect::<Vec<_>>()
+        })
+        .expect("error occured while parsing pages");
+
     // TODO: clone might be huge here
     let all_elements = parsed_pages
         .iter()

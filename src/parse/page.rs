@@ -203,7 +203,7 @@ pub fn parse_pages(
 }
 
 pub async fn parse_page_async<'a, F>(
-    page_idx: PageID,
+    page_id: PageID,
     page: &mut PdfPage<'a>,
     tmp_dir: &Path,
     flatten_pdf: bool,
@@ -232,7 +232,7 @@ where
 
     let (layout_tx, layout_rx) = oneshot::channel();
     let layout_req = ParseLayoutRequest {
-        page_id: page_idx,
+        page_id,
         page_image: Arc::clone(&page_image),
         downscale_factor,
         metadata: Metadata {
@@ -240,6 +240,7 @@ where
             queue_time: Instant::now(),
         },
     };
+
     layout_queue.push(layout_req).await?;
 
     let page_layout = layout_rx
@@ -264,7 +265,7 @@ where
     )?;
 
     // Merging elements with layout
-    let elements = build_page_elements(&page_layout, &text_lines, page_idx)?;
+    let elements = build_page_elements(&page_layout, &text_lines, page_id)?;
 
     // Rerender page image
     let page_image = page
@@ -274,7 +275,7 @@ where
     if debug {
         debug_page(
             tmp_dir,
-            page_idx,
+            page_id,
             &page_image,
             &text_lines,
             need_ocr,
@@ -284,7 +285,7 @@ where
     };
 
     let structured_page = StructuredPage {
-        id: page_idx,
+        id: page_id,
         width: page_bbox.width(),
         height: page_bbox.height(),
         image: page_image,

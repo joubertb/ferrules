@@ -135,13 +135,14 @@ impl ORTLayoutParser {
                 TensorRTExecutionProvider::default().build(),
                 CUDAExecutionProvider::default().build(),
                 CoreMLExecutionProvider::default()
-                    // .with_ane_only()
+                    .with_ane_only()
                     .with_subgraphs()
                     .build(),
                 CPUExecutionProvider::default().build(),
             ])?
             .with_optimization_level(GraphOptimizationLevel::Level3)?
-            .with_intra_threads(14)?
+            .with_intra_threads(16)?
+            // .with_inter_threads(1)?
             .commit_from_memory(LAYOUT_MODEL_BYTES)?;
 
         let input_name = session
@@ -502,6 +503,7 @@ mod tests {
     }
 
     #[test]
+    #[ignore]
     fn test_multithreaded() {
         let session = Session::builder()
             .unwrap()

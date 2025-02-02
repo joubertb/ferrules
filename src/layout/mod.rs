@@ -1,4 +1,4 @@
-use std::sync::Arc;
+use std::{sync::Arc, time::Instant};
 
 use anyhow::Context;
 use model::{ORTLayoutParser, ParseLayoutRequest};
@@ -37,18 +37,22 @@ async fn start_layout_parser(
 ) {
     // TODO:  Batch of requests can be sent
     while let Some(ParseLayoutRequest {
-        page_id: _,
+        page_id,
         page_image,
         downscale_factor,
         metadata,
     }) = input_rx.recv().await
     {
+        let queue_time = metadata.queue_time.elapsed().as_micros();
         let parser = Arc::clone(&layout_parser);
         // TODO:  create session options to cancel inference if sender withdraws
+        // TODO: Add metadata to inference response
         tokio::spawn(async move {
+            let start = Instant::now();
             let layout_result = parser
                 .parse_layout_async(&page_image, downscale_factor)
                 .await;
+            let inference_duration = start.elapsed().as_millis();
             metadata
                 .response_tx
                 .send(layout_result)
