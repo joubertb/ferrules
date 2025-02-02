@@ -52,13 +52,11 @@ async fn handle_request(parser: Arc<ORTLayoutParser>, req: ParseLayoutRequest) {
     } = req;
 
     let start = Instant::now();
-    let layout_result = tokio::task::spawn_blocking(move || {
-        // work
-        parser.parse_layout(&page_image, downscale_factor)
-    })
-    .await;
+    let layout_result = parser
+        .parse_layout_async(&page_image, downscale_factor)
+        .await;
     let inference_duration = start.elapsed().as_millis();
     tracing::info!("layout inference time for page {page_id} took: {inference_duration} ms");
     // Once you have the result:
-    let _ = metadata.response_tx.send(layout_result.unwrap());
+    let _ = metadata.response_tx.send(layout_result);
 }
