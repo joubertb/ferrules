@@ -135,12 +135,12 @@ impl ORTLayoutParser {
     pub fn new() -> anyhow::Result<Self> {
         let session = Session::builder()?
             .with_execution_providers([
-                // TensorRTExecutionProvider::default().build(),
-                // CUDAExecutionProvider::default().build(),
-                // CoreMLExecutionProvider::default()
-                //     .with_ane_only()
-                //     .with_subgraphs()
-                //     .build(),
+                TensorRTExecutionProvider::default().build(),
+                CUDAExecutionProvider::default().build(),
+                CoreMLExecutionProvider::default()
+                    .with_ane_only()
+                    .with_subgraphs()
+                    .build(),
                 CPUExecutionProvider::default().build(),
             ])?
             .with_optimization_level(GraphOptimizationLevel::Level1)?
