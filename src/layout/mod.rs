@@ -6,7 +6,7 @@ use tokio::sync::mpsc::{self, Receiver, Sender};
 
 pub mod model;
 
-const MAX_CONCURRENT_LAYOUT_REQS: usize = 64;
+const MAX_CONCURRENT_LAYOUT_REQS: usize = ORTLayoutParser::ORT_INTRATHREAD;
 
 #[derive(Debug, Clone)]
 pub struct ParseLayoutQueue {
@@ -17,7 +17,7 @@ impl ParseLayoutQueue {
     pub fn new(layout_parser: Arc<ORTLayoutParser>) -> Self {
         let (queue_sender, queue_receiver) = mpsc::channel(MAX_CONCURRENT_LAYOUT_REQS);
 
-        tokio::spawn(start_layout_parser(layout_parser, queue_receiver));
+        tokio::task::spawn(start_layout_parser(layout_parser, queue_receiver));
         Self {
             queue: queue_sender,
         }
@@ -35,28 +35,33 @@ async fn start_layout_parser(
     layout_parser: Arc<ORTLayoutParser>,
     mut input_rx: Receiver<ParseLayoutRequest>,
 ) {
-    // TODO:  Batch of requests can be sent
-    while let Some(ParseLayoutRequest {
+    while let Some(req) = input_rx.recv().await {
+        let queue_time = req.metadata.queue_time.elapsed().as_micros();
+        let page_id = req.page_id;
+        tracing::info!("layout request queue time for page {page_id} took: {queue_time} us");
+        tokio::spawn(handle_request(layout_parser.clone(), req));
+    }
+}
+
+async fn handle_request(parser: Arc<ORTLayoutParser>, req: ParseLayoutRequest) {
+    let ParseLayoutRequest {
         page_id,
         page_image,
         downscale_factor,
         metadata,
-    }) = input_rx.recv().await
-    {
-        let queue_time = metadata.queue_time.elapsed().as_micros();
-        let parser = Arc::clone(&layout_parser);
-        // TODO:  create session options to cancel inference if sender withdraws
-        // TODO: Add metadata to inference response
-        tokio::spawn(async move {
-            let start = Instant::now();
-            let layout_result = parser
-                .parse_layout_async(&page_image, downscale_factor)
-                .await;
-            let inference_duration = start.elapsed().as_millis();
-            metadata
-                .response_tx
-                .send(layout_result)
-                .expect("can't send layout result");
-        });
-    }
+    } = req;
+
+    let start = Instant::now();
+    let layout_result = tokio::task::spawn_blocking(move || {
+        // work
+        parser.parse_layout(&page_image, downscale_factor)
+    })
+    .await;
+    let inference_duration = start.elapsed().as_millis();
+    tracing::info!("layout inference time for page {page_id} took: {inference_duration} ms");
+    // Once you have the result:
+    let _ = metadata
+        .response_tx
+        .send_async(layout_result.unwrap())
+        .await;
 }

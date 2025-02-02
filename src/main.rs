@@ -1,6 +1,9 @@
 use clap::Parser;
 use ferrules::{parse::document::parse_document_async, save_parsed_document};
 use std::{ops::Range, path::PathBuf};
+use tracing_subscriber::{
+    fmt::format::FmtSpan, layer::SubscriberExt, util::SubscriberInitExt, EnvFilter,
+};
 
 #[derive(Parser, Debug)]
 #[command(
@@ -106,6 +109,12 @@ fn parse_page_range(range_str: &str) -> anyhow::Result<Range<usize>> {
 
 #[tokio::main(flavor = "multi_thread")]
 async fn main() {
+    let fmt_subscriber = tracing_subscriber::fmt::layer().with_span_events(FmtSpan::FULL);
+    tracing_subscriber::registry()
+        .with(fmt_subscriber)
+        .with(EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into()))
+        .init();
+
     let args = Args::parse();
 
     let page_range = args

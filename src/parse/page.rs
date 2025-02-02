@@ -5,7 +5,6 @@ use image::DynamicImage;
 use indicatif::ProgressBar;
 use itertools::izip;
 use pdfium_render::prelude::{PdfPage, PdfRenderConfig};
-use tokio::sync::oneshot;
 
 use crate::{
     draw::{draw_blocks, draw_layout_bboxes, draw_text_lines},
@@ -230,7 +229,7 @@ where
             .map(|bitmap| bitmap.as_image())?,
     );
 
-    let (layout_tx, layout_rx) = oneshot::channel();
+    let (layout_tx, layout_rx) = flume::bounded(1);
     let layout_req = ParseLayoutRequest {
         page_id,
         page_image: Arc::clone(&page_image),
@@ -244,9 +243,12 @@ where
     layout_queue.push(layout_req).await?;
 
     let page_layout = layout_rx
+        .recv_async()
         .await
-        .context("error receiving layout on channel")?
+        .context("error receiving layout on oneshot channel")?
         .context("error parsing page")?;
+
+    tracing::info!("Received layout parsing result for {page_id}");
 
     let page_bbox = BBox {
         x0: 0f32,
@@ -267,7 +269,7 @@ where
     // Merging elements with layout
     let elements = build_page_elements(&page_layout, &text_lines, page_id)?;
 
-    // Rerender page image
+    // Rerender page image at scale 1
     let page_image = page
         .render_with_config(&PdfRenderConfig::default().scale_page_by_factor(1f32))
         .map(|bitmap| bitmap.as_image())?;

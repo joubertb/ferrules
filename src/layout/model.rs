@@ -1,6 +1,7 @@
 use std::{sync::Arc, time::Instant};
 
 use anyhow::Context;
+use flume::Sender;
 use image::{imageops::FilterType, DynamicImage, GenericImageView};
 use lazy_static::lazy_static;
 use ndarray::{s, Array4, ArrayBase, Axis, Dim, OwnedRepr};
@@ -57,7 +58,7 @@ impl LayoutBBox {
 
 #[derive(Debug)]
 pub struct Metadata {
-    pub(crate) response_tx: tokio::sync::oneshot::Sender<anyhow::Result<Vec<LayoutBBox>>>,
+    pub(crate) response_tx: Sender<anyhow::Result<Vec<LayoutBBox>>>,
     pub(crate) queue_time: Instant,
 }
 
@@ -72,7 +73,6 @@ pub(crate) struct ParseLayoutRequest {
 #[derive(Debug)]
 pub struct ORTLayoutParser {
     session: Session,
-    input_name: String,
     output_name: String,
 }
 
@@ -129,6 +129,9 @@ impl ORTLayoutParser {
     /// It determines the overlap between bounding boxes before suppression.
     pub const IOU_THRESHOLD: f32 = 0.8;
 
+    pub const ORT_INTRATHREAD: usize = 1;
+    pub const ORT_INTERTHREAD: usize = 1;
+
     pub fn new() -> anyhow::Result<Self> {
         let session = Session::builder()?
             .with_execution_providers([
@@ -140,17 +143,10 @@ impl ORTLayoutParser {
                     .build(),
                 CPUExecutionProvider::default().build(),
             ])?
-            .with_optimization_level(GraphOptimizationLevel::Level3)?
-            .with_intra_threads(16)?
-            // .with_inter_threads(1)?
+            .with_optimization_level(GraphOptimizationLevel::Level1)?
+            .with_intra_threads(Self::ORT_INTRATHREAD)?
+            .with_inter_threads(Self::ORT_INTERTHREAD)?
             .commit_from_memory(LAYOUT_MODEL_BYTES)?;
-
-        let input_name = session
-            .inputs
-            .first()
-            .map(|i| &i.name)
-            .context("can't find name for first input")?
-            .to_owned();
 
         let output_name = session
             .outputs
@@ -161,7 +157,6 @@ impl ORTLayoutParser {
 
         Ok(Self {
             session,
-            input_name,
             output_name,
         })
     }

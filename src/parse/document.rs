@@ -3,11 +3,11 @@ use std::{fmt::Write, ops::Range, path::Path, sync::Arc, time::Instant};
 use futures::future::join_all;
 use indicatif::{ProgressBar, ProgressState, ProgressStyle};
 use itertools::Itertools;
-use pdfium_render::prelude::Pdfium;
+use pdfium_render::prelude::{PdfPage, Pdfium};
 use uuid::Uuid;
 
 use crate::{
-    entities::{Document, Page},
+    entities::{Document, Page, PageID, StructuredPage},
     layout::{model::ORTLayoutParser, ParseLayoutQueue},
     sanitize_doc_name,
 };
@@ -16,6 +16,86 @@ use super::{
     merge::merge_elements_into_blocks,
     page::{parse_page_async, parse_pages},
 };
+
+use futures::stream::FuturesUnordered;
+use futures::StreamExt;
+
+pub async fn parse_document_pages_unordered<'a>(
+    pages: &mut [(PageID, PdfPage<'a>)],
+    layout_queue: ParseLayoutQueue,
+    tmp_dir: &Path,
+    flatten_pdf: bool,
+    debug: bool,
+    pb: ProgressBar,
+) -> Vec<StructuredPage> {
+    let mut tasks = FuturesUnordered::new();
+    for (page_id, pdf_page) in pages {
+        tasks.push(parse_page_async(
+            *page_id,
+            pdf_page,
+            tmp_dir,
+            flatten_pdf,
+            layout_queue.clone(),
+            debug,
+            |_s| {
+                pb.set_message(format!("Page #{}", *page_id + 1));
+                pb.inc(1u64);
+            },
+        ));
+    }
+
+    let mut parsed_pages = Vec::new();
+    while let Some(result) = tasks.next().await {
+        // This page’s parse just finished, handle it now.
+        match result {
+            Ok(page) => {
+                parsed_pages.push(page);
+            }
+            Err(e) => {
+                tracing::error!("Error parsing page : {e:?}")
+            }
+        }
+    }
+    parsed_pages
+}
+
+pub async fn parse_document_pages<'a>(
+    pages: &mut [(PageID, PdfPage<'a>)],
+    layout_queue: ParseLayoutQueue,
+    tmp_dir: &Path,
+    flatten_pdf: bool,
+    debug: bool,
+    pb: ProgressBar,
+) -> Vec<StructuredPage> {
+    let parsed_pages_fut = pages
+        .iter_mut()
+        .map(|(page_idx, pdf_page)| {
+            parse_page_async(
+                *page_idx,
+                pdf_page,
+                tmp_dir,
+                flatten_pdf,
+                layout_queue.clone(),
+                debug,
+                |_s| {
+                    pb.set_message(format!("Page #{}", *page_idx + 1));
+                    pb.inc(1u64);
+                },
+            )
+        })
+        .collect::<Vec<_>>();
+
+    let parsed_pages: Result<Vec<_>, _> = join_all(parsed_pages_fut).await.into_iter().collect();
+
+    parsed_pages
+        .map(|ppages| {
+            ppages
+                .into_iter()
+                .sorted_by(|p1, p2| p1.id.cmp(&p2.id))
+                .collect::<Vec<_>>()
+        })
+        .expect("error occured while parsing pages")
+}
 
 pub async fn parse_document_async<P: AsRef<Path>>(
     path: P,
@@ -69,37 +149,19 @@ pub async fn parse_document_async<P: AsRef<Path>>(
     let layout_model = Arc::new(ORTLayoutParser::new().expect("can't load layout model"));
     let layout_queue = ParseLayoutQueue::new(layout_model);
 
-    let parsed_pages_fut = pages
-        .iter_mut()
-        .map(|(page_idx, pdf_page)| {
-            parse_page_async(
-                *page_idx,
-                pdf_page,
-                &tmp_dir,
-                flatten_pdf,
-                layout_queue.clone(),
-                debug,
-                |_s| {
-                    pb.set_message(format!("Page #{}", *page_idx + 1));
-                    pb.inc(1u64);
-                },
-            )
-        })
-        .collect::<Vec<_>>();
+    let parsed_pages = parse_document_pages_unordered(
+        &mut pages,
+        layout_queue,
+        &tmp_dir,
+        flatten_pdf,
+        debug,
+        pb.clone(),
+    )
+    .await;
 
-    let parsed_pages: Result<Vec<_>, _> = join_all(parsed_pages_fut).await.into_iter().collect();
-    let parsed_pages = parsed_pages
-        .map(|ppages| {
-            ppages
-                .into_iter()
-                .sorted_by(|p1, p2| p1.id.cmp(&p2.id))
-                .collect::<Vec<_>>()
-        })
-        .expect("error occured while parsing pages");
-
-    // TODO: clone might be huge here
     let all_elements = parsed_pages
         .iter()
+        // TODO: clone might be huge here
         .flat_map(|p| p.elements.clone())
         .collect::<Vec<_>>();
 
