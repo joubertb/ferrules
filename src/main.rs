@@ -1,6 +1,9 @@
 use clap::Parser;
-use ferrules::{parse::document::parse_document_async, save_parsed_document};
-use std::{ops::Range, path::PathBuf};
+
+use ferrules::{
+    layout::model::ORTLayoutParser, parse::document::parse_document_async, save_parsed_document,
+};
+use std::{ops::Range, path::PathBuf, sync::Arc};
 use tracing_subscriber::{
     fmt::format::FmtSpan, layer::SubscriberExt, util::SubscriberInitExt, EnvFilter,
 };
@@ -15,6 +18,13 @@ struct Args {
     /// Path to the PDF file to be parsed
     file_path: PathBuf,
 
+    // /// Process directory instead of single file
+    // #[arg(
+    //     long,
+    //     default_value_t = false,
+    //     help = "Process all PDF files in the specified directory"
+    // )]
+    // directory: bool,
     #[arg(
         long,
         short('r'),
@@ -117,13 +127,138 @@ async fn main() {
 
     let args = Args::parse();
 
+    let layout_model = Arc::new(ORTLayoutParser::new().expect("can't load layout model"));
     let page_range = args
         .page_range
         .map(|page_range_str| parse_page_range(&page_range_str).unwrap());
 
-    let doc = parse_document_async(&args.file_path, None, true, page_range, args.debug)
-        .await
-        .unwrap();
+    let doc = parse_document_async(
+        &args.file_path,
+        None,
+        true,
+        page_range,
+        layout_model.clone(),
+        args.debug,
+    )
+    .await
+    .unwrap();
 
     save_parsed_document(&doc, args.output_dir.as_ref(), args.save_images).unwrap();
 }
+
+// async fn process_pdf(
+//     file_path: PathBuf,
+//     layout_model: Arc<ORTLayoutParser>,
+//     page_range: Option<Range<usize>>,
+//     output_dir: Option<&PathBuf>,
+//     save_images: bool,
+//     debug: bool,
+// ) -> anyhow::Result<()> {
+//     tracing::info!("Processing file: {:?}", file_path);
+
+//     let doc = parse_document_async(&file_path, None, true, page_range, layout_model, debug).await?;
+//     save_parsed_document(&doc, output_dir, save_images)?;
+//     Ok(())
+// }
+
+// fn process_pdf_in_thread(
+//     file_path: PathBuf,
+//     layout_model: Arc<ORTLayoutParser>,
+//     page_range: Option<Range<usize>>,
+//     output_dir: Option<PathBuf>,
+//     save_images: bool,
+//     debug: bool,
+// ) -> thread::JoinHandle<anyhow::Result<()>> {
+//     thread::spawn(move || {
+//         // Create a new single-threaded runtime for this thread
+//         let runtime = Runtime::new().unwrap();
+//         runtime.block_on(async {
+//             process_pdf(
+//                 file_path,
+//                 layout_model,
+//                 page_range,
+//                 output_dir.as_ref(),
+//                 save_images,
+//                 debug,
+//             )
+//             .await
+//         })
+//     })
+// }
+
+// fn main() -> anyhow::Result<()> {
+//     // let fmt_subscriber = tracing_subscriber::fmt::layer().with_span_events(FmtSpan::FULL);
+//     // tracing_subscriber::registry()
+//     //     .with(fmt_subscriber)
+//     //     .with(EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into()))
+//     //     .init();
+
+//     let args = Args::parse();
+//     let layout_model = Arc::new(ORTLayoutParser::new().expect("can't load layout model"));
+//     let page_range = args
+//         .page_range
+//         .as_ref()
+//         .map(|page_range_str| parse_page_range(page_range_str))
+//         .transpose()?;
+
+//     if args.directory {
+//         // Create a runtime just for reading the directory
+//         let rt = Runtime::new()?;
+//         let mut handles = Vec::new();
+
+//         // Read directory entries
+//         let entries = rt.block_on(async {
+//             let mut entries = Vec::new();
+//             let mut dir = tokio::fs::read_dir(&args.path).await?;
+//             while let Some(entry) = dir.next_entry().await? {
+//                 entries.push(entry.path());
+//             }
+//             Ok::<_, anyhow::Error>(entries)
+//         })?;
+
+//         // Process each PDF in its own thread
+//         for path in entries {
+//             if path.extension().and_then(|ext| ext.to_str()) == Some("pdf") {
+//                 let layout_model = layout_model.clone();
+//                 // TODO: mutually exclusive
+//                 let page_range = page_range.clone();
+//                 let output_dir = args.output_dir.clone();
+//                 let save_images = args.save_images;
+//                 let debug = args.debug;
+
+//                 let handle = process_pdf_in_thread(
+//                     path,
+//                     layout_model,
+//                     page_range,
+//                     output_dir,
+//                     save_images,
+//                     debug,
+//                 );
+//                 handles.push(handle);
+//             }
+//         }
+
+//         // Wait for all threads to complete
+//         for handle in handles {
+//             if let Err(e) = handle.join().unwrap() {
+//                 tracing::error!("Error processing PDF: {}", e);
+//             }
+//         }
+//     } else {
+//         // Single file processing
+//         let handle = process_pdf_in_thread(
+//             args.path,
+//             layout_model,
+//             page_range,
+//             args.output_dir,
+//             args.save_images,
+//             args.debug,
+//         );
+
+//         if let Err(e) = handle.join().unwrap() {
+//             tracing::error!("Error processing PDF: {}", e);
+//         }
+//     }
+
+//     Ok(())
+// }

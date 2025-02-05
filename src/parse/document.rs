@@ -1,100 +1,92 @@
 use std::{fmt::Write, ops::Range, path::Path, sync::Arc, time::Instant};
 
-use futures::future::join_all;
 use indicatif::{ProgressBar, ProgressState, ProgressStyle};
-use itertools::Itertools;
-use pdfium_render::prelude::{PdfPage, Pdfium};
+use memmap2::Mmap;
+use pdfium_render::prelude::Pdfium;
+use tokio::{fs::File, sync::mpsc, task::JoinSet};
 use uuid::Uuid;
 
 use crate::{
-    entities::{Document, Page, PageID, StructuredPage},
+    entities::{Document, Page, StructuredPage},
     layout::{model::ORTLayoutParser, ParseLayoutQueue},
     sanitize_doc_name,
 };
 
 use super::{
     merge::merge_elements_into_blocks,
-    page::{parse_page_async, parse_pages},
+    native::{ParseNativeQueue, ParseNativeRequest},
+    page::parse_page,
 };
 
-use futures::stream::FuturesUnordered;
-use futures::StreamExt;
-
-pub async fn parse_document_pages_unordered<'a>(
-    pages: &mut [(PageID, PdfPage<'a>)],
-    layout_queue: ParseLayoutQueue,
-    tmp_dir: &Path,
+#[allow(clippy::too_many_arguments)]
+async fn parse_document_pages_unordered(
+    data: &[u8],
     flatten_pdf: bool,
+    password: Option<&str>,
+    page_range: Option<Range<usize>>,
+    tmp_dir: &Path,
     debug: bool,
-    pb: ProgressBar,
-) -> Vec<StructuredPage> {
-    let mut tasks = FuturesUnordered::new();
-    for (page_id, pdf_page) in pages {
-        tasks.push(parse_page_async(
-            *page_id,
-            pdf_page,
-            tmp_dir,
-            flatten_pdf,
-            layout_queue.clone(),
-            debug,
-            |_s| {
-                pb.set_message(format!("Page #{}", *page_id + 1));
-                pb.inc(1u64);
-            },
-        ));
+    layout_queue: ParseLayoutQueue,
+    native_queue: ParseNativeQueue,
+) -> anyhow::Result<Vec<StructuredPage>> {
+    let mut set = JoinSet::new();
+    let (native_tx, mut native_rx) = mpsc::channel(1);
+    let req = ParseNativeRequest::new(data, password, flatten_pdf, page_range, native_tx);
+    native_queue.push(req).await?;
+    while let Some(native_page) = native_rx.recv().await {
+        match native_page {
+            Ok(parse_native_result) => {
+                set.spawn(parse_page(
+                    parse_native_result,
+                    tmp_dir.to_path_buf(),
+                    layout_queue.clone(),
+                    debug,
+                ));
+            }
+            Err(_) => todo!(),
+        }
     }
 
+    // Get results
     let mut parsed_pages = Vec::new();
-    while let Some(result) = tasks.next().await {
-        // This page’s parse just finished, handle it now.
+    while let Some(result) = set.join_next().await {
         match result {
-            Ok(page) => {
+            Ok(Ok(page)) => {
                 parsed_pages.push(page);
             }
-            Err(e) => {
+            Ok(Err(e)) => {
                 tracing::error!("Error parsing page : {e:?}")
+            }
+            Err(e) => {
+                tracing::error!("Error Joining : {e:?}")
             }
         }
     }
-    parsed_pages
+    Ok(parsed_pages)
 }
 
-pub async fn parse_document_pages<'a>(
-    pages: &mut [(PageID, PdfPage<'a>)],
-    layout_queue: ParseLayoutQueue,
-    tmp_dir: &Path,
-    flatten_pdf: bool,
-    debug: bool,
-    pb: ProgressBar,
-) -> Vec<StructuredPage> {
-    let parsed_pages_fut = pages
-        .iter_mut()
-        .map(|(page_idx, pdf_page)| {
-            parse_page_async(
-                *page_idx,
-                pdf_page,
-                tmp_dir,
-                flatten_pdf,
-                layout_queue.clone(),
-                debug,
-                |_s| {
-                    pb.set_message(format!("Page #{}", *page_idx + 1));
-                    pb.inc(1u64);
-                },
-            )
-        })
-        .collect::<Vec<_>>();
-
-    let parsed_pages: Result<Vec<_>, _> = join_all(parsed_pages_fut).await.into_iter().collect();
-
-    parsed_pages
-        .map(|ppages| {
-            ppages
-                .into_iter()
-                .sorted_by(|p1, p2| p1.id.cmp(&p2.id))
-                .collect::<Vec<_>>()
-        })
-        .expect("error occured while parsing pages")
+fn get_doc_length(
+    doc_data: &[u8],
+    password: Option<&str>,
+    page_range: Option<Range<usize>>,
+) -> usize {
+    // TODO : This panic ! should be handlered
+    let pdfium = Pdfium::new(Pdfium::bind_to_statically_linked_library().unwrap());
+    let document = pdfium.load_pdf_from_byte_slice(doc_data, password).unwrap();
+    let pages: Vec<_> = document.pages().iter().enumerate().collect();
+    match page_range {
+        Some(range) => {
+            if range.end > pages.len() {
+                panic!(
+                    "Page range end ({}) exceeds document length ({})",
+                    range.end,
+                    pages.len()
+                );
+            }
+            range.len()
+        }
+        None => pages.len(),
+    }
 }
 
 pub async fn parse_document_async<P: AsRef<Path>>(
@@ -102,6 +94,7 @@ pub async fn parse_document_async<P: AsRef<Path>>(
     password: Option<&str>,
     flatten_pdf: bool,
     page_range: Option<Range<usize>>,
+    layout_model: Arc<ORTLayoutParser>,
     debug: bool,
 ) -> anyhow::Result<Document<P>> {
     let start_time = Instant::now();
@@ -116,24 +109,13 @@ pub async fn parse_document_async<P: AsRef<Path>>(
     if debug {
         std::fs::create_dir_all(&tmp_dir)?;
     }
-    let pdfium = Pdfium::new(Pdfium::bind_to_statically_linked_library()?);
+    // TODO : refac memap
+    let file = File::open(&path).await?;
+    let mmap = unsafe { Mmap::map(&file)? };
+    let length_pages = get_doc_length(&mmap, password, page_range.clone());
 
-    let mut document = pdfium.load_pdf_from_file(&path, password)?;
-    let mut pages: Vec<_> = document.pages_mut().iter().enumerate().collect();
-    let mut pages = if let Some(range) = page_range {
-        if range.end > pages.len() {
-            anyhow::bail!(
-                "Page range end ({}) exceeds document length ({})",
-                range.end,
-                pages.len()
-            );
-        }
-        pages.drain(range).collect()
-    } else {
-        pages
-    };
+    let pb = ProgressBar::new(length_pages as u64);
 
-    let pb = ProgressBar::new(pages.len() as u64);
     pb.set_style(
         ProgressStyle::with_template(
             "{spinner:.green} [{elapsed_precise}] [{bar:40.cyan/blue}] {msg}",
@@ -146,18 +128,20 @@ pub async fn parse_document_async<P: AsRef<Path>>(
     );
 
     // Start layout model in separate task
-    let layout_model = Arc::new(ORTLayoutParser::new().expect("can't load layout model"));
     let layout_queue = ParseLayoutQueue::new(layout_model);
+    let native_queue = ParseNativeQueue::new();
 
     let parsed_pages = parse_document_pages_unordered(
-        &mut pages,
-        layout_queue,
-        &tmp_dir,
+        &mmap,
         flatten_pdf,
+        password,
+        page_range,
+        &tmp_dir,
         debug,
-        pb.clone(),
+        layout_queue,
+        native_queue,
     )
-    .await;
+    .await?;
 
     let all_elements = parsed_pages
         .iter()
@@ -165,7 +149,7 @@ pub async fn parse_document_async<P: AsRef<Path>>(
         .flat_map(|p| p.elements.clone())
         .collect::<Vec<_>>();
 
-    let pages = parsed_pages
+    let doc_pages = parsed_pages
         .into_iter()
         .map(|sp| Page {
             id: sp.id,
@@ -184,97 +168,7 @@ pub async fn parse_document_async<P: AsRef<Path>>(
     Ok(Document {
         path,
         doc_name,
-        pages,
-        blocks,
-        debug_path: if debug { Some(tmp_dir) } else { None },
-    })
-}
-
-pub fn parse_document<P: AsRef<Path>>(
-    path: P,
-    layout_model: &ORTLayoutParser,
-    password: Option<&str>,
-    flatten_pdf: bool,
-    page_range: Option<Range<usize>>,
-    debug: bool,
-) -> anyhow::Result<Document<P>> {
-    let start_time = Instant::now();
-    let doc_name = path
-        .as_ref()
-        .file_name()
-        .and_then(|name| name.to_str())
-        .and_then(|name| name.split('.').next().map(|s| s.to_owned()))
-        .unwrap_or(Uuid::new_v4().to_string());
-
-    let tmp_dir = std::env::temp_dir().join(format!("ferrules-{}", sanitize_doc_name(&doc_name)));
-    if debug {
-        std::fs::create_dir_all(&tmp_dir)?;
-    }
-    let pdfium = Pdfium::new(Pdfium::bind_to_statically_linked_library()?);
-
-    let mut document = pdfium.load_pdf_from_file(&path, password)?;
-    let mut pages: Vec<_> = document.pages_mut().iter().enumerate().collect();
-    let mut pages = if let Some(range) = page_range {
-        if range.end > pages.len() {
-            anyhow::bail!(
-                "Page range end ({}) exceeds document length ({})",
-                range.end,
-                pages.len()
-            );
-        }
-        pages.drain(range).collect()
-    } else {
-        pages
-    };
-
-    let chunk_size = std::thread::available_parallelism()
-        .map(|c| c.get())
-        .unwrap_or(4usize);
-
-    let pb = ProgressBar::new(pages.len() as u64);
-    pb.set_style(
-        ProgressStyle::with_template(
-            "{spinner:.green} [{elapsed_precise}] [{bar:40.cyan/blue}] {msg}",
-        )
-        .unwrap()
-        .with_key("eta", |state: &ProgressState, w: &mut dyn Write| {
-            write!(w, "{:.1}s", state.eta().as_secs_f64()).unwrap()
-        })
-        .progress_chars("#>-"),
-    );
-
-    let parsed_pages = pages
-        .chunks_mut(chunk_size)
-        .flat_map(|chunk| parse_pages(chunk, layout_model, &tmp_dir, flatten_pdf, debug, &pb))
-        .flatten()
-        .collect::<Vec<_>>();
-
-    // TODO: clone might be huge here
-    let all_elements = parsed_pages
-        .iter()
-        .flat_map(|p| p.elements.clone())
-        .collect::<Vec<_>>();
-
-    let pages = parsed_pages
-        .into_iter()
-        .map(|sp| Page {
-            id: sp.id,
-            width: sp.width,
-            height: sp.height,
-            need_ocr: sp.need_ocr,
-            image: sp.image,
-        })
-        .collect();
-
-    let blocks = merge_elements_into_blocks(all_elements)?;
-
-    let duration = Instant::now().duration_since(start_time).as_millis();
-    pb.finish_with_message(format!("Parsed document in {}ms", duration));
-
-    Ok(Document {
-        path,
-        doc_name,
-        pages,
+        pages: doc_pages,
         blocks,
         debug_path: if debug { Some(tmp_dir) } else { None },
     })
