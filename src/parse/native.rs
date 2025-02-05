@@ -79,7 +79,7 @@ impl ParseNativeRequest {
             password: password.map(|p| p.to_string()),
             flatten,
             page_range,
-            // TODO: should be passed in
+            // TODO: should be global?
             required_raster_width: ORTLayoutParser::REQUIRED_WIDTH,
             required_raster_height: ORTLayoutParser::REQUIRED_HEIGHT,
             sender_tx,
@@ -87,8 +87,9 @@ impl ParseNativeRequest {
     }
 }
 
+#[derive(Debug)]
 pub struct ParseNativeMetadata {
-    time: Duration,
+    pub time: Duration,
 }
 
 #[derive(Debug)]
@@ -100,6 +101,7 @@ pub struct ParseNativePageResult {
     pub page_image: Arc<DynamicImage>,
     pub page_image_scale1: DynamicImage,
     pub downscale_factor: f32,
+    pub _metadata: ParseNativeMetadata,
 }
 
 #[derive(Debug, Clone)]
@@ -142,7 +144,6 @@ fn handle_parse_native_req(pdfium: &Pdfium, req: ParseNativeRequest) -> anyhow::
         sender_tx,
     } = req;
     let mut document = pdfium.load_pdf_from_byte_slice(&doc_data, password.as_deref())?;
-
     let mut pages: Vec<_> = document.pages_mut().iter().enumerate().collect();
     let pages = if let Some(range) = page_range {
         if range.end > pages.len() {

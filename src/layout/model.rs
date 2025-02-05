@@ -129,8 +129,8 @@ impl ORTLayoutParser {
     /// It determines the overlap between bounding boxes before suppression.
     pub const IOU_THRESHOLD: f32 = 0.8;
 
-    pub const ORT_INTRATHREAD: usize = 8;
-    pub const ORT_INTERTHREAD: usize = 8;
+    pub const ORT_INTRATHREAD: usize = 16;
+    pub const ORT_INTERTHREAD: usize = 4;
 
     pub fn new() -> anyhow::Result<Self> {
         let session = Session::builder()?

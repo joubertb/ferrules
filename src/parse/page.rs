@@ -20,7 +20,7 @@ use crate::{
 
 use super::{
     merge::{merge_elements_into_blocks, merge_lines_layout, merge_remaining},
-    native::{parse_text_lines, parse_text_spans, ParseNativePageResult},
+    native::{parse_text_lines, parse_text_spans, ParseNativeMetadata, ParseNativePageResult},
 };
 
 /// This constant defines the minimum ratio between the area of text lines identified
@@ -97,6 +97,7 @@ pub(crate) fn parse_page_native(
     required_raster_width: u32,
     required_raster_height: u32,
 ) -> anyhow::Result<ParseNativePageResult> {
+    let start_time = Instant::now();
     if flatten_page {
         page.flatten()?;
     }
@@ -123,6 +124,12 @@ pub(crate) fn parse_page_native(
 
     let text_spans = parse_text_spans(page.text()?.chars().iter(), &page_bbox);
     let text_lines = parse_text_lines(text_spans);
+    let time = start_time.elapsed();
+    tracing::info!(
+        "Parsing page {} using pdfium took {}ms",
+        page_id,
+        time.as_millis()
+    );
     Ok(ParseNativePageResult {
         page_id,
         text_lines,
@@ -130,6 +137,7 @@ pub(crate) fn parse_page_native(
         page_image: Arc::new(page_image),
         page_image_scale1,
         downscale_factor,
+        _metadata: ParseNativeMetadata { time },
     })
 }
 
@@ -146,6 +154,7 @@ pub async fn parse_page(
         page_image,
         page_image_scale1,
         downscale_factor,
+        _metadata: _,
     } = parse_native_result;
     let (layout_tx, layout_rx) = tokio::sync::oneshot::channel();
 
@@ -177,7 +186,7 @@ pub async fn parse_page(
         debug_page(
             &tmp_dir,
             page_id,
-            &page_image,
+            &page_image_scale1,
             &text_lines,
             need_ocr,
             &page_layout,

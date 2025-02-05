@@ -28,14 +28,17 @@ async fn parse_document_pages_unordered(
     debug: bool,
     layout_queue: ParseLayoutQueue,
     native_queue: ParseNativeQueue,
+    pb: ProgressBar,
 ) -> anyhow::Result<Vec<StructuredPage>> {
     let mut set = JoinSet::new();
-    let (native_tx, mut native_rx) = mpsc::channel(1);
+    let (native_tx, mut native_rx) = mpsc::channel(32);
     let req = ParseNativeRequest::new(data, password, flatten_pdf, page_range, native_tx);
     native_queue.push(req).await?;
     while let Some(native_page) = native_rx.recv().await {
         match native_page {
             Ok(parse_native_result) => {
+                pb.set_message(format!("Page #{}", parse_native_result.page_id + 1));
+                pb.inc(1u64);
                 set.spawn(parse_page(
                     parse_native_result,
                     tmp_dir.to_path_buf(),
@@ -140,6 +143,7 @@ pub async fn parse_document_async<P: AsRef<Path>>(
         debug,
         layout_queue,
         native_queue,
+        pb.clone(),
     )
     .await?;
 
