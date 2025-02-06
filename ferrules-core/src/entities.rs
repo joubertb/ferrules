@@ -1,3 +1,4 @@
+extern crate serde_millis;
 use image::DynamicImage;
 use plsfix::fix_text;
 use serde::{Deserialize, Serialize};
@@ -217,6 +218,7 @@ pub struct Page {
 
 #[derive(Debug, Deserialize, Serialize)]
 pub struct DocumentMetadata {
+    #[serde(with = "serde_millis")]
     pub parsing_duration: Duration,
     pub ferrules_version: String,
 }

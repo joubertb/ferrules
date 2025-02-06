@@ -29,6 +29,7 @@ image = "0.25.5"
 ndarray = "0.16.1"
 plsfix = "0.1.7"
 ort = { version = "=2.0.0-rc.9", features = ["fetch-models"] }
+serde_millis = "0.1.1"
 
 [target.'cfg(target_os = "macos")'.dependencies]
 ort = { version = "=2.0.0-rc.9", features = ["coreml", "fetch-models"] }
