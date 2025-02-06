@@ -6,8 +6,7 @@ use std::{
     path::Path,
 };
 
-use entities::Document;
-use serde::Serialize;
+use entities::ParsedDocument;
 
 pub(crate) mod draw;
 pub mod parse;
@@ -35,10 +34,7 @@ fn sanitize_doc_name(doc_name: &str) -> String {
         .collect::<String>()
 }
 
-fn save_doc_images<P: AsRef<Path> + Serialize>(
-    imgs_dir: &Path,
-    doc: &Document<P>,
-) -> anyhow::Result<()> {
+fn save_doc_images(imgs_dir: &Path, doc: &ParsedDocument) -> anyhow::Result<()> {
     let mut image_id = 0;
     for block in doc.blocks.iter() {
         match &block.kind {
@@ -73,8 +69,8 @@ fn save_doc_images<P: AsRef<Path> + Serialize>(
     Ok(())
 }
 
-pub fn save_parsed_document<P: AsRef<Path> + Serialize>(
-    doc: &Document<P>,
+pub fn save_parsed_document<P: AsRef<Path>>(
+    doc: &ParsedDocument,
     output_dir: Option<P>,
     save_imgs: bool,
 ) -> anyhow::Result<()> {

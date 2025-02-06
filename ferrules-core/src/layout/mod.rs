@@ -38,7 +38,7 @@ async fn start_layout_parser(
     while let Some(req) = input_rx.recv().await {
         let queue_time = req.metadata.queue_time.elapsed().as_micros();
         let page_id = req.page_id;
-        tracing::info!("layout request queue time for page {page_id} took: {queue_time} us");
+        tracing::debug!("layout request queue time for page {page_id} took: {queue_time} us");
         tokio::spawn(handle_request(layout_parser.clone(), req));
     }
 }
@@ -56,7 +56,7 @@ async fn handle_request(parser: Arc<ORTLayoutParser>, req: ParseLayoutRequest) {
         .parse_layout_async(&page_image, downscale_factor)
         .await;
     let inference_duration = start.elapsed().as_millis();
-    tracing::info!("layout inference time for page {page_id} took: {inference_duration} ms");
+    tracing::debug!("layout inference time for page {page_id} took: {inference_duration} ms");
     // Once you have the result:
     metadata
         .response_tx

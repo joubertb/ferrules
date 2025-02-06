@@ -1,10 +1,7 @@
 use image::DynamicImage;
 use plsfix::fix_text;
 use serde::{Deserialize, Serialize};
-use std::{
-    path::{Path, PathBuf},
-    time::Duration,
-};
+use std::{path::PathBuf, time::Duration};
 
 use pdfium_render::prelude::{PdfFontWeight, PdfPageTextChar, PdfRect};
 
@@ -234,16 +231,13 @@ impl DocumentMetadata {
 }
 
 #[derive(Debug, Deserialize, Serialize)]
-pub struct Document<P: AsRef<Path>> {
-    pub path: P,
+pub struct ParsedDocument {
     pub doc_name: String,
     pub pages: Vec<Page>,
     pub blocks: Vec<Block>,
     pub debug_path: Option<PathBuf>,
     pub metadata: DocumentMetadata,
 }
-
-impl<P> Document<P> where P: AsRef<Path> {}
 
 #[derive(Debug)]
 pub struct CharSpan {

@@ -1,6 +1,6 @@
 use clap::Parser;
 
-use ferrules::{
+use ferrules_core::{
     layout::{model::ORTLayoutParser, ParseLayoutQueue},
     parse::{
         document::{get_doc_length, parse_document},
@@ -9,15 +9,15 @@ use ferrules::{
     save_parsed_document,
 };
 use indicatif::{ProgressBar, ProgressState, ProgressStyle};
+use memmap2::Mmap;
 use std::{
     fmt::Write,
     ops::Range,
     path::{Path, PathBuf},
     sync::Arc,
 };
-use tracing_subscriber::{
-    fmt::format::FmtSpan, layer::SubscriberExt, util::SubscriberInitExt, EnvFilter,
-};
+use tokio::fs::File;
+use uuid::Uuid;
 
 #[derive(Parser, Debug)]
 #[command(
@@ -133,7 +133,7 @@ fn setup_progress_bar(
     password: Option<&str>,
     page_range: Option<Range<usize>>,
 ) -> ProgressBar {
-    let length_pages = get_doc_length(&file_path, password, page_range.clone());
+    let length_pages = get_doc_length(file_path, password, page_range.clone()).unwrap();
     let pb = ProgressBar::new(length_pages as u64);
     pb.set_style(
         ProgressStyle::with_template(
@@ -150,12 +150,6 @@ fn setup_progress_bar(
 
 #[tokio::main(flavor = "multi_thread")]
 async fn main() {
-    // let fmt_subscriber = tracing_subscriber::fmt::layer().with_span_events(FmtSpan::FULL);
-    // tracing_subscriber::registry()
-    //     .with(fmt_subscriber)
-    //     .with(EnvFilter::try_from_default_env().unwrap_or_else(|_| "info".into()))
-    //     .init();
-
     let args = Args::parse();
 
     // Global tasks
@@ -168,10 +162,22 @@ async fn main() {
         .map(|page_range_str| parse_page_range(&page_range_str).unwrap());
 
     let pb = setup_progress_bar(&args.file_path, None, page_range.clone());
-
     let pbc = pb.clone();
+
+    let doc_name = args
+        .file_path
+        .file_name()
+        .and_then(|name| name.to_str())
+        .and_then(|name| name.split('.').next().map(|s| s.to_owned()))
+        .unwrap_or(Uuid::new_v4().to_string());
+
+    // TODO : refac memap
+    let file = File::open(&args.file_path).await.unwrap();
+    let mmap = unsafe { Mmap::map(&file).unwrap() };
+
     let doc = parse_document(
-        &args.file_path,
+        &mmap,
+        doc_name,
         None,
         true,
         page_range,

@@ -125,7 +125,7 @@ pub(crate) fn parse_page_native(
     let text_spans = parse_text_spans(page.text()?.chars().iter(), &page_bbox);
     let text_lines = parse_text_lines(text_spans);
     let time = start_time.elapsed();
-    tracing::info!(
+    tracing::debug!(
         "Parsing page {} using pdfium took {}ms",
         page_id,
         time.as_millis()
@@ -174,7 +174,7 @@ pub async fn parse_page(
         .await
         .context("error receiving layout on oneshot channel")?
         .context("error parsing page")?;
-    tracing::info!("Received layout parsing result for {page_id}");
+    tracing::debug!("Received layout parsing result for {page_id}");
 
     let (text_lines, need_ocr) =
         parse_page_text(text_lines, &page_layout, &page_image, downscale_factor)?;
