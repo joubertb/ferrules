@@ -72,7 +72,7 @@ async fn main() {
         .with_state(app_state);
 
     // Run it
-    let listener = TcpListener::bind("127.0.0.1:3002").await.unwrap();
+    let listener = TcpListener::bind("0.0.0.1:3002").await.unwrap();
     tracing::info!(
         "Starting ferrules service listening on {}",
         listener.local_addr().unwrap()
