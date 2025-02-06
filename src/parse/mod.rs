@@ -1,4 +1,4 @@
 pub mod document;
 mod merge;
-mod native;
+pub mod native;
 mod page;

@@ -1,9 +1,20 @@
 use clap::Parser;
 
 use ferrules::{
-    layout::model::ORTLayoutParser, parse::document::parse_document_async, save_parsed_document,
+    layout::{model::ORTLayoutParser, ParseLayoutQueue},
+    parse::{
+        document::{get_doc_length, parse_document},
+        native::ParseNativeQueue,
+    },
+    save_parsed_document,
 };
-use std::{ops::Range, path::PathBuf, sync::Arc};
+use indicatif::{ProgressBar, ProgressState, ProgressStyle};
+use std::{
+    fmt::Write,
+    ops::Range,
+    path::{Path, PathBuf},
+    sync::Arc,
+};
 use tracing_subscriber::{
     fmt::format::FmtSpan, layer::SubscriberExt, util::SubscriberInitExt, EnvFilter,
 };
@@ -117,6 +128,26 @@ fn parse_page_range(range_str: &str) -> anyhow::Result<Range<usize>> {
     }
 }
 
+fn setup_progress_bar(
+    file_path: &Path,
+    password: Option<&str>,
+    page_range: Option<Range<usize>>,
+) -> ProgressBar {
+    let length_pages = get_doc_length(&file_path, password, page_range.clone());
+    let pb = ProgressBar::new(length_pages as u64);
+    pb.set_style(
+        ProgressStyle::with_template(
+            "{spinner:.green} [{elapsed_precise}] [{bar:40.cyan/blue}] {msg}",
+        )
+        .unwrap()
+        .with_key("eta", |state: &ProgressState, w: &mut dyn Write| {
+            write!(w, "{:.1}s", state.eta().as_secs_f64()).unwrap()
+        })
+        .progress_chars("#>-"),
+    );
+    pb
+}
+
 #[tokio::main(flavor = "multi_thread")]
 async fn main() {
     // let fmt_subscriber = tracing_subscriber::fmt::layer().with_span_events(FmtSpan::FULL);
@@ -127,21 +158,37 @@ async fn main() {
 
     let args = Args::parse();
 
+    // Global tasks
     let layout_model = Arc::new(ORTLayoutParser::new().expect("can't load layout model"));
+    let layout_queue = ParseLayoutQueue::new(layout_model);
+    let native_queue = ParseNativeQueue::new();
+
     let page_range = args
         .page_range
         .map(|page_range_str| parse_page_range(&page_range_str).unwrap());
 
-    let doc = parse_document_async(
+    let pb = setup_progress_bar(&args.file_path, None, page_range.clone());
+
+    let pbc = pb.clone();
+    let doc = parse_document(
         &args.file_path,
         None,
         true,
         page_range,
-        layout_model.clone(),
+        layout_queue,
+        native_queue,
         args.debug,
+        Some(move |page_id| {
+            pbc.set_message(format!("Page #{}", page_id + 1));
+            pbc.inc(1u64);
+        }),
     )
     .await
     .unwrap();
 
+    pb.finish_with_message(format!(
+        "Parsed document in {}ms",
+        doc.metadata.parsing_duration.as_millis()
+    ));
     save_parsed_document(&doc, args.output_dir.as_ref(), args.save_images).unwrap();
 }

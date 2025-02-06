@@ -1,14 +1,13 @@
-use std::{fmt::Write, ops::Range, path::Path, sync::Arc, time::Instant};
+use std::{fmt::Write, ops::Range, path::Path, time::Instant};
 
-use indicatif::{ProgressBar, ProgressState, ProgressStyle};
 use memmap2::Mmap;
 use pdfium_render::prelude::Pdfium;
 use tokio::{fs::File, sync::mpsc, task::JoinSet};
 use uuid::Uuid;
 
 use crate::{
-    entities::{Document, Page, StructuredPage},
-    layout::{model::ORTLayoutParser, ParseLayoutQueue},
+    entities::{Document, DocumentMetadata, Page, PageID, StructuredPage},
+    layout::ParseLayoutQueue,
     sanitize_doc_name,
 };
 
@@ -19,7 +18,7 @@ use super::{
 };
 
 #[allow(clippy::too_many_arguments)]
-async fn parse_document_pages_unordered(
+async fn parse_doc_pages<F>(
     data: &[u8],
     flatten_pdf: bool,
     password: Option<&str>,
@@ -28,8 +27,12 @@ async fn parse_document_pages_unordered(
     debug: bool,
     layout_queue: ParseLayoutQueue,
     native_queue: ParseNativeQueue,
-    pb: ProgressBar,
-) -> anyhow::Result<Vec<StructuredPage>> {
+    callback: Option<F>,
+) -> anyhow::Result<Vec<StructuredPage>>
+where
+    // TODO: callback on function result
+    F: FnOnce(PageID) + Send + 'static + Clone,
+{
     let mut set = JoinSet::new();
     let (native_tx, mut native_rx) = mpsc::channel(32);
     let req = ParseNativeRequest::new(data, password, flatten_pdf, page_range, native_tx);
@@ -37,14 +40,18 @@ async fn parse_document_pages_unordered(
     while let Some(native_page) = native_rx.recv().await {
         match native_page {
             Ok(parse_native_result) => {
-                pb.set_message(format!("Page #{}", parse_native_result.page_id + 1));
-                pb.inc(1u64);
-                set.spawn(parse_page(
-                    parse_native_result,
-                    tmp_dir.to_path_buf(),
-                    layout_queue.clone(),
-                    debug,
-                ));
+                let layout_queue = layout_queue.clone();
+                let tmp_dir = tmp_dir.to_owned();
+                let callback = callback.clone();
+                set.spawn(async move {
+                    let page_id = parse_native_result.page_id;
+                    let result =
+                        parse_page(parse_native_result, tmp_dir, layout_queue, debug).await;
+                    if let Some(callback) = callback {
+                        callback(page_id)
+                    }
+                    result
+                });
             }
             Err(_) => todo!(),
         }
@@ -68,14 +75,14 @@ async fn parse_document_pages_unordered(
     Ok(parsed_pages)
 }
 
-fn get_doc_length(
-    doc_data: &[u8],
+pub fn get_doc_length<P: AsRef<Path>>(
+    path: P,
     password: Option<&str>,
     page_range: Option<Range<usize>>,
 ) -> usize {
     // TODO : This panic ! should be handlered
     let pdfium = Pdfium::new(Pdfium::bind_to_statically_linked_library().unwrap());
-    let document = pdfium.load_pdf_from_byte_slice(doc_data, password).unwrap();
+    let document = pdfium.load_pdf_from_file(&path, password).unwrap();
     let pages: Vec<_> = document.pages().iter().enumerate().collect();
     match page_range {
         Some(range) => {
@@ -92,14 +99,20 @@ fn get_doc_length(
     }
 }
 
-pub async fn parse_document_async<P: AsRef<Path>>(
+#[allow(clippy::too_many_arguments)]
+pub async fn parse_document<P: AsRef<Path>, F>(
     path: P,
     password: Option<&str>,
     flatten_pdf: bool,
     page_range: Option<Range<usize>>,
-    layout_model: Arc<ORTLayoutParser>,
+    layout_queue: ParseLayoutQueue,
+    native_queue: ParseNativeQueue,
     debug: bool,
-) -> anyhow::Result<Document<P>> {
+    page_callback: Option<F>,
+) -> anyhow::Result<Document<P>>
+where
+    F: FnOnce(PageID) + Send + 'static + Clone,
+{
     let start_time = Instant::now();
     let doc_name = path
         .as_ref()
@@ -115,26 +128,8 @@ pub async fn parse_document_async<P: AsRef<Path>>(
     // TODO : refac memap
     let file = File::open(&path).await?;
     let mmap = unsafe { Mmap::map(&file)? };
-    let length_pages = get_doc_length(&mmap, password, page_range.clone());
 
-    let pb = ProgressBar::new(length_pages as u64);
-
-    pb.set_style(
-        ProgressStyle::with_template(
-            "{spinner:.green} [{elapsed_precise}] [{bar:40.cyan/blue}] {msg}",
-        )
-        .unwrap()
-        .with_key("eta", |state: &ProgressState, w: &mut dyn Write| {
-            write!(w, "{:.1}s", state.eta().as_secs_f64()).unwrap()
-        })
-        .progress_chars("#>-"),
-    );
-
-    // Start layout model in separate task
-    let layout_queue = ParseLayoutQueue::new(layout_model);
-    let native_queue = ParseNativeQueue::new();
-
-    let parsed_pages = parse_document_pages_unordered(
+    let parsed_pages = parse_doc_pages(
         &mmap,
         flatten_pdf,
         password,
@@ -143,7 +138,7 @@ pub async fn parse_document_async<P: AsRef<Path>>(
         debug,
         layout_queue,
         native_queue,
-        pb.clone(),
+        page_callback,
     )
     .await?;
 
@@ -166,8 +161,7 @@ pub async fn parse_document_async<P: AsRef<Path>>(
 
     let blocks = merge_elements_into_blocks(all_elements)?;
 
-    let duration = Instant::now().duration_since(start_time).as_millis();
-    pb.finish_with_message(format!("Parsed document in {}ms", duration));
+    let duration = start_time.elapsed();
 
     Ok(Document {
         path,
@@ -175,5 +169,6 @@ pub async fn parse_document_async<P: AsRef<Path>>(
         pages: doc_pages,
         blocks,
         debug_path: if debug { Some(tmp_dir) } else { None },
+        metadata: DocumentMetadata::new(duration),
     })
 }

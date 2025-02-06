@@ -1,7 +1,10 @@
 use image::DynamicImage;
 use plsfix::fix_text;
 use serde::{Deserialize, Serialize};
-use std::path::{Path, PathBuf};
+use std::{
+    path::{Path, PathBuf},
+    time::Duration,
+};
 
 use pdfium_render::prelude::{PdfFontWeight, PdfPageTextChar, PdfRect};
 
@@ -9,6 +12,7 @@ use crate::{blocks::Block, layout::model::LayoutBBox};
 
 pub type PageID = usize;
 
+const FERRULES_VERSION: &str = env!("CARGO_PKG_VERSION");
 #[derive(Debug, Default, Clone, Deserialize, Serialize)]
 pub struct BBox {
     pub x0: f32,
@@ -215,12 +219,28 @@ pub struct Page {
 }
 
 #[derive(Debug, Deserialize, Serialize)]
+pub struct DocumentMetadata {
+    pub parsing_duration: Duration,
+    pub ferrules_version: String,
+}
+
+impl DocumentMetadata {
+    pub fn new(parsing_duration: Duration) -> Self {
+        Self {
+            parsing_duration,
+            ferrules_version: FERRULES_VERSION.to_owned(),
+        }
+    }
+}
+
+#[derive(Debug, Deserialize, Serialize)]
 pub struct Document<P: AsRef<Path>> {
     pub path: P,
     pub doc_name: String,
     pub pages: Vec<Page>,
     pub blocks: Vec<Block>,
     pub debug_path: Option<PathBuf>,
+    pub metadata: DocumentMetadata,
 }
 
 impl<P> Document<P> where P: AsRef<Path> {}
