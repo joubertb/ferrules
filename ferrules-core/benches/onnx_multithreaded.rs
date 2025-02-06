@@ -5,7 +5,7 @@ use rayon::prelude::*;
 use std::{hint::black_box, time::Duration};
 
 use criterion::{criterion_main, Criterion};
-use ferrules::layout::model::LAYOUT_MODEL_BYTES;
+use ferrules_core::layout::model::LAYOUT_MODEL_BYTES;
 
 fn run_iter(session: &Session, input: &[Array4<f32>]) {
     input.iter().for_each(|i| {

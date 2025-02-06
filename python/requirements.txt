@@ -9,3 +9,6 @@ onnxconverter-common
 
 ocrmac ; sys_platform == "darwin"
 unstructured[all]
+
+# tests
+aiohttp

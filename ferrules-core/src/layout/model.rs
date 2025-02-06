@@ -11,11 +11,11 @@ use ort::{
     },
     session::{builder::GraphOptimizationLevel, Session},
 };
-use rayon::prelude::*;
+use tokio::sync::oneshot::Sender;
 
 use crate::entities::{BBox, PageID};
 
-pub const LAYOUT_MODEL_BYTES: &[u8] = include_bytes!("../../models/yolov8s-doclaynet.onnx");
+pub const LAYOUT_MODEL_BYTES: &[u8] = include_bytes!("../../../models/yolov8s-doclaynet.onnx");
 
 lazy_static! {
     static ref ID2LABEL: [&'static str; 11] = [
@@ -57,7 +57,7 @@ impl LayoutBBox {
 
 #[derive(Debug)]
 pub struct Metadata {
-    pub(crate) response_tx: tokio::sync::oneshot::Sender<anyhow::Result<Vec<LayoutBBox>>>,
+    pub(crate) response_tx: Sender<anyhow::Result<Vec<LayoutBBox>>>,
     pub(crate) queue_time: Instant,
 }
 
@@ -72,7 +72,6 @@ pub(crate) struct ParseLayoutRequest {
 #[derive(Debug)]
 pub struct ORTLayoutParser {
     session: Session,
-    input_name: String,
     output_name: String,
 }
 
@@ -129,6 +128,9 @@ impl ORTLayoutParser {
     /// It determines the overlap between bounding boxes before suppression.
     pub const IOU_THRESHOLD: f32 = 0.8;
 
+    pub const ORT_INTRATHREAD: usize = 16;
+    pub const ORT_INTERTHREAD: usize = 4;
+
     pub fn new() -> anyhow::Result<Self> {
         let session = Session::builder()?
             .with_execution_providers([
@@ -140,17 +142,10 @@ impl ORTLayoutParser {
                     .build(),
                 CPUExecutionProvider::default().build(),
             ])?
-            .with_optimization_level(GraphOptimizationLevel::Level3)?
-            .with_intra_threads(16)?
-            // .with_inter_threads(1)?
+            .with_optimization_level(GraphOptimizationLevel::Level1)?
+            .with_intra_threads(Self::ORT_INTRATHREAD)?
+            .with_inter_threads(Self::ORT_INTERTHREAD)?
             .commit_from_memory(LAYOUT_MODEL_BYTES)?;
-
-        let input_name = session
-            .inputs
-            .first()
-            .map(|i| &i.name)
-            .context("can't find name for first input")?
-            .to_owned();
 
         let output_name = session
             .outputs
@@ -161,7 +156,6 @@ impl ORTLayoutParser {
 
         Ok(Self {
             session,
-            input_name,
             output_name,
         })
     }
@@ -184,22 +178,6 @@ impl ORTLayoutParser {
 
         Ok(output_tensor)
     }
-    pub fn parse_layout_batch(
-        &self,
-        page_imgs: &[DynamicImage],
-        bbox_rescale_factors: &[f32],
-    ) -> anyhow::Result<Vec<Vec<LayoutBBox>>> {
-        let bboxes: Result<Vec<_>, _> = page_imgs
-            .into_par_iter()
-            .zip(bbox_rescale_factors.par_iter())
-            .map(|(page_img, bbox_rescale_factor)| {
-                let bboxes = self.parse_layout(page_img, *bbox_rescale_factor)?;
-                Ok(bboxes)
-            })
-            .collect();
-        bboxes
-    }
-
     pub fn parse_layout(
         &self,
         page_img: &DynamicImage,
@@ -500,28 +478,5 @@ mod tests {
         // We expect exactly one box left, with proba = 0.95.
         assert_eq!(raw_bboxes.len(), 1);
         assert_eq!(raw_bboxes[0].proba, 0.95);
-    }
-
-    #[test]
-    #[ignore]
-    fn test_multithreaded() {
-        let session = Session::builder()
-            .unwrap()
-            .with_execution_providers([CoreMLExecutionProvider::default()
-                // .with_ane_only()
-                .with_subgraphs()
-                .build()])
-            .unwrap()
-            .commit_from_memory(LAYOUT_MODEL_BYTES)
-            .unwrap();
-
-        use rayon::prelude::*;
-
-        (0..20).into_par_iter().for_each(|_| {
-            let input: Array4<f32> = Array4::ones([1, 3, 1024, 1024]);
-            session
-                .run(ort::inputs!["images"=> input].unwrap())
-                .unwrap();
-        })
     }
 }

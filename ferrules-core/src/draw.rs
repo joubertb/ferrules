@@ -9,7 +9,7 @@ use crate::ocr::OCRLines;
 
 use ab_glyph::FontArc;
 
-static FONT_BYTES: &[u8] = include_bytes!("../font/Arial.ttf");
+static FONT_BYTES: &[u8] = include_bytes!("../../font/Arial.ttf");
 
 const BLOCK_COLOR: [u8; 4] = [209, 139, 0, 255];
 const LAYOUT_COLOR: [u8; 4] = [0, 0, 255, 255];

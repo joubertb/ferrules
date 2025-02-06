@@ -29,7 +29,7 @@
   - [x] Group listItems into list : Find first and merge subsequent items
   - [x] Group caption/footer blocks with image blocks
   - [x] Group Page header / Page footer
-  - [ ] Move header element to the top of the page
+  - [x] Move header element to the top of the page
   - [ ] Merge text block based on gap distance
   - [ ] Group captions with tables
   - [ ] Process SubHeader/Titles using kmeans on line heigths to get the title_level
@@ -51,6 +51,8 @@
   - [ ] Add export format
   - [ ] Configure hyperparams/execution providers
 
+- [x] Build pdfium statically for Linux
+- [x] Change NMS algorithm to more robust one
 - [ ] Add tracing
 - [ ] `eyre` | `thiserror` for custom errosk
 - [ ] Configurable inference params: ORTProviders/ batch_size, confidence_score, NMS ..
@@ -68,11 +70,8 @@
   - [ ] Unify Config for env/CLI/API
   - [ ] Dynamic batching of document(pages) to process
 
-- [ ] Add postprocessing of bbox with more robustness for nested bbox of the same type
-- [ ] Build pdfium statically for Linux
-- [ ] Determine page orientation + deskew
-
 - Optim
+  - [ ] Determine page orientation + deskew
   - [ ] Optimize layout model for ANE -> Look at changing shapes and operators to maximize ANE perf
   - [ ] ORT inference in fp16/mixed precision
   - [ ] Move to other yolo versions: yolov11s seems better with less params [yolo-doclaynet](https://github.com/ppaanngggg/yolo-doclaynet)

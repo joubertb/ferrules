@@ -1,80 +1,14 @@
-[package]
-name = "ferrules"
-version = "0.1.3"
+[workspace]
+members = ["ferrules-core", "ferrules-cli", "ferrules-api"]
+resolver = "2"
 edition = "2021"
-authors = ["Amine dirhoussi <aminedirhoussi1@gmail.com>"]
-description = "Modern, fast, document parser written in 🦀"
-repository = "https://github.com/aminediro/ferrules"
 
-[dependencies]
+[workspace.dependencies]
 anyhow = "1.0.95"
 tracing = "0.1.41"
 tracing-subscriber = { version = "0.3.19", features = ["env-filter"] }
-lazy_static = "1.5.0"
-imageproc = "0.25.0"
-ab_glyph = "0.2.29"
-uuid = { version = "1.11.0", features = ["v4"] }
-itertools = "0.14.0"
-rayon = "1.10.0"
-dirs = "6.0.0"
+tokio = { version = "1.43.0", features = ["full"] }
 serde = { version = "1.0.217", features = ["derive"] }
 serde_json = "1.0.135"
-
-# pdf reader
-pdfium-render = { version = "0.8.27", features = ["static", "bindings"] }
-# Inference
-image = "0.25.5"
-ndarray = "0.16.1"
-plsfix = "0.1.7"
-ort = { version = "=2.0.0-rc.9", features = ["fetch-models"] }
-
-# CLI
-clap = { version = "4.5.23", features = ["derive", "env"] }
-indicatif = "0.17.9"
-colored = "3.0.0"
+uuid = { version = "1.11.0", features = ["v4"] }
 memmap2 = "0.9.5"
-tokio = { version = "1.43.0", features = ["full"] }
-futures = "0.3.31"
-
-[target.'cfg(target_os = "macos")'.dependencies]
-ort = { version = "=2.0.0-rc.9", features = ["coreml", "fetch-models"] }
-objc2 = { version = "^0.5.2" }
-objc2-foundation = { version = "^0.2.2" }
-objc2-vision = { version = "^0.2.2", features = [
-    "VNRequest",
-    "VNRequestHandler",
-    "VNRecognizeTextRequest",
-    # Getting results
-    "VNObservation",
-    "VNTypes",
-] }
-
-[target.'cfg(target_os = "linux")'.dependencies]
-ort = { version = "=2.0.0-rc.9", features = [
-    "fetch-models",
-    "half",
-    "cuda",
-    "tensorrt",
-    "load-dynamic",
-] }
-
-[dev-dependencies]
-rand = "0.8.5"
-criterion = { version = "0.5", features = ["html_reports"] }
-
-# [[bench]]
-# name = "onnx_multithreaded"
-# harness = false
-
-[[bench]]
-name = "onnx_batch"
-harness = false
-
-[profile.release]
-# strip = "symbols"
-opt-level = 3
-debug = 1
-
-[profile.dist]
-inherits = "release"
-lto = "thin"

@@ -3,7 +3,7 @@ use rand::Rng;
 use std::{hint::black_box, iter::repeat, time::Duration};
 
 use criterion::{criterion_main, Criterion};
-use ferrules::layout::model::ORTLayoutParser;
+use ferrules_core::layout::model::ORTLayoutParser;
 use image::{DynamicImage, Rgba, RgbaImage};
 
 fn get_fake_images(count: usize, width: u32, height: u32) -> Vec<DynamicImage> {
