@@ -1,4 +1,4 @@
-use anyhow::Context;
+use anyhow::{bail, Context};
 use image::{imageops::FilterType, DynamicImage, GenericImageView};
 use lazy_static::lazy_static;
 use ndarray::{s, Array4, ArrayBase, Axis, Dim, OwnedRepr};
@@ -14,11 +14,32 @@ use crate::entities::BBox;
 
 pub const LAYOUT_MODEL_BYTES: &[u8] = include_bytes!("../../../models/yolov8s-doclaynet.onnx");
 
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub enum ORTGraphOptimizationLevel {
+    Level1,
+    Level2,
+    Level3,
+}
+
+impl TryFrom<usize> for ORTGraphOptimizationLevel {
+    type Error = anyhow::Error;
+
+    fn try_from(value: usize) -> Result<Self, Self::Error> {
+        match value {
+            1 => Ok(ORTGraphOptimizationLevel::Level1),
+            2 => Ok(ORTGraphOptimizationLevel::Level2),
+            3 => Ok(ORTGraphOptimizationLevel::Level3),
+            _ => bail!("error parsing value into GraphOptLevel"),
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct ORTConfig {
     pub execution_providers: Vec<OrtExecutionProvider>,
     pub intra_threads: usize,
     pub inter_threads: usize,
+    pub opt_level: Option<ORTGraphOptimizationLevel>,
 }
 
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
@@ -39,6 +60,7 @@ impl Default for ORTConfig {
             execution_providers,
             intra_threads: ORTLayoutParser::ORT_INTRATHREAD,
             inter_threads: ORTLayoutParser::ORT_INTERTHREAD,
+            opt_level: Some(ORTGraphOptimizationLevel::Level1),
         }
     }
 }
@@ -152,6 +174,7 @@ impl ORTLayoutParser {
         let providers = &mut config.execution_providers;
         providers.sort();
 
+        // Providers
         for provider in providers {
             match provider {
                 OrtExecutionProvider::Trt(device_id) => {
@@ -183,9 +206,16 @@ impl ORTLayoutParser {
             }
         }
 
+        let opt_lvl = match config.opt_level {
+            Some(ORTGraphOptimizationLevel::Level1) => GraphOptimizationLevel::Level1,
+            Some(ORTGraphOptimizationLevel::Level2) => GraphOptimizationLevel::Level2,
+            Some(ORTGraphOptimizationLevel::Level3) => GraphOptimizationLevel::Level3,
+            None => GraphOptimizationLevel::Disable,
+        };
+
         let session = Session::builder()?
             .with_execution_providers(execution_providers)?
-            .with_optimization_level(GraphOptimizationLevel::Level3)?
+            .with_optimization_level(opt_lvl)?
             .with_intra_threads(config.intra_threads)?
             .with_inter_threads(config.inter_threads)?
             .commit_from_memory(LAYOUT_MODEL_BYTES)?;

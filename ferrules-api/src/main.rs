@@ -88,6 +88,7 @@ struct Args {
     /// Number of threads to use within individual operations
     #[arg(
         long,
+        short = 'j',
         help = "Number of threads to use for parallel processing within operations",
         default_value = "16"
     )]
@@ -100,6 +101,9 @@ struct Args {
         default_value = "4"
     )]
     inter_threads: usize,
+
+    #[arg(long, short = 'O', help = "Ort graph optimization level")]
+    graph_opt_level: Option<usize>,
 }
 
 fn parse_ep_args(args: &Args) -> Vec<OrtExecutionProvider> {
@@ -173,6 +177,7 @@ async fn main() {
         execution_providers: providers,
         intra_threads: args.intra_threads,
         inter_threads: args.inter_threads,
+        opt_level: args.graph_opt_level.map(|v| v.try_into().unwrap()),
     };
     // Initialize the layout model and queues
     let layout_model =

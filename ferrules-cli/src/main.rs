@@ -124,6 +124,9 @@ struct Args {
     )]
     inter_threads: usize,
 
+    #[arg(long, short = 'O', help = "Ort graph optimization level")]
+    graph_opt_level: Option<usize>,
+
     /// Enable debug mode to output additional information
     #[arg(
         long,
@@ -217,6 +220,7 @@ async fn main() {
         execution_providers: providers,
         intra_threads: args.intra_threads,
         inter_threads: args.inter_threads,
+        opt_level: args.graph_opt_level.map(|v| v.try_into().unwrap()),
     };
     // Global tasks
     let layout_model = Arc::new(ORTLayoutParser::new(ort_config).expect("can't load layout model"));
