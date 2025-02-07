@@ -7,9 +7,6 @@ description = "Modern, fast, document parser written in 🦀"
 repository = "https://github.com/aminediro/ferrules"
 
 [dependencies]
-ferrules-core = { path = "../ferrules-core" }
-clap = { version = "4.5.23", features = ["derive", "env"] }
-indicatif = "0.17.9"
 anyhow = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
@@ -18,3 +15,8 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 uuid = { workspace = true }
 memmap2 = { workspace = true }
+
+# CLI specific
+ferrules-core = { path = "../ferrules-core" }
+clap = { version = "4.5.23", features = ["derive", "env"] }
+indicatif = "0.17.9"

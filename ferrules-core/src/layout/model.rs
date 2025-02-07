@@ -1,5 +1,3 @@
-use std::{sync::Arc, time::Instant};
-
 use anyhow::Context;
 use image::{imageops::FilterType, DynamicImage, GenericImageView};
 use lazy_static::lazy_static;
@@ -11,9 +9,8 @@ use ort::{
     },
     session::{builder::GraphOptimizationLevel, Session},
 };
-use tokio::sync::oneshot::Sender;
 
-use crate::entities::{BBox, PageID};
+use crate::entities::BBox;
 
 pub const LAYOUT_MODEL_BYTES: &[u8] = include_bytes!("../../../models/yolov8s-doclaynet.onnx");
 
@@ -56,26 +53,13 @@ impl LayoutBBox {
 }
 
 #[derive(Debug)]
-pub struct Metadata {
-    pub(crate) response_tx: Sender<anyhow::Result<Vec<LayoutBBox>>>,
-    pub(crate) queue_time: Instant,
-}
-
-#[derive(Debug)]
-pub(crate) struct ParseLayoutRequest {
-    pub(crate) page_id: PageID,
-    pub(crate) page_image: Arc<DynamicImage>,
-    pub(crate) downscale_factor: f32,
-    pub(crate) metadata: Metadata,
-}
-
-#[derive(Debug)]
 pub struct ORTLayoutParser {
     session: Session,
     output_name: String,
 }
 
 impl ORTLayoutParser {
+    #[tracing::instrument(skip_all)]
     pub async fn parse_layout_async(
         &self,
         page_img: &DynamicImage,
@@ -178,6 +162,7 @@ impl ORTLayoutParser {
 
         Ok(output_tensor)
     }
+
     pub fn parse_layout(
         &self,
         page_img: &DynamicImage,
@@ -193,6 +178,7 @@ impl ORTLayoutParser {
         Ok(bboxes)
     }
 
+    #[tracing::instrument(skip_all)]
     fn extract_bboxes(
         &self,
         output: ArrayBase<OwnedRepr<f32>, Dim<[usize; 3]>>,

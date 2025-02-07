@@ -1,8 +1,9 @@
-use std::{ops::Range, sync::Arc, time::Duration};
+use std::{ops::Range, sync::Arc};
 
 use anyhow::Context;
 use image::DynamicImage;
 use pdfium_render::prelude::{PdfPageTextChar, Pdfium};
+use tracing::Span;
 
 use crate::{
     entities::{BBox, CharSpan, Line, PageID},
@@ -89,7 +90,7 @@ impl ParseNativeRequest {
 
 #[derive(Debug)]
 pub struct ParseNativeMetadata {
-    pub time: Duration,
+    pub parse_native_duration_ms: u128,
 }
 
 #[derive(Debug)]
@@ -101,12 +102,12 @@ pub struct ParseNativePageResult {
     pub page_image: Arc<DynamicImage>,
     pub page_image_scale1: DynamicImage,
     pub downscale_factor: f32,
-    pub _metadata: ParseNativeMetadata,
+    pub metadata: ParseNativeMetadata,
 }
 
 #[derive(Debug, Clone)]
 pub struct ParseNativeQueue {
-    queue: Sender<ParseNativeRequest>,
+    queue: Sender<(ParseNativeRequest, Span)>,
 }
 
 impl Default for ParseNativeQueue {
@@ -126,14 +127,21 @@ impl ParseNativeQueue {
     }
 
     pub(crate) async fn push(&self, req: ParseNativeRequest) -> anyhow::Result<()> {
+        let span = Span::current();
         self.queue
-            .send(req)
+            .send((req, span))
             .await
             .context("error sending parse native request")
     }
 }
 
-fn handle_parse_native_req(pdfium: &Pdfium, req: ParseNativeRequest) -> anyhow::Result<()> {
+fn handle_parse_native_req(
+    pdfium: &Pdfium,
+    req: ParseNativeRequest,
+    parent_span: Span,
+) -> anyhow::Result<()> {
+    // Reinter span
+    let _guard = parent_span.enter();
     let ParseNativeRequest {
         doc_data,
         password,
@@ -170,12 +178,12 @@ fn handle_parse_native_req(pdfium: &Pdfium, req: ParseNativeRequest) -> anyhow::
     Ok(())
 }
 
-pub fn start_native_parser(mut input_rx: Receiver<ParseNativeRequest>) {
+pub fn start_native_parser(mut input_rx: Receiver<(ParseNativeRequest, Span)>) {
     let pdfium = Pdfium::new(
         Pdfium::bind_to_statically_linked_library().expect("can't load pdfiurm bindings"),
     );
-    while let Some(req) = input_rx.blocking_recv() {
-        match handle_parse_native_req(&pdfium, req) {
+    while let Some((req, parent_span)) = input_rx.blocking_recv() {
+        match handle_parse_native_req(&pdfium, req, parent_span) {
             Ok(_) => {}
             Err(e) => eprintln!("error parsing request natively : {:?}", e),
         }

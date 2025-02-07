@@ -7,13 +7,13 @@ use std::{
 use anyhow::Context;
 use image::DynamicImage;
 use pdfium_render::prelude::{PdfPage, PdfRenderConfig};
+use tracing::instrument;
 
 use crate::{
     draw::{draw_blocks, draw_layout_bboxes, draw_text_lines},
     entities::{BBox, Element, Line, PageID, StructuredPage},
     layout::{
-        model::{LayoutBBox, Metadata, ParseLayoutRequest},
-        ParseLayoutQueue,
+        model::LayoutBBox, Metadata, ParseLayoutQueue, ParseLayoutRequest, ParseLayoutResponse,
     },
     ocr::parse_image_ocr,
 };
@@ -41,6 +41,7 @@ fn page_needs_ocr(text_boxes: &[&LayoutBBox], text_lines: &[Line]) -> bool {
     }
 }
 
+#[instrument(skip_all)]
 fn build_page_elements(
     page_layout: &[LayoutBBox],
     text_lines: &[Line],
@@ -60,6 +61,7 @@ fn build_page_elements(
     Ok(elements)
 }
 
+#[instrument(skip_all)]
 fn parse_page_text(
     native_text_lines: Vec<Line>,
     page_layout: &[LayoutBBox],
@@ -90,6 +92,7 @@ fn parse_page_text(
     Ok((lines, need_ocr))
 }
 
+#[instrument(skip(page))]
 pub(crate) fn parse_page_native(
     page_id: PageID,
     page: &mut PdfPage,
@@ -124,11 +127,11 @@ pub(crate) fn parse_page_native(
 
     let text_spans = parse_text_spans(page.text()?.chars().iter(), &page_bbox);
     let text_lines = parse_text_lines(text_spans);
-    let time = start_time.elapsed();
+    let parse_native_duration_ms = start_time.elapsed().as_millis();
     tracing::debug!(
         "Parsing page {} using pdfium took {}ms",
         page_id,
-        time.as_millis()
+        parse_native_duration_ms
     );
     Ok(ParseNativePageResult {
         page_id,
@@ -137,16 +140,27 @@ pub(crate) fn parse_page_native(
         page_image: Arc::new(page_image),
         page_image_scale1,
         downscale_factor,
-        _metadata: ParseNativeMetadata { time },
+        metadata: ParseNativeMetadata {
+            parse_native_duration_ms,
+        },
     })
 }
 
-pub async fn parse_page(
+#[instrument(
+    skip_all,
+    fields(
+        layout_queue_time_ms,
+        layout_parse_duration_ms,
+        parse_native_duration_ms,
+    )
+)]
+pub async fn parse_page_full(
     parse_native_result: ParseNativePageResult,
     tmp_dir: PathBuf,
     layout_queue: ParseLayoutQueue,
     debug: bool,
 ) -> anyhow::Result<StructuredPage> {
+    let span = tracing::Span::current();
     let ParseNativePageResult {
         page_id,
         text_lines,
@@ -154,7 +168,7 @@ pub async fn parse_page(
         page_image,
         page_image_scale1,
         downscale_factor,
-        _metadata: _,
+        metadata: parse_native_metadata,
     } = parse_native_result;
     let (layout_tx, layout_rx) = tokio::sync::oneshot::channel();
 
@@ -170,18 +184,21 @@ pub async fn parse_page(
 
     layout_queue.push(layout_req).await?;
 
-    let page_layout = layout_rx
+    let ParseLayoutResponse {
+        page_id,
+        layout_bbox: page_layout,
+        layout_parse_duration_ms,
+        layout_queue_time_ms,
+    } = layout_rx
         .await
         .context("error receiving layout on oneshot channel")?
         .context("error parsing page")?;
-    tracing::debug!("Received layout parsing result for {page_id}");
 
     let (text_lines, need_ocr) =
         parse_page_text(text_lines, &page_layout, &page_image, downscale_factor)?;
 
     // Merging elements with layout
     let elements = build_page_elements(&page_layout, &text_lines, page_id)?;
-
     if debug {
         debug_page(
             &tmp_dir,
@@ -202,6 +219,21 @@ pub async fn parse_page(
         elements,
         need_ocr,
     };
+
+    span.record(
+        "layout_queue_time_ms",
+        format!("{:?}", layout_queue_time_ms),
+    );
+    span.record(
+        "layout_parse_duration_ms",
+        format!("{:?}", layout_parse_duration_ms),
+    );
+
+    span.record(
+        "parse_native_duration_ms",
+        format!("{:?}", parse_native_metadata.parse_native_duration_ms),
+    );
+    // TODO add OCR timings
 
     Ok(structured_page)
 }

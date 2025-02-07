@@ -1,7 +1,13 @@
-use std::{ops::Range, path::Path, time::Instant};
+use std::{
+    ops::Range,
+    path::{Path, PathBuf},
+    time::Instant,
+};
+use tracing::Instrument;
 
 use pdfium_render::prelude::Pdfium;
 use tokio::{sync::mpsc, task::JoinSet};
+use tracing::instrument;
 
 use crate::{
     entities::{DocumentMetadata, Page, PageID, ParsedDocument, StructuredPage},
@@ -11,11 +17,30 @@ use crate::{
 
 use super::{
     merge::merge_elements_into_blocks,
-    native::{ParseNativeQueue, ParseNativeRequest},
-    page::parse_page,
+    native::{ParseNativePageResult, ParseNativeQueue, ParseNativeRequest},
+    page::parse_page_full,
 };
 
+async fn parse_task<F>(
+    parse_native_result: ParseNativePageResult,
+    tmp_dir: PathBuf,
+    layout_queue: ParseLayoutQueue,
+    debug: bool,
+    callback: Option<F>,
+) -> anyhow::Result<StructuredPage>
+where
+    F: FnOnce(PageID) + Send + 'static + Clone,
+{
+    let page_id = parse_native_result.page_id;
+    let result = parse_page_full(parse_native_result, tmp_dir, layout_queue, debug).await;
+    if let Some(callback) = callback {
+        callback(page_id)
+    }
+    result
+}
+
 #[allow(clippy::too_many_arguments)]
+#[instrument(skip_all)]
 async fn parse_doc_pages<F>(
     data: &[u8],
     flatten_pdf: bool,
@@ -35,21 +60,17 @@ where
     let (native_tx, mut native_rx) = mpsc::channel(32);
     let req = ParseNativeRequest::new(data, password, flatten_pdf, page_range, native_tx);
     native_queue.push(req).await?;
+
     while let Some(native_page) = native_rx.recv().await {
         match native_page {
             Ok(parse_native_result) => {
                 let layout_queue = layout_queue.clone();
                 let tmp_dir = tmp_dir.to_owned();
                 let callback = callback.clone();
-                set.spawn(async move {
-                    let page_id = parse_native_result.page_id;
-                    let result =
-                        parse_page(parse_native_result, tmp_dir, layout_queue, debug).await;
-                    if let Some(callback) = callback {
-                        callback(page_id)
-                    }
-                    result
-                });
+                set.spawn(
+                    parse_task(parse_native_result, tmp_dir, layout_queue, debug, callback)
+                        .in_current_span(),
+                );
             }
             Err(_) => todo!(),
         }
@@ -98,6 +119,7 @@ pub fn get_doc_length<P: AsRef<Path>>(
 }
 
 #[allow(clippy::too_many_arguments)]
+#[instrument(skip(doc, password, layout_queue, native_queue, page_callback, debug))]
 pub async fn parse_document<F>(
     doc: &[u8],
     doc_name: String,

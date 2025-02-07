@@ -4,8 +4,6 @@ version = "0.1.0"
 edition = "2021"
 
 [dependencies]
-axum = { version = "0.8.1", features = ["multipart"] }
-
 anyhow = { workspace = true }
 tracing = { workspace = true }
 tracing-subscriber = { workspace = true }
@@ -14,6 +12,19 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 uuid = { workspace = true }
 memmap2 = { workspace = true }
+
+# API specific
+axum = { version = "0.7.4", features = ["multipart", "json"] }
 ferrules-core = { path = "../ferrules-core" }
 tower-http = { version = "0.6.1", features = ["trace", "limit"] }
 tempfile = "3.16.0"
+
+
+# OTEL
+opentelemetry = "0.27.0"
+opentelemetry_sdk = { version = "0.27.0", features = ["rt-tokio", "trace"] }
+opentelemetry-semantic-conventions = "0.27.0"
+tracing-opentelemetry = "0.28.0"
+opentelemetry-otlp = "0.27.0"
+axum-tracing-opentelemetry = { version = "0.25.0" }
+# axum integrations with otel

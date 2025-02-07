@@ -1,4 +1,3 @@
-extern crate serde_millis;
 use image::DynamicImage;
 use plsfix::fix_text;
 use serde::{Deserialize, Serialize};

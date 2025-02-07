@@ -5,8 +5,8 @@ use axum::{
     routing::{get, post},
     Json, Router,
 };
-// use bytes::Bytes;
-
+use axum_tracing_opentelemetry::middleware::OtelAxumLayer;
+use ferrules_api::init_tracing;
 use ferrules_core::{
     layout::{model::ORTLayoutParser, ParseLayoutQueue},
     parse::{document::parse_document, native::ParseNativeQueue},
@@ -19,9 +19,6 @@ use std::{
 };
 use tempfile::NamedTempFile;
 use tokio::{fs::File, net::TcpListener};
-use tower_http::trace::TraceLayer;
-use tracing_subscriber::EnvFilter;
-use tracing_subscriber::{fmt::format::FmtSpan, layer::SubscriberExt, util::SubscriberInitExt};
 use uuid::Uuid;
 
 const MAX_SIZE_LIMIT: usize = 250 * 1024 * 1024;
@@ -36,7 +33,7 @@ struct ApiResponse<T> {
 #[derive(Debug, Deserialize)]
 struct ParseOptions {
     page_range: Option<String>,
-    save_images: Option<bool>,
+    _save_images: Option<bool>,
 }
 
 #[derive(Clone)]
@@ -47,11 +44,8 @@ struct AppState {
 
 #[tokio::main]
 async fn main() {
-    let fmt_subscriber = tracing_subscriber::fmt::layer().with_span_events(FmtSpan::FULL);
-    tracing_subscriber::registry()
-        .with(fmt_subscriber)
-        .with(EnvFilter::try_from_default_env().unwrap_or_else(|_| "debug".into()))
-        .init();
+    init_tracing("http://localhost:4317", "ferrules-api".into(), false)
+        .expect("can't setup tracing for API");
 
     // Initialize the layout model and queues
     let layout_model = Arc::new(ORTLayoutParser::new().expect("Failed to load layout model"));
@@ -67,9 +61,9 @@ async fn main() {
     let app = Router::new()
         .route("/health", get(health_check))
         .route("/parse", post(parse_document_handler))
-        .layer(DefaultBodyLimit::max(MAX_SIZE_LIMIT))
-        .layer(TraceLayer::new_for_http())
-        .with_state(app_state);
+        .with_state(app_state)
+        .layer(OtelAxumLayer::default())
+        .layer(DefaultBodyLimit::max(MAX_SIZE_LIMIT));
 
     // Run it
     let listener = TcpListener::bind("0.0.0.0:3002").await.unwrap();
@@ -80,6 +74,7 @@ async fn main() {
     axum::serve(listener, app).await.unwrap();
 }
 
+#[tracing::instrument(skip_all)]
 async fn health_check() -> impl IntoResponse {
     Json(ApiResponse {
         success: true,
@@ -88,6 +83,7 @@ async fn health_check() -> impl IntoResponse {
     })
 }
 
+#[tracing::instrument(skip_all)]
 async fn parse_document_handler(
     state: State<AppState>,
     mut multipart: Multipart,
