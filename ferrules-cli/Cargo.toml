@@ -18,5 +18,5 @@ memmap2 = { workspace = true }
 
 # CLI specific
 ferrules-core = { path = "../ferrules-core" }
-clap = { version = "4.5.23", features = ["derive", "env"] }
+clap = { workspace = true }
 indicatif = "0.17.9"

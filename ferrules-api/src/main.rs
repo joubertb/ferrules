@@ -6,7 +6,9 @@ use axum::{
     Json, Router,
 };
 use axum_tracing_opentelemetry::middleware::OtelAxumLayer;
+use clap::Parser;
 use ferrules_api::init_tracing;
+use ferrules_core::layout::model::{ORTConfig, OrtExecutionProvider};
 use ferrules_core::{
     layout::{model::ORTLayoutParser, ParseLayoutQueue},
     parse::{document::parse_document, native::ParseNativeQueue},
@@ -22,6 +24,101 @@ use tokio::{fs::File, net::TcpListener};
 use uuid::Uuid;
 
 const MAX_SIZE_LIMIT: usize = 250 * 1024 * 1024;
+
+#[derive(Parser, Debug)]
+#[command(author, version, about, long_about = None)]
+struct Args {
+    /// OpenTelemetry collector endpoint
+    #[arg(long, env = "OTLP_ENDPOINT", default_value = "http://localhost:4317")]
+    otlp_endpoint: String,
+
+    /// Sentry DSN
+    #[arg(long, env = "SENTRY_DSN")]
+    sentry_dsn: Option<String>,
+
+    /// Sentry environment
+    #[arg(long, env = "SENTRY_ENVIRONMENT", default_value = "dev")]
+    sentry_environment: String,
+
+    /// API listen address
+    #[arg(long, env = "API_LISTEN_ADDR", default_value = "0.0.0.0:3002")]
+    listen_addr: String,
+
+    /// Enable debug mode
+    #[arg(long, env = "SENTRY_DEBUG", default_value = "false")]
+    sentry_debug: bool,
+
+    /// Use CoreML for layout inference (default: true)
+    #[arg(
+            long,
+            default_value_t = cfg!(target_os = "macos"),
+            help = "Enable or disable the use of CoreML for layout inference"
+        )]
+    pub coreml: bool,
+
+    #[arg(
+        long,
+        default_value_t = true,
+        help = "Enable or disable Apple Neural Engine acceleration (only applies when CoreML is enabled)"
+    )]
+    pub use_ane: bool,
+
+    #[arg(
+        long,
+        default_value_t = false,
+        help = "Enable or disable the use of TensorRT for layout inference"
+    )]
+    pub trt: bool,
+
+    #[arg(
+        long,
+        default_value_t = false,
+        help = "Enable or disable the use of CUDA for layout inference"
+    )]
+    pub cuda: bool,
+
+    /// CUDA device ID to use for GPU acceleration (e.g. 0 for first GPU)
+    #[arg(
+        long,
+        help = "CUDA device ID to use (0 for first GPU)",
+        default_value_t = 0
+    )]
+    pub device_id: i32,
+
+    /// Number of threads to use within individual operations
+    #[arg(
+        long,
+        help = "Number of threads to use for parallel processing within operations",
+        default_value = "16"
+    )]
+    intra_threads: usize,
+
+    /// Number of threads to use for parallel operation execution
+    #[arg(
+        long,
+        help = "Number of threads to use for executing operations in parallel",
+        default_value = "4"
+    )]
+    inter_threads: usize,
+}
+
+fn parse_ep_args(args: &Args) -> Vec<OrtExecutionProvider> {
+    let mut providers = Vec::new();
+    if args.trt {
+        providers.push(OrtExecutionProvider::Trt(args.device_id));
+    }
+    if args.cuda {
+        providers.push(OrtExecutionProvider::CUDA(args.device_id));
+    }
+
+    if args.coreml {
+        providers.push(OrtExecutionProvider::CoreML {
+            ane_only: args.use_ane,
+        });
+    }
+    providers.push(OrtExecutionProvider::CPU);
+    providers
+}
 
 #[derive(Debug, Serialize)]
 struct ApiResponse<T> {
@@ -44,24 +141,42 @@ struct AppState {
 
 #[tokio::main]
 async fn main() {
-    // Sentry layer
-    let _guard = sentry::init((
-        "http://61d0d136092e222e61505bccf2c306da@rig:9000/3",
-        sentry::ClientOptions {
-            release: sentry::release_name!(),
-            traces_sample_rate: 1f32,
-            sample_rate: 1f32,
-            environment: Some("dev".into()),
-            debug: true,
-            ..Default::default()
-        },
-    ));
+    let args = Args::parse();
+    // Check providers
+    let providers = parse_ep_args(&args);
+    // Initialize Sentry if DSN is provided
+    let use_sentry = args.sentry_dsn.is_some();
+    let _guard = if let Some(dsn) = args.sentry_dsn {
+        Some(sentry::init((
+            dsn,
+            sentry::ClientOptions {
+                release: sentry::release_name!(),
+                traces_sample_rate: 1f32,
+                sample_rate: 1f32,
+                environment: Some(args.sentry_environment.into()),
+                ..Default::default()
+            },
+        )))
+    } else {
+        None
+    };
 
-    init_tracing("http://localhost:4317", "ferrules-api".into(), false)
-        .expect("can't setup tracing for API");
+    init_tracing(
+        Some(&args.otlp_endpoint),
+        "ferrules-api".into(),
+        false,
+        use_sentry,
+    )
+    .expect("can't setup tracing for API");
 
+    let ort_config = ORTConfig {
+        execution_providers: providers,
+        intra_threads: args.intra_threads,
+        inter_threads: args.inter_threads,
+    };
     // Initialize the layout model and queues
-    let layout_model = Arc::new(ORTLayoutParser::new().expect("Failed to load layout model"));
+    let layout_model =
+        Arc::new(ORTLayoutParser::new(ort_config).expect("Failed to load layout model"));
     let layout_queue = ParseLayoutQueue::new(layout_model);
     let native_queue = ParseNativeQueue::new();
 
@@ -89,7 +204,6 @@ async fn main() {
 
 #[tracing::instrument(skip_all)]
 async fn health_check() -> impl IntoResponse {
-    tracing::error!("ERROR OCCURED HEALTHZ");
     Json(ApiResponse {
         success: true,
         data: Some("Service is healthy"),

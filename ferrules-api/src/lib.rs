@@ -3,40 +3,52 @@ use opentelemetry_otlp::WithExportConfig;
 use opentelemetry_sdk::Resource;
 use opentelemetry_semantic_conventions::resource::SERVICE_NAME;
 
-use tracing_subscriber::fmt::format::FmtSpan;
 use tracing_subscriber::layer::SubscriberExt;
 use tracing_subscriber::util::SubscriberInitExt;
-use tracing_subscriber::EnvFilter;
+use tracing_subscriber::{EnvFilter, Layer};
 
 pub fn init_tracing(
-    // TODO Optional
-    otlp_endpoint: &str,
+    otlp_endpoint: Option<&str>,
     otlp_service_name: String,
     json_output: bool,
+    use_sentry: bool,
 ) -> anyhow::Result<()> {
-    let provider = opentelemetry_sdk::trace::TracerProvider::builder()
-        .with_batch_exporter(
-            opentelemetry_otlp::SpanExporter::builder()
-                .with_tonic()
-                .with_endpoint(otlp_endpoint)
-                .build()?,
-            opentelemetry_sdk::runtime::Tokio,
-        )
-        .with_resource(Resource::new(vec![KeyValue::new(
-            SERVICE_NAME,
-            otlp_service_name,
-        )]))
-        .build();
-    let tracer = provider.tracer("default_tracer_name");
-    global::set_tracer_provider(provider);
-    let otel_layer = tracing_opentelemetry::layer().with_tracer(tracer);
+    let mut layers = Vec::new();
 
     let fmt_layer = tracing_subscriber::fmt::layer()
-        .pretty()
+        .with_file(true)
+        // .with_span_events(FmtSpan::NEW | FmtSpan::CLOSE)
         .with_line_number(true)
-        .with_thread_names(true)
-        .with_span_events(FmtSpan::NEW | FmtSpan::CLOSE)
         .with_timer(tracing_subscriber::fmt::time::uptime());
+    let fmt_layer = match json_output {
+        true => fmt_layer.json().flatten_event(true).boxed(),
+        false => fmt_layer.boxed(),
+    };
+    layers.push(fmt_layer);
+
+    if let Some(otlp_endpoint) = otlp_endpoint {
+        let provider = opentelemetry_sdk::trace::TracerProvider::builder()
+            .with_batch_exporter(
+                opentelemetry_otlp::SpanExporter::builder()
+                    .with_tonic()
+                    .with_endpoint(otlp_endpoint)
+                    .build()?,
+                opentelemetry_sdk::runtime::Tokio,
+            )
+            .with_resource(Resource::new(vec![KeyValue::new(
+                SERVICE_NAME,
+                otlp_service_name,
+            )]))
+            .build();
+        let tracer = provider.tracer("default_tracer_name");
+        global::set_tracer_provider(provider);
+        let otel_layer = tracing_opentelemetry::layer().with_tracer(tracer).boxed();
+        layers.push(otel_layer)
+    }
+
+    if use_sentry {
+        layers.push(sentry_tracing::layer().boxed())
+    }
 
     // Env filter for all
     let env_filter = EnvFilter::try_from_env("LOG_LEVEL").unwrap_or_else(|_| {
@@ -46,9 +58,7 @@ pub fn init_tracing(
     });
     tracing_subscriber::registry()
         .with(env_filter)
-        .with(fmt_layer)
-        .with(sentry_tracing::layer())
-        .with(otel_layer)
+        .with(layers)
         .init();
 
     Ok(())
@@ -59,7 +69,7 @@ pub fn init_tracing(
 //     otlp_service_name: String,
 //     json_output: bool,
 // ) -> bool {
-//     let mut layers = Vec::new();
+// let mut layers = Vec::new();
 
 //     // STDOUT/STDERR layer
 //     let fmt_layer = tracing_subscriber::fmt::layer()

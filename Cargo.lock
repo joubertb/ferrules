@@ -1026,6 +1026,7 @@ dependencies = [
  "anyhow",
  "axum 0.7.9",
  "axum-tracing-opentelemetry",
+ "clap",
  "ferrules-core",
  "memmap2",
  "opentelemetry",

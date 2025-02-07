@@ -14,6 +14,35 @@ use crate::entities::BBox;
 
 pub const LAYOUT_MODEL_BYTES: &[u8] = include_bytes!("../../../models/yolov8s-doclaynet.onnx");
 
+#[derive(Debug, Clone)]
+pub struct ORTConfig {
+    pub execution_providers: Vec<OrtExecutionProvider>,
+    pub intra_threads: usize,
+    pub inter_threads: usize,
+}
+
+#[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
+pub enum OrtExecutionProvider {
+    CPU,
+    CoreML { ane_only: bool },
+    CUDA(i32),
+    Trt(i32),
+}
+
+impl Default for ORTConfig {
+    fn default() -> Self {
+        let mut execution_providers = vec![OrtExecutionProvider::CPU];
+        if cfg!(target_os = "macos") {
+            execution_providers.push(OrtExecutionProvider::CoreML { ane_only: false });
+        }
+        Self {
+            execution_providers,
+            intra_threads: ORTLayoutParser::ORT_INTRATHREAD,
+            inter_threads: ORTLayoutParser::ORT_INTERTHREAD,
+        }
+    }
+}
+
 lazy_static! {
     static ref ID2LABEL: [&'static str; 11] = [
         "Caption",
@@ -115,20 +144,49 @@ impl ORTLayoutParser {
     pub const ORT_INTRATHREAD: usize = 16;
     pub const ORT_INTERTHREAD: usize = 4;
 
-    pub fn new() -> anyhow::Result<Self> {
+    pub fn new(config: ORTConfig) -> anyhow::Result<Self> {
+        let mut execution_providers = Vec::new();
+
+        // Sort providers by priority
+        let mut providers = config.execution_providers;
+        providers.sort();
+
+        for provider in providers {
+            match provider {
+                OrtExecutionProvider::Trt(device_id) => {
+                    execution_providers.push(
+                        TensorRTExecutionProvider::default()
+                            .with_device_id(device_id)
+                            .build(),
+                    );
+                }
+                OrtExecutionProvider::CUDA(device_id) => {
+                    execution_providers.push(
+                        CUDAExecutionProvider::default()
+                            .with_device_id(device_id)
+                            .build(),
+                    );
+                }
+                OrtExecutionProvider::CoreML { ane_only } => {
+                    let provider = CoreMLExecutionProvider::default();
+                    let provider = if ane_only {
+                        provider.with_ane_only().build()
+                    } else {
+                        provider.build()
+                    };
+                    execution_providers.push(provider)
+                }
+                OrtExecutionProvider::CPU => {
+                    execution_providers.push(CPUExecutionProvider::default().build());
+                }
+            }
+        }
+
         let session = Session::builder()?
-            .with_execution_providers([
-                TensorRTExecutionProvider::default().build(),
-                CUDAExecutionProvider::default().build(),
-                CoreMLExecutionProvider::default()
-                    .with_ane_only()
-                    .with_subgraphs()
-                    .build(),
-                CPUExecutionProvider::default().build(),
-            ])?
-            .with_optimization_level(GraphOptimizationLevel::Level1)?
-            .with_intra_threads(Self::ORT_INTRATHREAD)?
-            .with_inter_threads(Self::ORT_INTERTHREAD)?
+            .with_execution_providers(execution_providers)?
+            .with_optimization_level(GraphOptimizationLevel::Level3)?
+            .with_intra_threads(config.intra_threads)?
+            .with_inter_threads(config.inter_threads)?
             .commit_from_memory(LAYOUT_MODEL_BYTES)?;
 
         let output_name = session

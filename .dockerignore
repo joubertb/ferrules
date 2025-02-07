@@ -1,0 +1,14 @@
+target/
+debug/
+**/*.rs.bk
+python/
+
+# Documentation
+README.md
+CHANGELOG.md
+docs/
+
+# Test files
+tests/
+**/tests/
+**/test/

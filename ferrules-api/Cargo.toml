@@ -12,6 +12,7 @@ serde = { workspace = true }
 serde_json = { workspace = true }
 uuid = { workspace = true }
 memmap2 = { workspace = true }
+clap = { workspace = true }
 
 # API specific
 axum = { version = "0.7.4", features = ["multipart", "json"] }

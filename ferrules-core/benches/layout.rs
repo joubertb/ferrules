@@ -38,7 +38,8 @@ fn parse_loop(model: &ORTLayoutParser, images: &[DynamicImage], factors: &[f32])
 
 fn bench_layout(c: &mut Criterion) {
     // Setup inputs
-    let layout_model_single_batch = ORTLayoutParser::new().expect("can't load layout model");
+    let layout_model_single_batch =
+        ORTLayoutParser::new(Default::default()).expect("can't load layout model");
 
     let number_images = 20;
     let images = get_fake_images(

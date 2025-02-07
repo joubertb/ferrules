@@ -1,7 +1,10 @@
 use clap::Parser;
 
 use ferrules_core::{
-    layout::{model::ORTLayoutParser, ParseLayoutQueue},
+    layout::{
+        model::{ORTConfig, ORTLayoutParser, OrtExecutionProvider},
+        ParseLayoutQueue,
+    },
     parse::{
         document::{get_doc_length, parse_document},
         native::ParseNativeQueue,
@@ -71,18 +74,55 @@ struct Args {
     /// Use CoreML for layout inference (default: true)
     #[arg(
         long,
-        default_value_t = true,
+        default_value_t = cfg!(target_os = "macos"),
         help = "Enable or disable the use of CoreML for layout inference"
     )]
-    pub coreml: bool,
+    coreml: bool,
 
-    /// Use CUDA device for layout inference (default: false)
+    #[arg(
+        long,
+        default_value_t = true,
+        help = "Enable or disable Apple Neural Engine acceleration (only applies when CoreML is enabled)"
+    )]
+    use_ane: bool,
+
+    #[arg(
+        long,
+        default_value_t = false,
+        help = "Enable or disable the use of TensorRT for layout inference"
+    )]
+    trt: bool,
+
     #[arg(
         long,
         default_value_t = false,
         help = "Enable or disable the use of CUDA for layout inference"
     )]
-    pub cuda: bool,
+    cuda: bool,
+
+    /// CUDA device ID to use for GPU acceleration (e.g. 0 for first GPU)
+    #[arg(
+        long,
+        help = "CUDA device ID to use (0 for first GPU)",
+        default_value_t = 0
+    )]
+    device_id: i32,
+
+    /// Number of threads to use within individual operations
+    #[arg(
+        long,
+        help = "Number of threads to use for parallel processing within operations",
+        default_value = "16"
+    )]
+    intra_threads: usize,
+
+    /// Number of threads to use for parallel operation execution
+    #[arg(
+        long,
+        help = "Number of threads to use for executing operations in parallel",
+        default_value = "4"
+    )]
+    inter_threads: usize,
 
     /// Enable debug mode to output additional information
     #[arg(
@@ -148,12 +188,38 @@ fn setup_progress_bar(
     pb
 }
 
+fn parse_ep_args(args: &Args) -> Vec<OrtExecutionProvider> {
+    let mut providers = Vec::new();
+    if args.trt {
+        providers.push(OrtExecutionProvider::Trt(args.device_id));
+    }
+    if args.cuda {
+        providers.push(OrtExecutionProvider::CUDA(args.device_id));
+    }
+
+    if args.coreml {
+        providers.push(OrtExecutionProvider::CoreML {
+            ane_only: args.use_ane,
+        });
+    }
+    providers.push(OrtExecutionProvider::CPU);
+    providers
+}
+
 #[tokio::main(flavor = "multi_thread")]
 async fn main() {
     let args = Args::parse();
 
+    // Check providers
+    let providers = parse_ep_args(&args);
+
+    let ort_config = ORTConfig {
+        execution_providers: providers,
+        intra_threads: args.intra_threads,
+        inter_threads: args.inter_threads,
+    };
     // Global tasks
-    let layout_model = Arc::new(ORTLayoutParser::new().expect("can't load layout model"));
+    let layout_model = Arc::new(ORTLayoutParser::new(ort_config).expect("can't load layout model"));
     let layout_queue = ParseLayoutQueue::new(layout_model);
     let native_queue = ParseNativeQueue::new();
 
