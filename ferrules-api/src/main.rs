@@ -44,6 +44,19 @@ struct AppState {
 
 #[tokio::main]
 async fn main() {
+    // Sentry layer
+    let _guard = sentry::init((
+        "http://61d0d136092e222e61505bccf2c306da@rig:9000/3",
+        sentry::ClientOptions {
+            release: sentry::release_name!(),
+            traces_sample_rate: 1f32,
+            sample_rate: 1f32,
+            environment: Some("dev".into()),
+            debug: true,
+            ..Default::default()
+        },
+    ));
+
     init_tracing("http://localhost:4317", "ferrules-api".into(), false)
         .expect("can't setup tracing for API");
 
@@ -76,6 +89,7 @@ async fn main() {
 
 #[tracing::instrument(skip_all)]
 async fn health_check() -> impl IntoResponse {
+    tracing::error!("ERROR OCCURED HEALTHZ");
     Json(ApiResponse {
         success: true,
         data: Some("Service is healthy"),

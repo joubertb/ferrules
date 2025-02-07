@@ -31,12 +31,6 @@ pub fn init_tracing(
     global::set_tracer_provider(provider);
     let otel_layer = tracing_opentelemetry::layer().with_tracer(tracer);
 
-    let env_filter = EnvFilter::try_from_env("LOG_LEVEL").unwrap_or_else(|_| {
-        EnvFilter::new(
-            "ferrules_api=debug,ferrules_core=debug,axum_tracing_opentelemetry=info,otel=debug",
-        )
-    });
-
     let fmt_layer = tracing_subscriber::fmt::layer()
         .pretty()
         .with_line_number(true)
@@ -44,12 +38,19 @@ pub fn init_tracing(
         .with_span_events(FmtSpan::NEW | FmtSpan::CLOSE)
         .with_timer(tracing_subscriber::fmt::time::uptime());
 
+    // Env filter for all
+    let env_filter = EnvFilter::try_from_env("LOG_LEVEL").unwrap_or_else(|_| {
+        EnvFilter::new(
+            "ferrules_api=debug,ferrules_core=debug,axum_tracing_opentelemetry=info,otel=debug",
+        )
+    });
     tracing_subscriber::registry()
         .with(env_filter)
         .with(fmt_layer)
+        .with(sentry_tracing::layer())
         .with(otel_layer)
         .init();
-    // TODO: return guard to flush
+
     Ok(())
 }
 

@@ -28,3 +28,7 @@ tracing-opentelemetry = "0.28.0"
 opentelemetry-otlp = "0.27.0"
 axum-tracing-opentelemetry = { version = "0.25.0" }
 # axum integrations with otel
+
+# sentry integration
+sentry = { version = "0.36.0", features = ["log"] }
+sentry-tracing = "0.36.0"
