@@ -24,9 +24,9 @@ pub struct ORTConfig {
 #[derive(Debug, Clone, PartialEq, Eq, PartialOrd, Ord)]
 pub enum OrtExecutionProvider {
     CPU,
-    CoreML { ane_only: bool },
     CUDA(i32),
     Trt(i32),
+    CoreML { ane_only: bool },
 }
 
 impl Default for ORTConfig {
@@ -85,6 +85,7 @@ impl LayoutBBox {
 pub struct ORTLayoutParser {
     session: Session,
     output_name: String,
+    pub config: ORTConfig,
 }
 
 impl ORTLayoutParser {
@@ -144,11 +145,11 @@ impl ORTLayoutParser {
     pub const ORT_INTRATHREAD: usize = 16;
     pub const ORT_INTERTHREAD: usize = 4;
 
-    pub fn new(config: ORTConfig) -> anyhow::Result<Self> {
+    pub fn new(mut config: ORTConfig) -> anyhow::Result<Self> {
         let mut execution_providers = Vec::new();
 
-        // Sort providers by priority
-        let mut providers = config.execution_providers;
+        // Sort providers by priority cpu -> cuda -> coreml
+        let providers = &mut config.execution_providers;
         providers.sort();
 
         for provider in providers {
@@ -156,20 +157,20 @@ impl ORTLayoutParser {
                 OrtExecutionProvider::Trt(device_id) => {
                     execution_providers.push(
                         TensorRTExecutionProvider::default()
-                            .with_device_id(device_id)
+                            .with_device_id(*device_id)
                             .build(),
                     );
                 }
                 OrtExecutionProvider::CUDA(device_id) => {
                     execution_providers.push(
                         CUDAExecutionProvider::default()
-                            .with_device_id(device_id)
+                            .with_device_id(*device_id)
                             .build(),
                     );
                 }
                 OrtExecutionProvider::CoreML { ane_only } => {
                     let provider = CoreMLExecutionProvider::default();
-                    let provider = if ane_only {
+                    let provider = if *ane_only {
                         provider.with_ane_only().build()
                     } else {
                         provider.build()
@@ -199,6 +200,7 @@ impl ORTLayoutParser {
         Ok(Self {
             session,
             output_name,
+            config,
         })
     }
 
