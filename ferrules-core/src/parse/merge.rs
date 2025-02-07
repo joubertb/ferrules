@@ -1,3 +1,5 @@
+use tracing::instrument;
+
 use crate::{
     blocks::{Block, BlockType, ImageBlock, List, TextBlock, Title},
     entities::{Element, ElementType, Line, PageID},
@@ -187,6 +189,7 @@ pub(crate) fn merge_remaining(
     }
 }
 
+#[instrument(skip_all)]
 pub(crate) fn merge_elements_into_blocks(elements: Vec<Element>) -> anyhow::Result<Vec<Block>> {
     let mut element_it = elements.into_iter().peekable();
 
