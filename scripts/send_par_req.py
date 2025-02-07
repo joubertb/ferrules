@@ -13,6 +13,9 @@ import statistics
 import argparse
 from asyncio.locks import Semaphore
 
+from attr import Out
+from os import removedirs
+
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
@@ -132,6 +135,7 @@ async def process_directory(
 
     # Create temporary directory for responses
     output_dir = Path(output_dir)
+    os.removedirs(output_dir)
     output_dir.mkdir(exist_ok=True)
     logger.info(f"Storing responses in: {output_dir}")
 
