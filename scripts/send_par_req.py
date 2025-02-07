@@ -10,6 +10,7 @@ import json
 import glob
 import statistics
 
+import argparse
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -144,12 +145,30 @@ async def process_directory(
 
 def main():
     # Directory containing the files
-    INPUT_DIR = "/Users/amine/data/quivr/sample-knowledges"
-    MAX_CONCURRENT = 10
+    # INPUT_DIR = "/Users/amine/data/quivr/sample-knowledges"
+    # MAX_CONCURRENT = 10
+
+    # Set up argument parser
+    parser = argparse.ArgumentParser(description="Process PDF files for parsing.")
+    parser.add_argument("input_dir", help="Directory containing PDF files to process")
+    parser.add_argument(
+        "--max-concurrent",
+        type=int,
+        default=10,
+        help="Maximum number of concurrent requests (default: 10)",
+    )
+
+    # Parse arguments
+    args = parser.parse_args()
+
+    # Verify input directory exists
+    if not os.path.isdir(args.input_dir):
+        logger.error(f"Input directory '{args.input_dir}' does not exist")
+        return
 
     # Run the async process
     s = perf_counter()
-    asyncio.run(process_directory(INPUT_DIR, MAX_CONCURRENT))
+    asyncio.run(process_directory(args.input_dir, args.max_concurrent))
     logger.info("All files processed.")
     e = perf_counter()
     analyze_parsing_results(e - s)
