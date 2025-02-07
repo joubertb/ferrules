@@ -13,9 +13,6 @@ import statistics
 import argparse
 from asyncio.locks import Semaphore
 
-from attr import Out
-from os import removedirs
-
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
 
