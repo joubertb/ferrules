@@ -117,12 +117,14 @@ async def process_file(session, file_path, sem):
 
 
 async def process_directory(
-    input_dir, max_concurrent=4, output_dir="/tmp/pdf_responses"
+    input_dir, max_concurrent=4, output_dir="/tmp/pdf_responses", limit=None
 ):
     sem = Semaphore(max_concurrent)
     """Process all PDF files in the directory with concurrency limit."""
     input_path = Path(input_dir)
-    pdf_files = list(input_path.glob("*.pdf"))[:50]
+    pdf_files = list(input_path.glob("*.pdf"))
+    if limit is not None:
+        pdf_files = pdf_files[:limit]
 
     if not pdf_files:
         logger.warning(f"No PDF files found in {input_dir}")
@@ -150,11 +152,6 @@ async def process_directory(
 
 
 def main():
-    # Directory containing the files
-    # INPUT_DIR = "/Users/amine/data/quivr/sample-knowledges"
-    # MAX_CONCURRENT = 10
-
-    # Set up argument parser
     parser = argparse.ArgumentParser(description="Process PDF files for parsing.")
     parser.add_argument("input_dir", help="Directory containing PDF files to process")
     parser.add_argument(
@@ -163,7 +160,11 @@ def main():
         default=10,
         help="Maximum number of concurrent requests (default: 10)",
     )
-
+    parser.add_argument(
+        "--limit",
+        type=int,
+        help="Limit the number of PDF files to process (default: process all files)",
+    )
     # Parse arguments
     args = parser.parse_args()
 
@@ -174,7 +175,9 @@ def main():
 
     # Run the async process
     s = perf_counter()
-    asyncio.run(process_directory(args.input_dir, args.max_concurrent))
+    asyncio.run(
+        process_directory(args.input_dir, args.max_concurrent, limit=args.limit)
+    )
     logger.info("All files processed.")
     e = perf_counter()
     analyze_parsing_results(e - s)
