@@ -11,6 +11,7 @@ import glob
 import statistics
 
 import argparse
+from asyncio.locks import Semaphore
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -88,31 +89,37 @@ def analyze_parsing_results(
         return None
 
 
-async def process_file(session, file_path):
-    """Process a single file using aiohttp."""
+async def process_file(session, file_path, sem):
+    """Process a single file using aiohttp with semaphore control."""
     filename = os.path.basename(file_path)
 
-    try:
-        # Prepare the file for upload
-        data = aiohttp.FormData()
-        data.add_field("file", open(file_path, "rb"), filename=filename)
+    async with sem:  # Use semaphore to limit concurrent requests
+        try:
+            # Prepare the file for upload
+            data = aiohttp.FormData()
+            data.add_field("file", open(file_path, "rb"), filename=filename)
 
-        async with session.post("http://localhost:3002/parse", data=data) as response:
-            if response.status == 200:
-                result = await response.text()
-                logger.info(f"Successfully processed: {filename}")
-                return filename, result
-            else:
-                logger.error(f"Error processing {filename}: Status {response.status}")
-                return filename, None
-    except Exception as e:
-        logger.error(f"Exception processing {filename}: {str(e)}")
-        return filename, None
+            async with session.post(
+                "http://localhost:3002/parse", data=data
+            ) as response:
+                if response.status == 200:
+                    result = await response.text()
+                    logger.info(f"Successfully processed: {filename}")
+                    return filename, result
+                else:
+                    logger.error(
+                        f"Error processing {filename}: Status {response.status}"
+                    )
+                    return filename, None
+        except Exception as e:
+            logger.error(f"Exception processing {filename}: {str(e)}")
+            return filename, None
 
 
 async def process_directory(
     input_dir, max_concurrent=4, output_dir="/tmp/pdf_responses"
 ):
+    sem = Semaphore(max_concurrent)
     """Process all PDF files in the directory with concurrency limit."""
     input_path = Path(input_dir)
     pdf_files = list(input_path.glob("*.pdf"))[:50]
@@ -127,10 +134,9 @@ async def process_directory(
     logger.info(f"Storing responses in: {output_dir}")
 
     # Configure connection pooling
-    connector = aiohttp.TCPConnector(limit=max_concurrent)
-    async with aiohttp.ClientSession(connector=connector) as session:
-        # Create tasks for all files
-        tasks = [process_file(session, str(pdf)) for pdf in pdf_files]
+    async with aiohttp.ClientSession() as session:
+        # Create tasks for all files, passing the semaphore
+        tasks = [process_file(session, str(pdf), sem) for pdf in pdf_files]
 
         # Process files and gather results
         results = await asyncio.gather(*tasks)
