@@ -12,6 +12,7 @@ import statistics
 
 import argparse
 from asyncio.locks import Semaphore
+import shutil
 
 logging.basicConfig(level=logging.INFO)
 logger = logging.getLogger(__name__)
@@ -132,8 +133,9 @@ async def process_directory(
 
     # Create temporary directory for responses
     output_dir = Path(output_dir)
-    os.removedirs(output_dir)
-    output_dir.mkdir(exist_ok=True)
+    if output_dir.exists():
+        shutil.rmtree(output_dir)
+    output_dir.mkdir(parents=True, exist_ok=True)
     logger.info(f"Storing responses in: {output_dir}")
 
     # Configure connection pooling
