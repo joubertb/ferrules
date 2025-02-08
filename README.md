@@ -1,6 +1,4 @@
-<div align="center">
-    <img src="./imgs/ferrules-logo.png" alt="Ferrules-logo" width="31%"  style="border-radius: 50%; padding-bottom: 20px"/>
-</div>
+
 
 <div align="center">
 <h1> Ferrules:  Modern, fast, document parser written in 🦀 </h1>
