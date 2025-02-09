@@ -162,7 +162,7 @@ results = asyncio.run(process_documents(file_paths))
 
 Ferrules API integrates with OpenTelemetry to provide detailed tracing of document processing operations. The traces can be visualized using Jaeger UI:
 
-![Jaeger Trace View](imgs/jaeger.png)
+![Jaeger Trace View](imgs/jaeger-trace.png)
 
 Key traced operations include:
 
