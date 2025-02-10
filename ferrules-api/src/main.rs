@@ -14,6 +14,7 @@ use ferrules_core::{
     parse::{document::parse_document, native::ParseNativeQueue},
 };
 use memmap2::Mmap;
+use mimalloc::MiMalloc;
 use serde::{Deserialize, Serialize};
 use std::{
     io::{Seek, Write},
@@ -22,6 +23,9 @@ use std::{
 use tempfile::NamedTempFile;
 use tokio::{fs::File, net::TcpListener};
 use uuid::Uuid;
+
+#[global_allocator]
+static GLOBAL: MiMalloc = MiMalloc;
 
 const MAX_SIZE_LIMIT: usize = 250 * 1024 * 1024;
 
