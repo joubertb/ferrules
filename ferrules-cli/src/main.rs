@@ -111,6 +111,7 @@ struct Args {
     /// Number of threads to use within individual operations
     #[arg(
         long,
+        short = 'j',
         help = "Number of threads to use for parallel processing within operations",
         default_value = "16"
     )]
