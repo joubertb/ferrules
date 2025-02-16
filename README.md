@@ -49,27 +49,15 @@ Ferrules provides precompiled binaries for macOS, available for download from th
 
 ### macOS Installation
 
-1. Download the latest `ferrules-macos` binary from the [releases](https://github.com/aminediro/ferrules/releases).
+1. Download the latest `ferrules` binary from the [releases](https://github.com/aminediro/ferrules/releases).
 
-2. Make the binary executable:
-
-   ```sh
-   chmod +x ferrules-macos
-   ```
-
-3. Move the binary to a directory in your PATH, for example `/usr/local/bin`:
-
-   ```sh
-   sudo mv ferrules-macos /usr/local/bin/ferrules
-   ```
-
-4. Verify the installation:
+2. Verify the installation:
 
    ```sh
    ferrules --version
    ```
 
-### Linux Installation (COMING SOON)
+### Linux Installation
 
 Linux support with NVIDIA GPU acceleration will be available soon. Keep an eye out for updates on the [releases](https://github.com/aminediro/ferrules/releases) page.
 
