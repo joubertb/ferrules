@@ -30,10 +30,10 @@
   - [x] Group caption/footer blocks with image blocks
   - [x] Group Page header / Page footer
   - [x] Move header element to the top of the page
+  - [x] Process SubHeader/Titles using kmeans on line heigths to get the title_level
   - [ ] Merge text block based on gap distance
-  - [ ] Process SubHeader/Titles using kmeans on line heigths to get the title_level
   - [ ] Run Block processors (Text, List, PageHeader )
-  - [ ] Get PDF Bookmarks (TOC) and reconcile detected titles with TOC
+  - [ ] Get PDF Bookmarks (TOC) and reconcile detected titles with TOC and
 
 - Tables
 
