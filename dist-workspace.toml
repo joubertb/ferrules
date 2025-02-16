@@ -4,6 +4,7 @@ members = ["cargo:ferrules-cli"]
 [dist]
 cargo-dist-version = "0.28.0"
 ci = "github"
+rust-toolchain-version = "nightly"
 installers = ["shell"]
 targets = [
     "aarch64-apple-darwin",
