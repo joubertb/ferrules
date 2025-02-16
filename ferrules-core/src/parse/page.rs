@@ -1,4 +1,5 @@
 use std::{
+    collections::HashMap,
     path::{Path, PathBuf},
     sync::Arc,
     time::Instant,
@@ -252,7 +253,8 @@ fn debug_page(
     let out_img = draw_text_lines(text_lines, page_image, need_ocr)?;
     let out_img = draw_layout_bboxes(page_layout, &out_img.into())?;
     // Draw the final prediction -
-    let blocks = merge_elements_into_blocks(elements.to_vec())?;
+    // TODO: Implement titles hashmap for titles in the page
+    let blocks = merge_elements_into_blocks(elements.to_vec(), HashMap::new())?;
     let final_img = draw_blocks(&blocks, page_image)?;
     out_img.save(output_file)?;
 

@@ -2,6 +2,8 @@ use crate::entities::{BBox, Element, ElementType, PageID};
 use anyhow::bail;
 use serde::{Deserialize, Serialize};
 
+pub type TitleLevel = u8;
+
 #[derive(Debug, Default, Deserialize, Serialize)]
 pub struct ImageBlock {
     pub(crate) caption: Option<String>,
@@ -19,7 +21,7 @@ pub struct List {
 
 #[derive(Debug, Default, Deserialize, Serialize)]
 pub struct Title {
-    pub level: u8,
+    pub level: TitleLevel,
     pub text: String,
 }
 

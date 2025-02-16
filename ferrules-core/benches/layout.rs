@@ -1,6 +1,6 @@
 use rand::Rng;
 
-use std::{hint::black_box, iter::repeat, time::Duration};
+use std::{hint::black_box, iter::repeat_n, time::Duration};
 
 use criterion::{criterion_main, Criterion};
 use ferrules_core::layout::model::ORTLayoutParser;
@@ -48,7 +48,7 @@ fn bench_layout(c: &mut Criterion) {
         ORTLayoutParser::REQUIRED_HEIGHT,
     );
 
-    let rescale_factors: Vec<f32> = repeat(1f32).take(number_images).collect();
+    let rescale_factors: Vec<f32> = repeat_n(1f32, number_images).collect();
 
     // Group
     //

@@ -1,3 +1,4 @@
+#![feature(portable_simd)]
 use anyhow::Context;
 use colored::*;
 use std::{
@@ -14,6 +15,7 @@ pub mod parse;
 pub mod blocks;
 pub mod entities;
 pub mod layout;
+pub mod render;
 
 pub mod ocr;
 

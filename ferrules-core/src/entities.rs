@@ -8,6 +8,7 @@ use pdfium_render::prelude::{PdfFontWeight, PdfPageTextChar, PdfRect};
 use crate::{blocks::Block, layout::model::LayoutBBox};
 
 pub type PageID = usize;
+pub type ElementID = usize;
 
 const FERRULES_VERSION: &str = env!("CARGO_PKG_VERSION");
 #[derive(Debug, Default, Clone, Deserialize, Serialize)]
@@ -152,7 +153,7 @@ pub enum ElementType {
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
 pub struct Element {
-    pub id: usize,
+    pub id: ElementID,
     pub layout_block_id: i32,
     pub text_block: ElementText,
     pub kind: ElementType,

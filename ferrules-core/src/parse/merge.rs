@@ -1,8 +1,10 @@
+use std::collections::HashMap;
+
 use tracing::instrument;
 
 use crate::{
-    blocks::{Block, BlockType, ImageBlock, List, TextBlock, Title},
-    entities::{Element, ElementType, Line, PageID},
+    blocks::{Block, BlockType, ImageBlock, List, TextBlock, Title, TitleLevel},
+    entities::{Element, ElementID, ElementType, Line, PageID},
     layout::model::LayoutBBox,
 };
 
@@ -190,7 +192,10 @@ pub(crate) fn merge_remaining(
 }
 
 #[instrument(skip_all)]
-pub(crate) fn merge_elements_into_blocks(elements: Vec<Element>) -> anyhow::Result<Vec<Block>> {
+pub(crate) fn merge_elements_into_blocks(
+    elements: Vec<Element>,
+    title_level: HashMap<(PageID, ElementID), TitleLevel>,
+) -> anyhow::Result<Vec<Block>> {
     let mut element_it = elements.into_iter().peekable();
 
     let mut blocks = Vec::new();
@@ -396,12 +401,13 @@ pub(crate) fn merge_elements_into_blocks(elements: Vec<Element>) -> anyhow::Resu
                 blocks.push(footer_block);
             }
             ElementType::Title | ElementType::Subtitle => {
-                // TODO:
-                // Handle title level via text font size (using kmeans)
+                let lvl = title_level
+                    .get(&(curr_el.page_id, curr_el.id))
+                    .unwrap_or(&0u8);
                 let title = Block {
                     id: block_id,
                     kind: BlockType::Title(Title {
-                        level: 0,
+                        level: *lvl,
                         text: curr_el.text_block.text,
                     }),
                     pages_id: vec![curr_el.page_id],
@@ -507,7 +513,7 @@ mod tests {
             create_text_element(1, 1, "Second paragraph", bbox2),
         ];
 
-        let blocks = merge_elements_into_blocks(elements)?;
+        let blocks = merge_elements_into_blocks(elements, HashMap::new())?;
 
         assert_eq!(blocks.len(), 1);
         if let BlockType::TextBlock(text) = &blocks[0].kind {
@@ -540,7 +546,7 @@ mod tests {
             create_text_element(2, 1, "Random text", bbox2),
         ];
 
-        let blocks = merge_elements_into_blocks(elements)?;
+        let blocks = merge_elements_into_blocks(elements, HashMap::new())?;
 
         assert_eq!(blocks.len(), 2);
         if let BlockType::ListBlock(list) = &blocks[0].kind {
@@ -573,7 +579,7 @@ mod tests {
             create_image_element(1, 1, image_bbox),
         ];
 
-        let blocks = merge_elements_into_blocks(elements)?;
+        let blocks = merge_elements_into_blocks(elements, HashMap::new())?;
 
         assert_eq!(blocks.len(), 1);
         if let BlockType::Image(image) = &blocks[0].kind {
@@ -595,7 +601,7 @@ mod tests {
 
         let elements = vec![create_caption_element(0, 1, "Orphan caption", caption_bbox)];
 
-        let blocks = merge_elements_into_blocks(elements)?;
+        let blocks = merge_elements_into_blocks(elements, HashMap::new())?;
 
         assert_eq!(blocks.len(), 1);
         if let BlockType::TextBlock(text) = &blocks[0].kind {
@@ -626,7 +632,7 @@ mod tests {
             create_text_element(1, 1, "Distant paragraph", bbox2),
         ];
 
-        let blocks = merge_elements_into_blocks(elements)?;
+        let blocks = merge_elements_into_blocks(elements, HashMap::new())?;
 
         assert_eq!(blocks.len(), 2);
         Ok(())
@@ -643,7 +649,7 @@ mod tests {
 
         let elements = vec![create_image_element(0, 1, image_bbox)];
 
-        let blocks = merge_elements_into_blocks(elements)?;
+        let blocks = merge_elements_into_blocks(elements, HashMap::new())?;
 
         assert_eq!(blocks.len(), 1);
         if let BlockType::Image(image) = &blocks[0].kind {
@@ -674,7 +680,7 @@ mod tests {
             create_caption_element(1, 1, "Image Description", caption_bbox),
         ];
 
-        let blocks = merge_elements_into_blocks(elements)?;
+        let blocks = merge_elements_into_blocks(elements, HashMap::new())?;
 
         assert_eq!(blocks.len(), 1);
         if let BlockType::Image(image) = &blocks[0].kind {
@@ -705,7 +711,7 @@ mod tests {
             create_text_element(1, 1, "Regular text", text_bbox),
         ];
 
-        let blocks = merge_elements_into_blocks(elements)?;
+        let blocks = merge_elements_into_blocks(elements, HashMap::new())?;
 
         assert_eq!(blocks.len(), 2);
         if let BlockType::Image(image) = &blocks[0].kind {
@@ -742,7 +748,7 @@ mod tests {
             create_footnote_element(1, 1, "Image Footnote", footnote_bbox),
         ];
 
-        let blocks = merge_elements_into_blocks(elements)?;
+        let blocks = merge_elements_into_blocks(elements, HashMap::new())?;
 
         assert_eq!(blocks.len(), 1);
         if let BlockType::Image(image) = &blocks[0].kind {

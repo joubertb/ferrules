@@ -19,6 +19,7 @@ use super::{
     merge::merge_elements_into_blocks,
     native::{ParseNativePageResult, ParseNativeQueue, ParseNativeRequest},
     page::parse_page_full,
+    titles::title_levels_kmeans,
 };
 
 async fn parse_task<F>(
@@ -155,9 +156,20 @@ where
 
     let all_elements = parsed_pages
         .iter()
-        // TODO: clone might be huge here
         .flat_map(|p| p.elements.clone())
         .collect::<Vec<_>>();
+
+    let titles = all_elements
+        .iter()
+        .filter(|e| {
+            matches!(
+                e.kind,
+                crate::entities::ElementType::Title | crate::entities::ElementType::Subtitle
+            )
+        })
+        .collect::<Vec<_>>();
+
+    let title_level = title_levels_kmeans(&titles, 4);
 
     let doc_pages = parsed_pages
         .into_iter()
@@ -170,7 +182,7 @@ where
         })
         .collect();
 
-    let blocks = merge_elements_into_blocks(all_elements)?;
+    let blocks = merge_elements_into_blocks(all_elements, title_level)?;
 
     let duration = start_time.elapsed();
 
