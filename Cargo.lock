@@ -455,6 +455,12 @@ dependencies = [
 ]
 
 [[package]]
+name = "build_html"
+version = "2.6.0"
+source = "registry+https://github.com/rust-lang/crates.io-index"
+checksum = "01b01f54cbdd56298a506b086691594ded3b68dcbc9437adc87c616a35e7fc89"
+
+[[package]]
 name = "built"
 version = "0.7.5"
 source = "registry+https://github.com/rust-lang/crates.io-index"
@@ -1082,6 +1088,7 @@ version = "0.1.4"
 dependencies = [
  "ab_glyph",
  "anyhow",
+ "build_html",
  "colored",
  "criterion",
  "dirs",
@@ -1100,6 +1107,7 @@ dependencies = [
  "plsfix",
  "rand",
  "rayon",
+ "regex",
  "serde",
  "serde_json",
  "serde_millis",

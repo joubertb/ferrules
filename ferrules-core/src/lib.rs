@@ -1,10 +1,11 @@
 #![feature(portable_simd)]
 use anyhow::Context;
 use colored::*;
+use render::html::to_html;
 use std::{
-    fs::File,
+    fs::{create_dir, File},
     io::{BufWriter, Write},
-    path::Path,
+    path::{Path, PathBuf},
 };
 
 use entities::ParsedDocument;
@@ -71,12 +72,12 @@ fn save_doc_images(imgs_dir: &Path, doc: &ParsedDocument) -> anyhow::Result<()> 
     Ok(())
 }
 
-pub fn save_parsed_document<P: AsRef<Path>>(
-    doc: &ParsedDocument,
+pub fn create_dirs<P: AsRef<Path>>(
     output_dir: Option<P>,
-    save_imgs: bool,
-) -> anyhow::Result<()> {
-    let result_dir_name = format!("{}-results", sanitize_doc_name(&doc.doc_name));
+    doc_name: &str,
+    debug: bool,
+) -> anyhow::Result<(PathBuf, Option<PathBuf>)> {
+    let result_dir_name = format!("{}-results", sanitize_doc_name(doc_name));
     let res_dir_path = match output_dir {
         Some(p) => p.as_ref().to_owned().join(&result_dir_name),
         None => {
@@ -87,6 +88,22 @@ pub fn save_parsed_document<P: AsRef<Path>>(
             format!("./{}", &result_dir_name).into()
         }
     };
+    let debug_path = if debug {
+        let debug_path = res_dir_path.join("debug");
+        create_dir(&debug_path).context("cant create debug path")?;
+        Some(debug_path)
+    } else {
+        None
+    };
+    Ok((res_dir_path, debug_path))
+}
+
+pub fn save_parsed_document(
+    doc: &ParsedDocument,
+    res_dir_path: PathBuf,
+    save_imgs: bool,
+    save_html: bool,
+) -> anyhow::Result<()> {
     // Save json
     let file_out = res_dir_path.join("result.json");
     let file = File::create(&file_out)?;
@@ -104,6 +121,14 @@ pub fn save_parsed_document<P: AsRef<Path>>(
             "ℹ".yellow().bold(),
             dbg_path.display().to_string().yellow().underline()
         );
+    }
+
+    if save_html {
+        let html_content = to_html(doc, &doc.doc_name).unwrap();
+        let html_file_out = res_dir_path.join(format!("{}.html", doc.doc_name));
+        let file = File::create(&html_file_out)?;
+        let mut writer = BufWriter::new(file);
+        writer.write_all(html_content.as_bytes())?;
     }
 
     println!(

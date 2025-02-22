@@ -157,9 +157,8 @@ pub(crate) fn parse_page_native(
 )]
 pub async fn parse_page_full(
     parse_native_result: ParseNativePageResult,
-    tmp_dir: PathBuf,
+    debug_dir: Option<PathBuf>,
     layout_queue: ParseLayoutQueue,
-    debug: bool,
 ) -> anyhow::Result<StructuredPage> {
     let span = tracing::Span::current();
     let ParseNativePageResult {
@@ -200,7 +199,7 @@ pub async fn parse_page_full(
 
     // Merging elements with layout
     let elements = build_page_elements(&page_layout, &text_lines, page_id)?;
-    if debug {
+    if let Some(tmp_dir) = debug_dir {
         debug_page(
             &tmp_dir,
             page_id,
@@ -234,7 +233,7 @@ pub async fn parse_page_full(
         "parse_native_duration_ms",
         format!("{:?}", parse_native_metadata.parse_native_duration_ms),
     );
-    // TODO add OCR timings
+    // TODO: add OCR timings
 
     Ok(structured_page)
 }

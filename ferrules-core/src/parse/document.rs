@@ -12,7 +12,6 @@ use tracing::instrument;
 use crate::{
     entities::{DocumentMetadata, Page, PageID, ParsedDocument, StructuredPage},
     layout::ParseLayoutQueue,
-    sanitize_doc_name,
 };
 
 use super::{
@@ -24,16 +23,16 @@ use super::{
 
 async fn parse_task<F>(
     parse_native_result: ParseNativePageResult,
-    tmp_dir: PathBuf,
+    debug_dir: Option<PathBuf>,
     layout_queue: ParseLayoutQueue,
-    debug: bool,
     callback: Option<F>,
 ) -> anyhow::Result<StructuredPage>
 where
     F: FnOnce(PageID) + Send + 'static + Clone,
 {
     let page_id = parse_native_result.page_id;
-    let result = parse_page_full(parse_native_result, tmp_dir, layout_queue, debug).await;
+
+    let result = parse_page_full(parse_native_result, debug_dir, layout_queue).await;
     if let Some(callback) = callback {
         callback(page_id)
     }
@@ -47,8 +46,7 @@ async fn parse_doc_pages<F>(
     flatten_pdf: bool,
     password: Option<&str>,
     page_range: Option<Range<usize>>,
-    tmp_dir: &Path,
-    debug: bool,
+    debug_dir: Option<PathBuf>,
     layout_queue: ParseLayoutQueue,
     native_queue: ParseNativeQueue,
     callback: Option<F>,
@@ -66,10 +64,10 @@ where
         match native_page {
             Ok(parse_native_result) => {
                 let layout_queue = layout_queue.clone();
-                let tmp_dir = tmp_dir.to_owned();
+                let tmp_dir = debug_dir.clone();
                 let callback = callback.clone();
                 set.spawn(
-                    parse_task(parse_native_result, tmp_dir, layout_queue, debug, callback)
+                    parse_task(parse_native_result, tmp_dir, layout_queue, callback)
                         .in_current_span(),
                 );
             }
@@ -120,7 +118,7 @@ pub fn get_doc_length<P: AsRef<Path>>(
 }
 
 #[allow(clippy::too_many_arguments)]
-#[instrument(skip(doc, password, layout_queue, native_queue, page_callback, debug))]
+#[instrument(skip(doc, password, layout_queue, native_queue, page_callback, debug_dir))]
 pub async fn parse_document<F>(
     doc: &[u8],
     doc_name: String,
@@ -129,25 +127,19 @@ pub async fn parse_document<F>(
     page_range: Option<Range<usize>>,
     layout_queue: ParseLayoutQueue,
     native_queue: ParseNativeQueue,
-    debug: bool,
+    debug_dir: Option<PathBuf>,
     page_callback: Option<F>,
 ) -> anyhow::Result<ParsedDocument>
 where
     F: FnOnce(PageID) + Send + 'static + Clone,
 {
     let start_time = Instant::now();
-    let tmp_dir = std::env::temp_dir().join(format!("ferrules-{}", sanitize_doc_name(&doc_name)));
-    if debug {
-        std::fs::create_dir_all(&tmp_dir)?;
-    }
-
     let parsed_pages = parse_doc_pages(
         doc,
         flatten_pdf,
         password,
         page_range,
-        &tmp_dir,
-        debug,
+        debug_dir.clone(),
         layout_queue,
         native_queue,
         page_callback,
@@ -190,7 +182,7 @@ where
         doc_name,
         pages: doc_pages,
         blocks,
-        debug_path: if debug { Some(tmp_dir) } else { None },
+        debug_path: debug_dir,
         metadata: DocumentMetadata::new(duration),
     })
 }

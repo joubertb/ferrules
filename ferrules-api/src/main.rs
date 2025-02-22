@@ -376,7 +376,7 @@ async fn parse_document_handler(
         page_range,
         state.layout_queue.clone(),
         state.native_queue.clone(),
-        false,
+        None,
         Some(|_| {}),
     )
     .await
