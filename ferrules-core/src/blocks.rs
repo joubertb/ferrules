@@ -6,7 +6,14 @@ pub type TitleLevel = u8;
 
 #[derive(Debug, Default, Deserialize, Serialize)]
 pub struct ImageBlock {
+    pub(crate) id: usize,
     pub(crate) caption: Option<String>,
+}
+
+impl ImageBlock {
+    pub(crate) fn path(&self) -> String {
+        format!("img_{}.png", self.id)
+    }
 }
 
 #[derive(Debug, Default, Deserialize, Serialize)]

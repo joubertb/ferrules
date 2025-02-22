@@ -1,3 +1,5 @@
+use std::path::PathBuf;
+
 use build_html::{Html, HtmlContainer, HtmlElement, HtmlPage, HtmlTag};
 use regex::Regex;
 
@@ -10,23 +12,22 @@ static LIST_BULLET_PATTERN: &str = r"(^|[\n ]|<[^>]*>)[•●○ഠ ം◦■▪
 #[derive(Debug)]
 pub struct HTMLRenderer {
     root_element: HtmlElement,
+    img_src_path: PathBuf,
     list_regex: Regex,
 }
 
-impl Default for HTMLRenderer {
-    fn default() -> Self {
+impl HTMLRenderer {
+    pub(crate) fn new(img_src_path: PathBuf) -> Self {
         let root = HtmlElement::new(HtmlTag::Div);
 
         let list_regex = Regex::new(LIST_BULLET_PATTERN).unwrap();
 
         Self {
             root_element: root,
+            img_src_path,
             list_regex,
         }
     }
-}
-
-impl HTMLRenderer {
     pub fn finalize(self, page_title: &str) -> String {
         HtmlPage::new()
             .with_title(page_title)
@@ -87,8 +88,13 @@ impl Renderer for HTMLRenderer {
             }
             BlockType::Image(image_block) => {
                 let mut figure = HtmlElement::new(HtmlTag::Figure);
-                // TODO: add image src.with_image(src, alt);
-                let img = HtmlElement::new(HtmlTag::Image);
+                let img_src = self
+                    .img_src_path
+                    .join(image_block.path())
+                    .to_str()
+                    .unwrap()
+                    .to_owned();
+                let img = HtmlElement::new(HtmlTag::Image).with_image(img_src, "");
                 figure.add_child(img.into());
 
                 if let Some(caption) = &image_block.caption {
@@ -108,8 +114,13 @@ impl Renderer for HTMLRenderer {
     }
 }
 
-pub fn to_html<R: Render>(blocks: R, page_title: &str) -> anyhow::Result<String> {
-    let mut html_renderer = HTMLRenderer::default();
+#[tracing::instrument(skip_all)]
+pub fn to_html<R: Render>(
+    blocks: R,
+    page_title: &str,
+    img_src_path: PathBuf,
+) -> anyhow::Result<String> {
+    let mut html_renderer = HTMLRenderer::new(img_src_path);
     blocks.render(&mut html_renderer)?;
     Ok(html_renderer.finalize(page_title))
 }

@@ -36,6 +36,7 @@ fn merge_or_create_elements(
         let mut el = Element::from_layout_block(0, line_layout_block, page_id);
         el.push_line(line);
         elements.push(el);
+        return;
     }
 
     // let last_el = elements.last_mut().unwrap();
@@ -60,8 +61,10 @@ fn merge_or_create_elements(
 /// This function takes a list of text boxes representing layout bounding boxes that contain text,
 /// and a list of lines (which could be obtained from OCR or  PDF library pdfium2,
 /// and merges these lines into blocks. The merging is done based on the intersection
-/// of each line with the layout bounding boxes. The function prioritizes maintaining
-/// the order of the lines, rather than the layout blocks.
+/// of each line with the layout bounding boxes.
+///
+/// NOTE: The function iterates through lines to maintain global layout order as both OCR and pdfium return lines
+/// in correct order
 pub(crate) fn merge_lines_layout(
     layout_boxes: &[LayoutBBox],
     lines: &[Line],
@@ -200,6 +203,7 @@ pub(crate) fn merge_elements_into_blocks(
 
     let mut blocks = Vec::new();
     let mut block_id = 0;
+    let mut image_id = 0;
     while let Some(mut curr_el) = element_it.next() {
         match &mut curr_el.kind {
             ElementType::Text => {
@@ -281,11 +285,13 @@ pub(crate) fn merge_elements_into_blocks(
                                     let img_block = Block {
                                         id: block_id,
                                         kind: BlockType::Image(ImageBlock {
+                                            id: image_id,
                                             caption: Some(curr_el.text_block.text),
                                         }),
                                         pages_id: vec![next_el.page_id],
                                         bbox: curr_el.bbox,
                                     };
+                                    image_id += 1;
                                     block_id += 1;
                                     blocks.push(img_block);
                                     element_it.next();
@@ -315,11 +321,15 @@ pub(crate) fn merge_elements_into_blocks(
                     None => {
                         let block = Block {
                             id: block_id,
-                            kind: crate::blocks::BlockType::Image(ImageBlock { caption: None }),
+                            kind: crate::blocks::BlockType::Image(ImageBlock {
+                                id: image_id,
+                                caption: None,
+                            }),
                             pages_id: vec![curr_el.page_id],
                             bbox: curr_el.bbox,
                         };
                         element_it.next();
+                        image_id += 1;
                         block_id += 1;
                         blocks.push(block);
                     }
@@ -333,11 +343,13 @@ pub(crate) fn merge_elements_into_blocks(
                                 let block = Block {
                                     id: block_id,
                                     kind: crate::blocks::BlockType::Image(ImageBlock {
+                                        id: image_id,
                                         caption: Some(next_el.text_block.text),
                                     }),
                                     pages_id: vec![curr_el.page_id],
                                     bbox: curr_el.bbox,
                                 };
+                                image_id += 1;
                                 block_id += 1;
                                 blocks.push(block);
                             }
@@ -345,11 +357,13 @@ pub(crate) fn merge_elements_into_blocks(
                                 let block = Block {
                                     id: block_id,
                                     kind: crate::blocks::BlockType::Image(ImageBlock {
+                                        id: image_id,
                                         caption: None,
                                     }),
                                     pages_id: vec![curr_el.page_id],
                                     bbox: curr_el.bbox,
                                 };
+                                image_id += 1;
                                 block_id += 1;
                                 blocks.push(block);
                             }

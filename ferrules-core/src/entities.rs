@@ -130,6 +130,12 @@ pub struct ElementText {
 }
 
 impl ElementText {
+    pub fn is_empty(&self) -> bool {
+        self.text.is_empty()
+    }
+    pub fn push_first(&mut self, txt: &str) {
+        self.text.push_str(txt);
+    }
     pub fn append_line(&mut self, txt: &str) {
         self.text.push(' ');
         self.text.push_str(txt);
@@ -188,8 +194,11 @@ impl Element {
         }
     }
     pub fn push_line(&mut self, line: &Line) {
-        // self.bbox.merge(&line.bbox);
-        self.text_block.append_line(&line.text);
+        if self.text_block.is_empty() {
+            self.text_block.push_first(&line.text);
+        } else {
+            self.text_block.append_line(&line.text);
+        }
     }
 }
 

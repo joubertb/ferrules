@@ -3,6 +3,7 @@ use anyhow::Context;
 use crate::{blocks::Block, entities::ParsedDocument};
 
 pub mod html;
+pub mod markdown;
 
 pub trait Render {
     type Output;

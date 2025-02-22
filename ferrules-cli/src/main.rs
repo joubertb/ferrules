@@ -63,6 +63,13 @@ struct Args {
     #[arg(
         long,
         default_value_t = false,
+        help = "Output the document in markdown"
+    )]
+    md: bool,
+
+    #[arg(
+        long,
+        default_value_t = false,
         help = "Specify the directory to store parsing result"
     )]
     save_images: bool,
@@ -247,8 +254,10 @@ async fn main() {
         .unwrap_or(Uuid::new_v4().to_string());
 
     // Create all dirs
+    // TODO: refac this
+    let save_figs = args.html | args.save_images;
     let (output_dir_path, debug_path) =
-        create_dirs(args.output_dir.as_ref(), &doc_name, args.debug).unwrap();
+        create_dirs(args.output_dir.as_ref(), &doc_name, args.debug, save_figs).unwrap();
     // TODO : refac memap
     let file = File::open(&args.file_path).await.unwrap();
     let mmap = unsafe { Mmap::map(&file).unwrap() };
@@ -274,5 +283,5 @@ async fn main() {
         "Parsed document in {}ms",
         doc.metadata.parsing_duration.as_millis()
     ));
-    save_parsed_document(&doc, output_dir_path, args.save_images, args.html).unwrap();
+    save_parsed_document(&doc, output_dir_path, args.save_images, args.html, args.md).unwrap();
 }

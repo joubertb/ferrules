@@ -1,11 +1,12 @@
 #![feature(portable_simd)]
 use anyhow::Context;
 use colored::*;
-use render::html::to_html;
+use render::{html::to_html, markdown::to_markdown};
 use std::{
     fs::{create_dir, File},
     io::{BufWriter, Write},
     path::{Path, PathBuf},
+    str::FromStr,
 };
 
 use entities::ParsedDocument;
@@ -38,10 +39,9 @@ fn sanitize_doc_name(doc_name: &str) -> String {
 }
 
 fn save_doc_images(imgs_dir: &Path, doc: &ParsedDocument) -> anyhow::Result<()> {
-    let mut image_id = 0;
     for block in doc.blocks.iter() {
         match &block.kind {
-            blocks::BlockType::Image(_) => {
+            blocks::BlockType::Image(img_block) => {
                 let page_id = block.pages_id.first().unwrap();
                 match doc.pages.iter().find(|&p| p.id == *page_id) {
                     Some(page) => {
@@ -57,9 +57,7 @@ fn save_doc_images(imgs_dir: &Path, doc: &ParsedDocument) -> anyhow::Result<()> 
 
                         let crop = page.image.clone().crop(x, y, width, height);
 
-                        let output_file =
-                            imgs_dir.join(format!("page_{}_img_{}.png", page_id, image_id));
-                        image_id += 1;
+                        let output_file = imgs_dir.join(img_block.path());
                         crop.save(output_file)?;
                     }
                     None => continue,
@@ -76,6 +74,7 @@ pub fn create_dirs<P: AsRef<Path>>(
     output_dir: Option<P>,
     doc_name: &str,
     debug: bool,
+    save_imgs: bool,
 ) -> anyhow::Result<(PathBuf, Option<PathBuf>)> {
     let result_dir_name = format!("{}-results", sanitize_doc_name(doc_name));
     let res_dir_path = match output_dir {
@@ -88,6 +87,11 @@ pub fn create_dirs<P: AsRef<Path>>(
             format!("./{}", &result_dir_name).into()
         }
     };
+    if save_imgs {
+        let debug_path = res_dir_path.join("figures");
+        create_dir(&debug_path).context("cant create debug path")?;
+    }
+
     let debug_path = if debug {
         let debug_path = res_dir_path.join("debug");
         create_dir(&debug_path).context("cant create debug path")?;
@@ -103,6 +107,7 @@ pub fn save_parsed_document(
     res_dir_path: PathBuf,
     save_imgs: bool,
     save_html: bool,
+    save_markdown: bool,
 ) -> anyhow::Result<()> {
     let sanitized_doc_name = sanitize_doc_name(&doc.doc_name);
     // Save json
@@ -111,9 +116,10 @@ pub fn save_parsed_document(
     let mut writer = BufWriter::new(file);
     let doc_json = serde_json::to_string(&doc)?;
     writer.write_all(doc_json.as_bytes())?;
+    let fig_path = PathBuf::from_str("figures").unwrap();
 
     if save_imgs {
-        save_doc_images(&res_dir_path, doc).context("can't save the doc images")?;
+        save_doc_images(&res_dir_path.join(&fig_path), doc).context("can't save the doc images")?;
     }
 
     if let Some(dbg_path) = &doc.debug_path {
@@ -125,13 +131,24 @@ pub fn save_parsed_document(
     }
 
     if save_html {
-        let html_content = to_html(doc, &doc.doc_name).unwrap();
+        if !save_imgs {
+            save_doc_images(&res_dir_path.join(&fig_path), doc)
+                .context("can't save the doc images")?;
+        }
+        let html_content = to_html(doc, &doc.doc_name, fig_path.clone()).unwrap();
         let html_file_out = res_dir_path.join(format!("{}.html", sanitized_doc_name));
         let file = File::create(&html_file_out)?;
         let mut writer = BufWriter::new(file);
         writer.write_all(html_content.as_bytes())?;
     }
 
+    if save_markdown {
+        let md_content = to_markdown(doc, &doc.doc_name, fig_path.clone()).unwrap();
+        let html_file_out = res_dir_path.join(format!("{}.md", sanitized_doc_name));
+        let file = File::create(&html_file_out)?;
+        let mut writer = BufWriter::new(file);
+        writer.write_all(md_content.as_bytes())?;
+    }
     println!(
         "{} Results saved in: {}",
         "✓".green().bold(),
