@@ -104,8 +104,9 @@ pub fn save_parsed_document(
     save_imgs: bool,
     save_html: bool,
 ) -> anyhow::Result<()> {
+    let sanitized_doc_name = sanitize_doc_name(&doc.doc_name);
     // Save json
-    let file_out = res_dir_path.join("result.json");
+    let file_out = res_dir_path.join(format!("{}.json", &sanitized_doc_name));
     let file = File::create(&file_out)?;
     let mut writer = BufWriter::new(file);
     let doc_json = serde_json::to_string(&doc)?;
@@ -125,7 +126,7 @@ pub fn save_parsed_document(
 
     if save_html {
         let html_content = to_html(doc, &doc.doc_name).unwrap();
-        let html_file_out = res_dir_path.join(format!("{}.html", doc.doc_name));
+        let html_file_out = res_dir_path.join(format!("{}.html", sanitized_doc_name));
         let file = File::create(&html_file_out)?;
         let mut writer = BufWriter::new(file);
         writer.write_all(html_content.as_bytes())?;

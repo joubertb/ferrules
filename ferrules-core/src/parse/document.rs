@@ -90,6 +90,7 @@ where
             }
         }
     }
+    parsed_pages.sort_by(|p1, p2| p1.id.cmp(&p2.id));
     Ok(parsed_pages)
 }
 

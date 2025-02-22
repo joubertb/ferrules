@@ -202,7 +202,7 @@ pub(crate) fn merge_elements_into_blocks(
     let mut block_id = 0;
     while let Some(mut curr_el) = element_it.next() {
         match &mut curr_el.kind {
-            crate::entities::ElementType::Text => {
+            ElementType::Text => {
                 let text_block = Block {
                     id: block_id,
                     kind: crate::blocks::BlockType::TextBlock(TextBlock {
@@ -227,7 +227,7 @@ pub(crate) fn merge_elements_into_blocks(
                 block_id += 1;
                 blocks.push(text_block);
             }
-            crate::entities::ElementType::ListItem => {
+            ElementType::ListItem => {
                 let mut list_block = Block {
                     id: block_id,
                     kind: BlockType::ListBlock(List {
@@ -310,10 +310,9 @@ pub(crate) fn merge_elements_into_blocks(
                     }
                 }
             }
-            crate::entities::ElementType::Image => {
+            ElementType::Image => {
                 match element_it.peek() {
                     None => {
-                        // last element -> transform to txt block and break
                         let block = Block {
                             id: block_id,
                             kind: crate::blocks::BlockType::Image(ImageBlock { caption: None }),
