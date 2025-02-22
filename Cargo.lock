@@ -1055,7 +1055,7 @@ dependencies = [
 
 [[package]]
 name = "ferrules"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "anyhow",
  "clap",
@@ -1100,7 +1100,7 @@ dependencies = [
 
 [[package]]
 name = "ferrules-core"
-version = "0.1.4"
+version = "0.1.5"
 dependencies = [
  "ab_glyph",
  "anyhow",
