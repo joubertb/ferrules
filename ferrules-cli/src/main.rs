@@ -1,6 +1,7 @@
 use clap::Parser;
 
 use ferrules_core::{
+    create_dirs,
     layout::{
         model::{ORTConfig, ORTLayoutParser, OrtExecutionProvider},
         ParseLayoutQueue,
@@ -55,6 +56,9 @@ struct Args {
         help = "Specify the directory to store parsing result"
     )]
     output_dir: Option<PathBuf>,
+
+    #[arg(long, default_value_t = false, help = "Output the document as html")]
+    html: bool,
 
     #[arg(
         long,
@@ -242,6 +246,9 @@ async fn main() {
         .and_then(|name| name.split('.').next().map(|s| s.to_owned()))
         .unwrap_or(Uuid::new_v4().to_string());
 
+    // Create all dirs
+    let (output_dir_path, debug_path) =
+        create_dirs(args.output_dir.as_ref(), &doc_name, args.debug).unwrap();
     // TODO : refac memap
     let file = File::open(&args.file_path).await.unwrap();
     let mmap = unsafe { Mmap::map(&file).unwrap() };
@@ -254,7 +261,7 @@ async fn main() {
         page_range,
         layout_queue,
         native_queue,
-        args.debug,
+        debug_path,
         Some(move |page_id| {
             pbc.set_message(format!("Page #{}", page_id + 1));
             pbc.inc(1u64);
@@ -267,5 +274,5 @@ async fn main() {
         "Parsed document in {}ms",
         doc.metadata.parsing_duration.as_millis()
     ));
-    save_parsed_document(&doc, args.output_dir.as_ref(), args.save_images).unwrap();
+    save_parsed_document(&doc, output_dir_path, args.save_images, args.html).unwrap();
 }
