@@ -1,6 +1,9 @@
 use axum::{
     extract::{DefaultBodyLimit, Multipart, State},
-    http::StatusCode,
+    http::{
+        header::{ACCEPT, CONTENT_TYPE},
+        HeaderMap, Response, StatusCode,
+    },
     response::IntoResponse,
     routing::{get, post},
     Json, Router,
@@ -8,7 +11,10 @@ use axum::{
 use axum_tracing_opentelemetry::middleware::OtelAxumLayer;
 use clap::Parser;
 use ferrules_api::init_tracing;
-use ferrules_core::layout::model::{ORTConfig, OrtExecutionProvider};
+use ferrules_core::{
+    layout::model::{ORTConfig, OrtExecutionProvider},
+    render::markdown::to_markdown,
+};
 use ferrules_core::{
     layout::{model::ORTLayoutParser, ParseLayoutQueue},
     parse::{document::parse_document, native::ParseNativeQueue},
@@ -222,6 +228,7 @@ async fn health_check() -> impl IntoResponse {
 
 #[tracing::instrument(skip_all)]
 async fn parse_document_handler(
+    headers: HeaderMap,
     state: State<AppState>,
     mut multipart: Multipart,
 ) -> Result<impl IntoResponse, (StatusCode, Json<ApiResponse<()>>)> {
@@ -391,11 +398,43 @@ async fn parse_document_handler(
         )
     })?;
 
-    Ok(Json(ApiResponse {
-        success: true,
-        data: Some(doc),
-        error: None,
-    }))
+    let accept_header = headers.get(ACCEPT).and_then(|h| h.to_str().ok());
+
+    match accept_header {
+        Some("text/markdown") => {
+            let markdown = to_markdown(&doc, &doc.doc_name, None).map_err(|e| {
+                (
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(ApiResponse {
+                        success: false,
+                        data: None,
+                        error: Some(format!("Failed to convert to markdown: {}", e)),
+                    }),
+                )
+            })?;
+
+            Ok(Response::builder()
+                .status(StatusCode::OK)
+                .header(CONTENT_TYPE, "text/markdown")
+                .body::<String>(markdown)
+                .unwrap())
+        }
+        _ => {
+            // NOTE: Default to JSON
+            Ok(Response::builder()
+                .status(StatusCode::OK)
+                .header(CONTENT_TYPE, "application/json")
+                .body(
+                    serde_json::to_string(&ApiResponse {
+                        success: true,
+                        data: Some(doc),
+                        error: None,
+                    })
+                    .unwrap(),
+                )
+                .unwrap())
+        }
+    }
 }
 
 fn parse_page_range(range_str: &str) -> anyhow::Result<std::ops::Range<usize>> {

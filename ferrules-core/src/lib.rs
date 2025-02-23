@@ -116,6 +116,7 @@ pub fn save_parsed_document(
     let mut writer = BufWriter::new(file);
     let doc_json = serde_json::to_string(&doc)?;
     writer.write_all(doc_json.as_bytes())?;
+    // TODO: this is shit, refac
     let fig_path = PathBuf::from_str("figures").unwrap();
 
     if save_imgs {
@@ -135,7 +136,7 @@ pub fn save_parsed_document(
             save_doc_images(&res_dir_path.join(&fig_path), doc)
                 .context("can't save the doc images")?;
         }
-        let html_content = to_html(doc, &doc.doc_name, fig_path.clone()).unwrap();
+        let html_content = to_html(doc, &doc.doc_name, Some(fig_path.clone())).unwrap();
         let html_file_out = res_dir_path.join(format!("{}.html", sanitized_doc_name));
         let file = File::create(&html_file_out)?;
         let mut writer = BufWriter::new(file);
@@ -143,7 +144,7 @@ pub fn save_parsed_document(
     }
 
     if save_markdown {
-        let md_content = to_markdown(doc, &doc.doc_name, fig_path.clone()).unwrap();
+        let md_content = to_markdown(doc, &doc.doc_name, Some(fig_path.clone())).unwrap();
         let html_file_out = res_dir_path.join(format!("{}.md", sanitized_doc_name));
         let file = File::create(&html_file_out)?;
         let mut writer = BufWriter::new(file);

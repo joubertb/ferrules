@@ -12,12 +12,12 @@ static LIST_BULLET_PATTERN: &str = r"(^|[\n ]|<[^>]*>)[•●○ഠ ം◦■▪
 #[derive(Debug)]
 pub struct HTMLRenderer {
     root_element: HtmlElement,
-    img_src_path: PathBuf,
+    img_src_path: Option<PathBuf>,
     list_regex: Regex,
 }
 
 impl HTMLRenderer {
-    pub(crate) fn new(img_src_path: PathBuf) -> Self {
+    pub(crate) fn new(img_src_path: Option<PathBuf>) -> Self {
         let root = HtmlElement::new(HtmlTag::Div);
 
         let list_regex = Regex::new(LIST_BULLET_PATTERN).unwrap();
@@ -86,24 +86,25 @@ impl Renderer for HTMLRenderer {
                 self.root_element.add_child(el);
             }
             BlockType::Image(image_block) => {
-                let mut figure = HtmlElement::new(HtmlTag::Figure);
-                let img_src = self
-                    .img_src_path
-                    .join(image_block.path())
-                    .to_str()
-                    .unwrap()
-                    .to_owned();
-                let img = HtmlElement::new(HtmlTag::Image).with_image(img_src, "");
-                figure.add_child(img.into());
+                if let Some(img_src_path) = &self.img_src_path {
+                    let mut figure = HtmlElement::new(HtmlTag::Figure);
+                    let img_src = img_src_path
+                        .join(image_block.path())
+                        .to_str()
+                        .unwrap()
+                        .to_owned();
+                    let img = HtmlElement::new(HtmlTag::Image).with_image(img_src, "");
+                    figure.add_child(img.into());
 
-                if let Some(caption) = &image_block.caption {
-                    let figcaption = HtmlElement::new(HtmlTag::Figcaption)
-                        .with_child(caption.as_str().into())
-                        .into();
-                    figure.add_child(figcaption);
+                    if let Some(caption) = &image_block.caption {
+                        let figcaption = HtmlElement::new(HtmlTag::Figcaption)
+                            .with_child(caption.as_str().into())
+                            .into();
+                        figure.add_child(figcaption);
+                    }
+
+                    self.root_element.add_child(figure.into());
                 }
-
-                self.root_element.add_child(figure.into());
             }
             _ => {
                 eprintln!("not implemented yet")
@@ -117,7 +118,7 @@ impl Renderer for HTMLRenderer {
 pub fn to_html<R: Render>(
     blocks: R,
     page_title: &str,
-    img_src_path: PathBuf,
+    img_src_path: Option<PathBuf>,
 ) -> anyhow::Result<String> {
     let mut html_renderer = HTMLRenderer::new(img_src_path);
     blocks.render(&mut html_renderer)?;

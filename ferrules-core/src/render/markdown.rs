@@ -12,7 +12,7 @@ pub struct MarkdownRender {
 }
 
 impl MarkdownRender {
-    pub(crate) fn new(img_src_path: PathBuf) -> Self {
+    pub(crate) fn new(img_src_path: Option<PathBuf>) -> Self {
         let html_renderer = HTMLRenderer::new(img_src_path);
         Self { html_renderer }
     }
@@ -34,7 +34,7 @@ impl Renderer for MarkdownRender {
 pub fn to_markdown<R: Render>(
     blocks: R,
     page_title: &str,
-    img_src_path: PathBuf,
+    img_src_path: Option<PathBuf>,
 ) -> anyhow::Result<String> {
     let mut html_renderer = MarkdownRender::new(img_src_path);
     blocks.render(&mut html_renderer)?;
