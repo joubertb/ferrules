@@ -7,12 +7,11 @@ use std::{
 
 use anyhow::Context;
 use image::DynamicImage;
-use pdfium_render::prelude::{PdfPage, PdfRenderConfig};
 use tracing::instrument;
 
 use crate::{
     draw::{draw_blocks, draw_layout_bboxes, draw_text_lines},
-    entities::{BBox, Element, Line, PageID, StructuredPage},
+    entities::{Element, Line, PageID, StructuredPage},
     layout::{
         model::LayoutBBox, Metadata, ParseLayoutQueue, ParseLayoutRequest, ParseLayoutResponse,
     },
@@ -21,7 +20,7 @@ use crate::{
 
 use super::{
     merge::{merge_elements_into_blocks, merge_lines_layout, merge_remaining},
-    native::{parse_text_lines, parse_text_spans, ParseNativeMetadata, ParseNativePageResult},
+    native::ParseNativePageResult,
 };
 
 /// This constant defines the minimum ratio between the area of text lines identified
@@ -93,60 +92,6 @@ fn parse_page_text(
     Ok((lines, need_ocr))
 }
 
-#[instrument(skip(page))]
-pub(crate) fn parse_page_native(
-    page_id: PageID,
-    page: &mut PdfPage,
-    flatten_page: bool,
-    required_raster_width: u32,
-    required_raster_height: u32,
-) -> anyhow::Result<ParseNativePageResult> {
-    let start_time = Instant::now();
-    if flatten_page {
-        page.flatten()?;
-    }
-    let rescale_factor = {
-        let scale_w = required_raster_width as f32 / page.width().value;
-        let scale_h = required_raster_height as f32 / page.height().value;
-        f32::min(scale_h, scale_w)
-    };
-    let downscale_factor = 1f32 / rescale_factor;
-
-    let page_bbox = BBox {
-        x0: 0f32,
-        y0: 0f32,
-        x1: page.width().value,
-        y1: page.height().value,
-    };
-    let page_image = page
-        .render_with_config(&PdfRenderConfig::default().scale_page_by_factor(rescale_factor))
-        .map(|bitmap| bitmap.as_image())?;
-
-    let page_image_scale1 = page
-        .render_with_config(&PdfRenderConfig::default().scale_page_by_factor(1f32))
-        .map(|bitmap| bitmap.as_image())?;
-
-    let text_spans = parse_text_spans(page.text()?.chars().iter(), &page_bbox);
-    let text_lines = parse_text_lines(text_spans);
-    let parse_native_duration_ms = start_time.elapsed().as_millis();
-    tracing::debug!(
-        "Parsing page {} using pdfium took {}ms",
-        page_id,
-        parse_native_duration_ms
-    );
-    Ok(ParseNativePageResult {
-        page_id,
-        text_lines,
-        page_bbox,
-        page_image: Arc::new(page_image),
-        page_image_scale1,
-        downscale_factor,
-        metadata: ParseNativeMetadata {
-            parse_native_duration_ms,
-        },
-    })
-}
-
 #[instrument(
     skip_all,
     fields(
@@ -181,7 +126,6 @@ pub async fn parse_page_full(
             queue_time: Instant::now(),
         },
     };
-
     layout_queue.push(layout_req).await?;
 
     let ParseLayoutResponse {

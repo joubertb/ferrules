@@ -70,7 +70,8 @@ impl Block {
             BlockType::ListBlock(list) => {
                 if let ElementType::ListItem = &element.kind {
                     self.bbox.merge(&element.bbox);
-                    list.items.push(element.text_block.text);
+                    let txt = element.text_block.text.trim();
+                    list.items.push(txt.to_owned());
                     Ok(())
                 } else {
                     bail!("can't merge element in Listblock")

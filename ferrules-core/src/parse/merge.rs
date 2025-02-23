@@ -158,6 +158,7 @@ pub(crate) fn merge_lines_layout(
         }
     }
     elements.append(&mut footers);
+
     headers.append(&mut elements);
     Ok(headers)
 }

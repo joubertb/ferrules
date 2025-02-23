@@ -289,7 +289,7 @@ impl CharSpan {
             None
         } else {
             let char_bbox = BBox::from_pdfrect(
-                char.tight_bounds().expect("error tight bound"),
+                char.loose_bounds().expect("error tight bound"),
                 page_bbox.height(),
             );
             self.text.push(char.unicode_char().unwrap_or_default());
@@ -299,12 +299,34 @@ impl CharSpan {
         }
     }
 }
-#[derive(Debug, Default)]
+#[derive(Default)]
 pub struct Line {
     pub text: String,
     pub bbox: BBox,
     pub rotation: f32,
     pub spans: Vec<CharSpan>,
+}
+
+impl std::fmt::Debug for Line {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(
+            f,
+            "Line {{ text: {}, height: {:.2}, width: {:.2}, °, \nspans: [{}] }}\n",
+            self.text.trim(),
+            self.bbox.height(),
+            self.bbox.width(),
+            self.spans
+                .iter()
+                .map(|span| format!(
+                    "\n\rtext: {}, height: {:?}, width: {:.2}",
+                    span.text.trim(),
+                    span.bbox.height(),
+                    span.bbox.width()
+                ))
+                .collect::<Vec<_>>()
+                .join("\r")
+        )
+    }
 }
 
 impl Line {
@@ -327,7 +349,12 @@ impl Line {
             self.text = fix_text(&self.text, None);
             Err(span)
         } else {
-            self.bbox.merge(&span.bbox);
+            if self.bbox.height() == 0f32 || self.bbox.width() == 0f32 {
+                // The previous span in line is a linebreak
+                self.bbox = span.bbox.clone();
+            } else {
+                self.bbox.merge(&span.bbox);
+            }
             self.text.push_str(&span.text);
             self.spans.push(span);
             Ok(())

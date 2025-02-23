@@ -158,11 +158,11 @@ impl ORTLayoutParser {
 
     /// Confidence threshold for filtering out low probability bounding boxes.
     /// Bounding boxes with probability below this threshold will be ignored.
-    pub const CONF_THRESHOLD: f32 = 0.3;
+    pub const CONF_THRESHOLD: f32 = 0.1;
 
     /// Intersection over Union (IOU) threshold for non-maximum suppression (NMS) algorithm.
     /// It determines the overlap between bounding boxes before suppression.
-    pub const IOU_THRESHOLD: f32 = 0.8;
+    pub const IOU_THRESHOLD: f32 = 0.7;
 
     pub const ORT_INTRATHREAD: usize = 16;
     pub const ORT_INTERTHREAD: usize = 4;

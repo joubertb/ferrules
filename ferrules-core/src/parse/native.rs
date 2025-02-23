@@ -1,17 +1,15 @@
-use std::{ops::Range, sync::Arc};
+use std::{ops::Range, sync::Arc, time::Instant};
 
 use anyhow::Context;
 use image::DynamicImage;
-use pdfium_render::prelude::{PdfPageTextChar, Pdfium};
-use tracing::Span;
+use pdfium_render::prelude::{PdfPage, PdfPageTextChar, PdfRenderConfig, Pdfium};
+use tracing::{instrument, Span};
 
 use crate::{
     entities::{BBox, CharSpan, Line, PageID},
     layout::model::ORTLayoutParser,
 };
 use tokio::sync::mpsc::{self, Receiver, Sender};
-
-use super::page::parse_page_native;
 
 const MAX_CONCURRENT_NATIVE_REQS: usize = 10;
 
@@ -133,6 +131,62 @@ impl ParseNativeQueue {
             .await
             .context("error sending parse native request")
     }
+}
+
+#[instrument(skip(page))]
+pub(crate) fn parse_page_native(
+    page_id: PageID,
+    page: &mut PdfPage,
+    flatten_page: bool,
+    required_raster_width: u32,
+    required_raster_height: u32,
+) -> anyhow::Result<ParseNativePageResult> {
+    let start_time = Instant::now();
+    if flatten_page {
+        page.flatten()?;
+    }
+    let rescale_factor = {
+        let scale_w = required_raster_width as f32 / page.width().value;
+        let scale_h = required_raster_height as f32 / page.height().value;
+        f32::min(scale_h, scale_w)
+    };
+    let downscale_factor = 1f32 / rescale_factor;
+
+    let page_bbox = BBox {
+        x0: 0f32,
+        y0: 0f32,
+        x1: page.width().value,
+        y1: page.height().value,
+    };
+    let page_image = page
+        .render_with_config(&PdfRenderConfig::default().scale_page_by_factor(rescale_factor))
+        .map(|bitmap| bitmap.as_image())?;
+
+    let page_image_scale1 = page
+        .render_with_config(&PdfRenderConfig::default().scale_page_by_factor(1f32))
+        .map(|bitmap| bitmap.as_image())?;
+
+    let text_spans = parse_text_spans(page.text()?.chars().iter(), &page_bbox);
+
+    let text_lines = parse_text_lines(text_spans);
+
+    let parse_native_duration_ms = start_time.elapsed().as_millis();
+    tracing::debug!(
+        "Parsing page {} using pdfium took {}ms",
+        page_id,
+        parse_native_duration_ms
+    );
+    Ok(ParseNativePageResult {
+        page_id,
+        text_lines,
+        page_bbox,
+        page_image: Arc::new(page_image),
+        page_image_scale1,
+        downscale_factor,
+        metadata: ParseNativeMetadata {
+            parse_native_duration_ms,
+        },
+    })
 }
 
 fn handle_parse_native_req(

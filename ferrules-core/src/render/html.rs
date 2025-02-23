@@ -42,7 +42,6 @@ impl Renderer for HTMLRenderer {
     fn render_block(&mut self, block: &Block) -> anyhow::Result<Self::Ok> {
         match &block.kind {
             BlockType::Title(title) => {
-                // Convert title level to appropriate h1-h6 tag
                 let level = title.level.clamp(1, 6);
                 let tag = match level {
                     1 => HtmlTag::Heading1,
