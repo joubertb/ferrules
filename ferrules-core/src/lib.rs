@@ -70,6 +70,14 @@ fn save_doc_images(imgs_dir: &Path, doc: &ParsedDocument) -> anyhow::Result<()> 
     Ok(())
 }
 
+fn recreate_result_dir(result_dir_name: &Path) -> anyhow::Result<PathBuf> {
+    if std::fs::create_dir(result_dir_name).is_err() {
+        std::fs::remove_dir_all(result_dir_name)?;
+        std::fs::create_dir(result_dir_name)?;
+    };
+    Ok(result_dir_name.to_owned())
+}
+
 pub fn create_dirs<P: AsRef<Path>>(
     output_dir: Option<P>,
     doc_name: &str,
@@ -78,13 +86,13 @@ pub fn create_dirs<P: AsRef<Path>>(
 ) -> anyhow::Result<(PathBuf, Option<PathBuf>)> {
     let result_dir_name = format!("{}-results", sanitize_doc_name(doc_name));
     let res_dir_path = match output_dir {
-        Some(p) => p.as_ref().to_owned().join(&result_dir_name),
+        Some(p) => {
+            let result_dir_path = p.as_ref().to_owned().join(&result_dir_name);
+            recreate_result_dir(&result_dir_path)?
+        }
         None => {
-            if std::fs::create_dir(&result_dir_name).is_err() {
-                std::fs::remove_dir_all(&result_dir_name)?;
-                std::fs::create_dir(&result_dir_name)?;
-            };
-            format!("./{}", &result_dir_name).into()
+            let res_dir_path = PathBuf::from(format!("./{}", &result_dir_name));
+            recreate_result_dir(&res_dir_path)?
         }
     };
     if save_imgs {

@@ -51,6 +51,7 @@ struct Args {
     ///
     /// If not specified, defaults to the current working directory.
     #[arg(
+        short = 'o',
         long,
         env = "FERRULES_OUTPUT_DIR",
         help = "Specify the directory to store parsing result"
@@ -73,14 +74,6 @@ struct Args {
         help = "Specify the directory to store parsing result"
     )]
     save_images: bool,
-
-    /// Path to the layout model. If not specified, a default model will be used.
-    #[arg(
-        long,
-        env = "FERRULES_LAYOUT_MODEL_PATH",
-        help = "Specify the path to the layout model for document parsing"
-    )]
-    layout_model_path: Option<PathBuf>,
 
     /// Use CoreML for layout inference (default: true)
     #[arg(
