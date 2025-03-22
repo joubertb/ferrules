@@ -162,7 +162,7 @@ where
         })
         .collect::<Vec<_>>();
 
-    let title_level = title_levels_kmeans(&titles, 4);
+    let title_level = title_levels_kmeans(&titles, 6);
 
     let doc_pages = parsed_pages
         .into_iter()

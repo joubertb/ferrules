@@ -78,9 +78,13 @@
   - [ ] Dynamic batching of document(pages) to process
 
 - Optim
+
   - [ ] Determine page orientation + deskew
   - [ ] Optimize layout model for ANE -> Look at changing shapes and operators to maximize ANE perf
   - [ ] ORT inference in fp16/mixed precision
   - [ ] Move to other Yolo versions: yolov11s seems better with less params [yolo-doclaynet](https://github.com/ppaanngggg/yolo-doclaynet)
   - [ ] Explore arena allocators (one per page)
   - [ ] String -> CowStr
+
+- Benchmark
+  - [] Compare to unstructured, tika, docling
