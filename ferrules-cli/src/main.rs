@@ -1,16 +1,9 @@
 use clap::Parser;
 
 use ferrules_core::{
-    create_dirs,
-    layout::{
-        model::{ORTConfig, ORTLayoutParser, OrtExecutionProvider},
-        ParseLayoutQueue,
-    },
-    parse::{
-        document::{get_doc_length, parse_document},
-        native::ParseNativeQueue,
-    },
-    save_parsed_document,
+    layout::model::{ORTConfig, OrtExecutionProvider},
+    utils::{create_dirs, get_doc_length, save_parsed_document},
+    FerrulesParseConfig, FerrulesParser,
 };
 use indicatif::{ProgressBar, ProgressState, ProgressStyle};
 use memmap2::Mmap;
@@ -18,7 +11,6 @@ use std::{
     fmt::Write,
     ops::Range,
     path::{Path, PathBuf},
-    sync::Arc,
 };
 use tokio::fs::File;
 use uuid::Uuid;
@@ -228,9 +220,7 @@ async fn main() {
         opt_level: args.graph_opt_level.map(|v| v.try_into().unwrap()),
     };
     // Global tasks
-    let layout_model = Arc::new(ORTLayoutParser::new(ort_config).expect("can't load layout model"));
-    let layout_queue = ParseLayoutQueue::new(layout_model);
-    let native_queue = ParseNativeQueue::new();
+    let parser = FerrulesParser::new(ort_config);
 
     let page_range = args
         .page_range
@@ -255,22 +245,24 @@ async fn main() {
     let file = File::open(&args.file_path).await.unwrap();
     let mmap = unsafe { Mmap::map(&file).unwrap() };
 
-    let doc = parse_document(
-        &mmap,
-        doc_name,
-        None,
-        true,
+    let config = FerrulesParseConfig {
+        password: None,
+        flatten_pdf: true,
         page_range,
-        layout_queue,
-        native_queue,
-        debug_path,
-        Some(move |page_id| {
-            pbc.set_message(format!("Page #{}", page_id + 1));
-            pbc.inc(1u64);
-        }),
-    )
-    .await
-    .unwrap();
+        debug_dir: debug_path,
+    };
+    let doc = parser
+        .parse_document(
+            &mmap,
+            doc_name,
+            config,
+            Some(move |page_id| {
+                pbc.set_message(format!("Page #{}", page_id + 1));
+                pbc.inc(1u64);
+            }),
+        )
+        .await
+        .unwrap();
 
     pb.finish_with_message(format!(
         "Parsed document in {}ms",

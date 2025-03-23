@@ -14,18 +14,12 @@ use ferrules_api::init_tracing;
 use ferrules_core::{
     layout::model::{ORTConfig, OrtExecutionProvider},
     render::markdown::to_markdown,
-};
-use ferrules_core::{
-    layout::{model::ORTLayoutParser, ParseLayoutQueue},
-    parse::{document::parse_document, native::ParseNativeQueue},
+    FerrulesParseConfig, FerrulesParser,
 };
 use memmap2::Mmap;
 use mimalloc::MiMalloc;
 use serde::{Deserialize, Serialize};
-use std::{
-    io::{Seek, Write},
-    sync::Arc,
-};
+use std::io::{Seek, Write};
 use tempfile::NamedTempFile;
 use tokio::{fs::File, net::TcpListener};
 use uuid::Uuid;
@@ -149,8 +143,7 @@ struct ParseOptions {
 
 #[derive(Clone)]
 struct AppState {
-    layout_queue: ParseLayoutQueue,
-    native_queue: ParseNativeQueue,
+    parser: FerrulesParser,
 }
 
 #[tokio::main]
@@ -190,15 +183,9 @@ async fn main() {
         opt_level: args.graph_opt_level.map(|v| v.try_into().unwrap()),
     };
     // Initialize the layout model and queues
-    let layout_model =
-        Arc::new(ORTLayoutParser::new(ort_config).expect("Failed to load layout model"));
-    let layout_queue = ParseLayoutQueue::new(layout_model);
-    let native_queue = ParseNativeQueue::new();
+    let parser = FerrulesParser::new(ort_config);
 
-    let app_state = AppState {
-        layout_queue,
-        native_queue,
-    };
+    let app_state = AppState { parser };
 
     // Build our application with a route
     let app = Router::new()
@@ -375,28 +362,26 @@ async fn parse_document_handler(
         None
     };
 
-    let doc = parse_document(
-        &mmap,
-        Uuid::new_v4().to_string(),
-        None,
-        true,
+    let config = FerrulesParseConfig {
+        password: None,
+        flatten_pdf: true,
         page_range,
-        state.layout_queue.clone(),
-        state.native_queue.clone(),
-        None,
-        Some(|_| {}),
-    )
-    .await
-    .map_err(|e| {
-        (
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(ApiResponse {
-                success: false,
-                data: None,
-                error: Some(e.to_string()),
-            }),
-        )
-    })?;
+        debug_dir: None,
+    };
+    let doc = state
+        .parser
+        .parse_document(&mmap, Uuid::new_v4().to_string(), config, Some(|_| {}))
+        .await
+        .map_err(|e| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ApiResponse {
+                    success: false,
+                    data: None,
+                    error: Some(e.to_string()),
+                }),
+            )
+        })?;
 
     let accept_header = headers.get(ACCEPT).and_then(|h| h.to_str().ok());
 

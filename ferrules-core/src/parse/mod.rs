@@ -1,6 +1,5 @@
 pub mod document;
-mod merge;
+pub(crate) mod merge;
 pub mod native;
 mod page;
-
 pub mod titles;
