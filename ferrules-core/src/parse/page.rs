@@ -114,6 +114,8 @@ pub async fn parse_page_full(
         page_image_scale1,
         downscale_factor,
         metadata: parse_native_metadata,
+        is_count_result: _,
+        total_page_count: _,
     } = parse_native_result;
     let (layout_tx, layout_rx) = tokio::sync::oneshot::channel();
 

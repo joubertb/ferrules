@@ -2,6 +2,7 @@ use std::{path::PathBuf, sync::Arc, time::Instant};
 
 use std::ops::Range;
 
+use anyhow::Context;
 use tokio::{sync::mpsc, task::JoinSet};
 use tracing::Instrument;
 
@@ -98,6 +99,55 @@ impl FerrulesParser {
             native_queue,
         }
     }
+
+    /// Gets the total number of pages in a PDF document without full processing
+    ///
+    /// # Arguments
+    /// * `doc` - Raw bytes of the PDF document
+    /// * `password` - Optional password for encrypted PDFs
+    ///
+    /// # Returns
+    /// A Result containing the total page count or an error
+    ///
+    /// # Example
+    /// ```no_run
+    /// use ferrules_core::{FerrulesParser, layout::model::ORTConfig};
+    ///
+    /// async fn get_count() {
+    ///     let parser = FerrulesParser::new(ORTConfig::default());
+    ///     let doc_bytes = std::fs::read("document.pdf").unwrap();
+    ///     let page_count = parser.get_page_count(&doc_bytes, None).await.unwrap();
+    ///     println!("Document has {} pages", page_count);
+    /// }
+    /// ```
+    pub async fn get_page_count(&self, doc: &[u8], password: Option<&str>) -> anyhow::Result<usize> {
+        use super::native::ParseNativeRequest;
+        use tokio::sync::mpsc;
+        
+        // Create a channel to receive the count result
+        let (result_tx, mut result_rx) = mpsc::channel(1);
+        
+        // Create a count-only request
+        let request = ParseNativeRequest::new_count_only(doc, password, result_tx);
+        
+        // Send the request to the native queue
+        self.native_queue.push(request).await
+            .context("Failed to send page count request to native queue")?;
+        
+        // Wait for the result
+        let result = result_rx.recv().await
+            .context("Failed to receive page count result")?
+            .context("Native parsing error")?;
+        
+        // Extract the page count from the result
+        if result.is_count_result {
+            result.total_page_count
+                .context("Count result missing total_page_count")
+        } else {
+            anyhow::bail!("Received non-count result for page count request")
+        }
+    }
+
     /// Parses a document into a structured format with optional page-level progress callback
     ///
     /// # Arguments

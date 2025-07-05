@@ -22,6 +22,10 @@ ferrules-core = { path = "../ferrules-core" }
 tower-http = { version = "0.6.1", features = ["trace", "limit"] }
 tempfile = "3.16.0"
 
+# SSE support
+futures-util = "0.3"
+tokio-stream = "0.1"
+
 
 # OTEL
 opentelemetry = "0.27.0"
