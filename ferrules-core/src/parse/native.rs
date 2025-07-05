@@ -64,6 +64,7 @@ pub struct ParseNativeRequest {
     pub required_raster_width: u32,
     pub required_raster_height: u32,
     pub sender_tx: Sender<anyhow::Result<ParseNativePageResult>>,
+    pub count_only: bool,
 }
 impl ParseNativeRequest {
     pub fn new(
@@ -82,6 +83,24 @@ impl ParseNativeRequest {
             required_raster_width: ORTLayoutParser::REQUIRED_WIDTH,
             required_raster_height: ORTLayoutParser::REQUIRED_HEIGHT,
             sender_tx,
+            count_only: false,
+        }
+    }
+
+    pub fn new_count_only(
+        data: &[u8],
+        password: Option<&str>,
+        sender_tx: Sender<anyhow::Result<ParseNativePageResult>>,
+    ) -> Self {
+        ParseNativeRequest {
+            doc_data: Arc::from(data),
+            password: password.map(|p| p.to_string()),
+            flatten: false, // Not needed for counting
+            page_range: None, // Count all pages
+            required_raster_width: 0, // Not needed for counting
+            required_raster_height: 0, // Not needed for counting
+            sender_tx,
+            count_only: true,
         }
     }
 }
@@ -101,6 +120,8 @@ pub struct ParseNativePageResult {
     pub page_image_scale1: DynamicImage,
     pub downscale_factor: f32,
     pub metadata: ParseNativeMetadata,
+    pub is_count_result: bool,
+    pub total_page_count: Option<usize>,
 }
 
 #[derive(Debug, Clone)]
@@ -186,6 +207,8 @@ pub(crate) fn parse_page_native(
         metadata: ParseNativeMetadata {
             parse_native_duration_ms,
         },
+        is_count_result: false,
+        total_page_count: None,
     })
 }
 
@@ -204,9 +227,32 @@ fn handle_parse_native_req(
         required_raster_width,
         required_raster_height,
         sender_tx,
+        count_only,
     } = req;
     let mut document = pdfium.load_pdf_from_byte_slice(&doc_data, password.as_deref())?;
     let mut pages: Vec<_> = document.pages_mut().iter().enumerate().collect();
+    
+    // If only counting pages, send the count and return early
+    if count_only {
+        let total_pages = pages.len();
+        use image::{DynamicImage, ImageBuffer};
+        let dummy_image = DynamicImage::ImageRgb8(ImageBuffer::new(1, 1));
+        
+        let count_result = ParseNativePageResult {
+            page_id: 0,
+            text_lines: Vec::new(),
+            page_bbox: crate::entities::BBox { x0: 0.0, y0: 0.0, x1: 0.0, y1: 0.0 },
+            page_image: Arc::new(dummy_image.clone()),
+            page_image_scale1: dummy_image,
+            downscale_factor: 1.0,
+            metadata: ParseNativeMetadata { parse_native_duration_ms: 0 },
+            is_count_result: true,
+            total_page_count: Some(total_pages),
+        };
+        sender_tx.blocking_send(Ok(count_result))?;
+        return Ok(());
+    }
+    
     let pages = if let Some(range) = page_range {
         if range.end > pages.len() {
             anyhow::bail!(

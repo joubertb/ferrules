@@ -4,7 +4,7 @@ use axum::{
         header::{ACCEPT, CONTENT_TYPE},
         HeaderMap, Response, StatusCode,
     },
-    response::IntoResponse,
+    response::{IntoResponse, Sse},
     routing::{get, post},
     Json, Router,
 };
@@ -21,7 +21,8 @@ use mimalloc::MiMalloc;
 use serde::{Deserialize, Serialize};
 use std::io::{Seek, Write};
 use tempfile::NamedTempFile;
-use tokio::{fs::File, net::TcpListener};
+use tokio::{fs::File, net::TcpListener, sync::mpsc};
+use tokio_stream::{wrappers::ReceiverStream, StreamExt};
 use uuid::Uuid;
 
 #[global_allocator]
@@ -141,6 +142,26 @@ struct ParseOptions {
     _save_images: Option<bool>,
 }
 
+#[derive(Debug, Serialize)]
+#[serde(tag = "type")]
+enum ParseEvent {
+    #[serde(rename = "progress")]
+    Progress {
+        pages_completed: usize,
+        total_pages: usize,
+        page_id: usize,
+    },
+    #[serde(rename = "complete")]
+    Complete {
+        document: serde_json::Value,
+        total_pages: usize,
+    },
+    #[serde(rename = "error")]
+    Error {
+        message: String,
+    },
+}
+
 #[derive(Clone)]
 struct AppState {
     parser: FerrulesParser,
@@ -191,6 +212,7 @@ async fn main() {
     let app = Router::new()
         .route("/health", get(health_check))
         .route("/parse", post(parse_document_handler))
+        .route("/parse/sse", post(parse_document_sse_handler))
         .with_state(app_state)
         .layer(OtelAxumLayer::default())
         .layer(DefaultBodyLimit::max(MAX_SIZE_LIMIT));
@@ -446,4 +468,234 @@ fn parse_page_range(range_str: &str) -> anyhow::Result<std::ops::Range<usize>> {
             anyhow::bail!("Page number must be greater than 0")
         }
     }
+}
+
+#[tracing::instrument(skip_all)]
+async fn parse_document_sse_handler(
+    _headers: HeaderMap,
+    state: State<AppState>,
+    mut multipart: Multipart,
+) -> Result<impl IntoResponse, (StatusCode, Json<ApiResponse<()>>)> {
+    // Create a channel for sending events
+    let (tx, rx) = mpsc::channel::<ParseEvent>(32);
+    
+    // Extract the file from multipart form (same as regular handler)
+    let mut temp_file = NamedTempFile::new().map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ApiResponse {
+                success: false,
+                data: None,
+                error: Some(format!("Failed to create temp file: {}", e)),
+            }),
+        )
+    })?;
+
+    let mut options = None;
+
+    while let Some(field) = multipart.next_field().await.map_err(|e| {
+        (
+            StatusCode::BAD_REQUEST,
+            Json(ApiResponse {
+                success: false,
+                data: None,
+                error: Some(format!("Failed to get next field: {}", e)),
+            }),
+        )
+    })? {
+        let name = field.name().unwrap_or("").to_string();
+
+        match name.as_str() {
+            "file" => {
+                let mut field_stream = field;
+                while let Some(chunk) = field_stream.chunk().await.map_err(|e| {
+                    (
+                        StatusCode::BAD_REQUEST,
+                        Json(ApiResponse {
+                            success: false,
+                            data: None,
+                            error: Some(format!("Failed to read chunk: {}", e)),
+                        }),
+                    )
+                })? {
+                    temp_file.write_all(&chunk).map_err(|e| {
+                        (
+                            StatusCode::INTERNAL_SERVER_ERROR,
+                            Json(ApiResponse {
+                                success: false,
+                                data: None,
+                                error: Some(format!("Failed to write to temp file: {}", e)),
+                            }),
+                        )
+                    })?;
+                }
+                temp_file.flush().map_err(|e| {
+                    (
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        Json(ApiResponse {
+                            success: false,
+                            data: None,
+                            error: Some(format!("Failed to flush temp file: {}", e)),
+                        }),
+                    )
+                })?;
+                temp_file.seek(std::io::SeekFrom::Start(0)).map_err(|e| {
+                    (
+                        StatusCode::INTERNAL_SERVER_ERROR,
+                        Json(ApiResponse {
+                            success: false,
+                            data: None,
+                            error: Some(format!("Failed to seek temp file: {}", e)),
+                        }),
+                    )
+                })?;
+            }
+            "options" => {
+                let options_str = field.text().await.map_err(|e| {
+                    (
+                        StatusCode::BAD_REQUEST,
+                        Json(ApiResponse {
+                            success: false,
+                            data: None,
+                            error: Some(format!("Failed to read options: {}", e)),
+                        }),
+                    )
+                })?;
+                options = Some(serde_json::from_str::<ParseOptions>(&options_str).map_err(
+                    |e| {
+                        (
+                            StatusCode::BAD_REQUEST,
+                            Json(ApiResponse {
+                                success: false,
+                                data: None,
+                                error: Some(format!("Failed to parse options: {}", e)),
+                            }),
+                        )
+                    },
+                )?);
+            }
+            _ => continue,
+        }
+    }
+
+    // Parse page range
+    let page_range = if let Some(options) = options {
+        if let Some(range_str) = options.page_range {
+            Some(parse_page_range(&range_str).map_err(|e| {
+                (
+                    StatusCode::BAD_REQUEST,
+                    Json(ApiResponse {
+                        success: false,
+                        data: None,
+                        error: Some(e.to_string()),
+                    }),
+                )
+            })?)
+        } else {
+            None
+        }
+    } else {
+        None
+    };
+
+    // Create memory map before spawning task
+    let file = File::open(temp_file.path()).await.map_err(|e| {
+        (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ApiResponse {
+                success: false,
+                data: None,
+                error: Some(format!("Failed to open temp file: {}", e)),
+            }),
+        )
+    })?;
+
+    let mmap = unsafe {
+        Mmap::map(&file).map_err(|e| {
+            (
+                StatusCode::INTERNAL_SERVER_ERROR,
+                Json(ApiResponse {
+                    success: false,
+                    data: None,
+                    error: Some(format!("Failed to memory map file: {}", e)),
+                }),
+            )
+        })?
+    };
+
+    // Spawn parsing task
+    let tx_clone = tx.clone();
+    let parser = state.parser.clone();
+    
+    tokio::spawn(async move {
+        // Keep the temp file alive by moving it into the task
+        let _temp_file = temp_file; // Keep alive until end of task
+        
+        let config = FerrulesParseConfig {
+            password: None,
+            flatten_pdf: true,
+            page_range,
+            debug_dir: None,
+        };
+
+        // Get page count using the fixed method
+        let total_pages = match parser.get_page_count(&mmap, config.password).await {
+            Ok(count) => count,
+            Err(e) => {
+                let _ = tx_clone.send(ParseEvent::Error {
+                    message: format!("Failed to get page count: {}", e),
+                }).await;
+                return;
+            }
+        };
+
+        let pages_completed = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        let tx_progress = tx_clone.clone();
+        let pages_completed_clone = pages_completed.clone();
+
+        match parser.parse_document(&mmap, Uuid::new_v4().to_string(), config, Some({
+            let tx_progress = tx_progress.clone();
+            move |page_id| {
+                let completed = pages_completed_clone.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
+                let _ = tx_progress.try_send(ParseEvent::Progress {
+                    pages_completed: completed,
+                    total_pages,
+                    page_id,
+                });
+            }
+        })).await {
+            Ok(doc) => {
+                let _ = tx_clone.send(ParseEvent::Complete {
+                    document: serde_json::to_value(&doc).unwrap_or_default(),
+                    total_pages: doc.pages.len(),
+                }).await;
+            }
+            Err(e) => {
+                let _ = tx_clone.send(ParseEvent::Error {
+                    message: e.to_string(),
+                }).await;
+            }
+        }
+    });
+
+    // Create SSE stream
+    let stream = ReceiverStream::new(rx)
+        .map(|event| {
+            let data = serde_json::to_string(&event).unwrap_or_default();
+            Ok::<_, std::convert::Infallible>(
+                axum::response::sse::Event::default()
+                    .event(match &event {
+                        ParseEvent::Progress { .. } => "progress",
+                        ParseEvent::Complete { .. } => "complete",
+                        ParseEvent::Error { .. } => "error",
+                    })
+                    .data(data)
+            )
+        });
+
+    Ok(Sse::new(stream).keep_alive(
+        axum::response::sse::KeepAlive::new()
+            .interval(std::time::Duration::from_secs(30))
+            .text("keep-alive-text"),
+    ))
 }
