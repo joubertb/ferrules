@@ -100,12 +100,26 @@ fn parse_page_text(
         parse_native_duration_ms,
     )
 )]
-pub async fn parse_page_full(
+pub async fn parse_page_full<C>(
     parse_native_result: ParseNativePageResult,
     debug_dir: Option<PathBuf>,
     layout_queue: ParseLayoutQueue,
-) -> anyhow::Result<StructuredPage> {
+    cancellation_callback: Option<C>,
+) -> anyhow::Result<StructuredPage> 
+where
+    C: Fn() -> bool + Send + Sync + 'static + Clone,
+{
     let span = tracing::Span::current();
+
+    // Check for cancellation before starting page processing
+    if let Some(ref cancel_cb) = cancellation_callback {
+        if cancel_cb() {
+            // Note: We don't flush here because this is per-page, not per-document
+            // The document-level cancellation will handle the queue flushing
+            return Err(anyhow::anyhow!("Page {} processing was cancelled", parse_native_result.page_id));
+        }
+    }
+
     let ParseNativePageResult {
         page_id,
         text_lines,
@@ -140,8 +154,22 @@ pub async fn parse_page_full(
         .context("error receiving layout on oneshot channel")?
         .context("error parsing page")?;
 
+    // Check for cancellation after layout processing
+    if let Some(ref cancel_cb) = cancellation_callback {
+        if cancel_cb() {
+            return Err(anyhow::anyhow!("Page {} processing was cancelled after layout", page_id));
+        }
+    }
+
     let (text_lines, need_ocr) =
         parse_page_text(text_lines, &page_layout, &page_image, downscale_factor)?;
+
+    // Check for cancellation before element building
+    if let Some(ref cancel_cb) = cancellation_callback {
+        if cancel_cb() {
+            return Err(anyhow::anyhow!("Page {} processing was cancelled before element building", page_id));
+        }
+    }
 
     // Merging elements with layout
     let elements = build_page_elements(&page_layout, &text_lines, page_id)?;
