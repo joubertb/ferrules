@@ -1,0 +1,14 @@
+FROM debian:buster-slim
+WORKDIR /app
+
+# Install runtime dependencies
+RUN apt-get update -y \
+    && apt-get install -y --no-install-recommends openssl ca-certificates \
+    && apt-get clean \
+    && rm -rf /var/lib/apt/lists/*
+
+# Copy the binary from builder
+COPY ferrules-api /app/ferrules-api
+
+# Set the entrypoint
+#ENTRYPOINT ["/app/ferrules-api"]
