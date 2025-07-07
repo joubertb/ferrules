@@ -283,7 +283,7 @@ async fn main() {
         .route("/health", get(health_check))
         .route("/parse", post(parse_document_handler))
         .route("/parse/sse", post(parse_document_sse_handler))
-        .route("/parse/cancel/:job_id", post(cancel_job_handler))
+        .route("/parse/:job_id/cancel", post(cancel_job_handler))
         .with_state(app_state)
         .layer(OtelAxumLayer::default())
         .layer(DefaultBodyLimit::max(MAX_SIZE_LIMIT));
