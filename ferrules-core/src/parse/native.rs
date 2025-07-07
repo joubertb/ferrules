@@ -231,13 +231,13 @@ fn handle_parse_native_req(
     } = req;
     let mut document = pdfium.load_pdf_from_byte_slice(&doc_data, password.as_deref())?;
     let mut pages: Vec<_> = document.pages_mut().iter().enumerate().collect();
-    
+
     // If only counting pages, send the count and return early
     if count_only {
         let total_pages = pages.len();
         use image::{DynamicImage, ImageBuffer};
         let dummy_image = DynamicImage::ImageRgb8(ImageBuffer::new(1, 1));
-        
+
         let count_result = ParseNativePageResult {
             page_id: 0,
             text_lines: Vec::new(),
@@ -252,7 +252,7 @@ fn handle_parse_native_req(
         sender_tx.blocking_send(Ok(count_result))?;
         return Ok(());
     }
-    
+
     let pages = if let Some(range) = page_range {
         if range.end > pages.len() {
             anyhow::bail!(

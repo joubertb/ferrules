@@ -260,6 +260,7 @@ async fn main() {
                 pbc.set_message(format!("Page #{}", page_id + 1));
                 pbc.inc(1u64);
             }),
+            None::<fn() -> bool>,
         )
         .await
         .unwrap();

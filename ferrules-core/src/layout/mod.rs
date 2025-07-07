@@ -33,9 +33,15 @@ pub(crate) struct ParseLayoutResponse {
     pub(crate) layout_queue_time_ms: u128,
 }
 
+#[derive(Debug)]
+enum LayoutQueueMessage {
+    Request(ParseLayoutRequest, Span),
+    Flush,
+}
+
 #[derive(Debug, Clone)]
 pub struct ParseLayoutQueue {
-    queue: Sender<(ParseLayoutRequest, Span)>,
+    queue: Sender<LayoutQueueMessage>,
 }
 
 impl ParseLayoutQueue {
@@ -51,25 +57,52 @@ impl ParseLayoutQueue {
     pub(crate) async fn push(&self, req: ParseLayoutRequest) -> anyhow::Result<()> {
         let span = Span::current();
         self.queue
-            .send((req, span))
+            .send(LayoutQueueMessage::Request(req, span))
             .await
-            .context("error sending  parse req")
+            .context("error sending parse req")
+    }
+
+    pub(crate) async fn flush(&self) -> anyhow::Result<()> {
+        self.queue
+            .send(LayoutQueueMessage::Flush)
+            .await
+            .context("error sending flush command")
     }
 }
 
 async fn start_layout_parser(
     layout_parser: Arc<ORTLayoutParser>,
-    mut input_rx: Receiver<(ParseLayoutRequest, Span)>,
+    mut input_rx: Receiver<LayoutQueueMessage>,
 ) {
     let s = Arc::new(Semaphore::new(layout_parser.config.intra_threads));
-    while let Some((req, span)) = input_rx.recv().await {
-        let queue_time = req.metadata.queue_time.elapsed().as_millis();
-        let page_id = req.page_id;
-        tracing::debug!("layout request queue time for page {page_id} took: {queue_time}ms");
-        let _guard = span.enter();
-        tokio::spawn(
-            handle_request(s.clone(), layout_parser.clone(), req, queue_time).in_current_span(),
-        );
+    while let Some(message) = input_rx.recv().await {
+        match message {
+            LayoutQueueMessage::Request(req, span) => {
+                let queue_time = req.metadata.queue_time.elapsed().as_millis();
+                let page_id = req.page_id;
+                tracing::debug!("layout request queue time for page {page_id} took: {queue_time}ms");
+                let _guard = span.enter();
+                tokio::spawn(
+                    handle_request(s.clone(), layout_parser.clone(), req, queue_time).in_current_span(),
+                );
+            }
+            LayoutQueueMessage::Flush => {
+                tracing::info!("Flushing layout queue - draining all pending requests");
+                // Drain all remaining messages from the queue
+                while let Ok(message) = input_rx.try_recv() {
+                    match message {
+                        LayoutQueueMessage::Request(req, _span) => {
+                            // Send error response to indicate cancellation
+                            let _ = req.metadata.response_tx.send(Err(anyhow::anyhow!("Layout processing cancelled due to document cancellation")));
+                        }
+                        LayoutQueueMessage::Flush => {
+                            // Multiple flush commands, ignore additional ones
+                        }
+                    }
+                }
+                tracing::info!("Layout queue flush completed");
+            }
+        }
     }
 }
 
@@ -102,8 +135,8 @@ async fn handle_request(
         layout_parse_duration_ms: inference_duration,
         layout_queue_time_ms,
     });
-    metadata
-        .response_tx
-        .send(layout_result)
-        .expect("can't send parsed result over oneshot chan");
+    // Handle the case where the receiver is dropped (due to cancellation)
+    if let Err(_) = metadata.response_tx.send(layout_result) {
+        tracing::debug!("Layout parsing result receiver dropped (likely due to cancellation) for page {}", page_id);
+    }
 }

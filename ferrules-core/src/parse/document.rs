@@ -50,18 +50,35 @@ impl Default for FerrulesParseConfig<'_> {
     }
 }
 
-async fn parse_task<F>(
+async fn parse_task<F, C>(
     parse_native_result: ParseNativePageResult,
     layout_queue: ParseLayoutQueue,
     debug_dir: Option<PathBuf>,
     callback: Option<F>,
+    cancellation_callback: Option<C>,
 ) -> anyhow::Result<StructuredPage>
 where
     F: FnOnce(PageID) + Send + 'static + Clone,
+    C: Fn() -> bool + Send + Sync + 'static + Clone,
 {
     let page_id = parse_native_result.page_id;
 
-    let result = parse_page_full(parse_native_result, debug_dir, layout_queue.clone()).await;
+    // Check for cancellation before processing this page
+    if let Some(ref cancel_cb) = cancellation_callback {
+        if cancel_cb() {
+            return Err(anyhow::anyhow!("Page processing was cancelled"));
+        }
+    }
+
+    let result = parse_page_full(parse_native_result, debug_dir, layout_queue.clone(), cancellation_callback.clone()).await;
+
+    // Check for cancellation after processing
+    if let Some(ref cancel_cb) = cancellation_callback {
+        if cancel_cb() {
+            return Err(anyhow::anyhow!("Page processing was cancelled"));
+        }
+    }
+
     if let Some(callback) = callback {
         callback(page_id)
     }
@@ -123,22 +140,22 @@ impl FerrulesParser {
     pub async fn get_page_count(&self, doc: &[u8], password: Option<&str>) -> anyhow::Result<usize> {
         use super::native::ParseNativeRequest;
         use tokio::sync::mpsc;
-        
+
         // Create a channel to receive the count result
         let (result_tx, mut result_rx) = mpsc::channel(1);
-        
+
         // Create a count-only request
         let request = ParseNativeRequest::new_count_only(doc, password, result_tx);
-        
+
         // Send the request to the native queue
         self.native_queue.push(request).await
             .context("Failed to send page count request to native queue")?;
-        
+
         // Wait for the result
         let result = result_rx.recv().await
             .context("Failed to receive page count result")?
             .context("Native parsing error")?;
-        
+
         // Extract the page count from the result
         if result.is_count_result {
             result.total_page_count
@@ -176,15 +193,17 @@ impl FerrulesParser {
     ///     ).await.unwrap();
     /// }
     #[allow(clippy::too_many_arguments)]
-    pub async fn parse_document<F>(
+    pub async fn parse_document<F, C>(
         &self,
         doc: &[u8],
         doc_name: String,
         config: FerrulesParseConfig<'_>,
         page_callback: Option<F>,
+        cancellation_callback: Option<C>,
     ) -> anyhow::Result<ParsedDocument>
     where
         F: FnOnce(PageID) + Send + 'static + Clone,
+        C: Fn() -> bool + Send + Sync + 'static + Clone,
     {
         let FerrulesParseConfig {
             password,
@@ -201,6 +220,7 @@ impl FerrulesParser {
                 page_range,
                 debug_dir.clone(),
                 page_callback,
+                cancellation_callback.clone(),
             )
             .await?;
 
@@ -242,7 +262,7 @@ impl FerrulesParser {
 
     #[allow(clippy::too_many_arguments)]
     #[tracing::instrument(skip_all)]
-    async fn parse_doc_pages<F>(
+    async fn parse_doc_pages<F, C>(
         &self,
         data: &[u8],
         flatten_pdf: bool,
@@ -250,26 +270,48 @@ impl FerrulesParser {
         page_range: Option<Range<usize>>,
         debug_dir: Option<PathBuf>,
         callback: Option<F>,
+        cancellation_callback: Option<C>,
     ) -> anyhow::Result<Vec<StructuredPage>>
     where
         F: FnOnce(PageID) + Send + 'static + Clone,
+        C: Fn() -> bool + Send + Sync + 'static + Clone,
     {
+        // Check for cancellation before starting
+        if let Some(ref cancel_cb) = cancellation_callback {
+            if cancel_cb() {
+                // Flush layout queue to stop background processing
+                let _ = self.layout_queue.flush().await;
+                return Err(anyhow::anyhow!("Document processing was cancelled"));
+            }
+        }
+
         let mut set = JoinSet::new();
         let (native_tx, mut native_rx) = mpsc::channel(32);
         let req = ParseNativeRequest::new(data, password, flatten_pdf, page_range, native_tx);
         self.native_queue.push(req).await?;
 
         while let Some(native_page) = native_rx.recv().await {
+            // Check for cancellation before processing each page
+            if let Some(ref cancel_cb) = cancellation_callback {
+                if cancel_cb() {
+                    // Flush layout queue to stop background processing
+                    let _ = self.layout_queue.flush().await;
+                    return Err(anyhow::anyhow!("Document processing was cancelled"));
+                }
+            }
+
             match native_page {
                 Ok(parse_native_result) => {
                     let tmp_dir = debug_dir.clone();
                     let callback = callback.clone();
+                    let cancel_cb_clone = cancellation_callback.clone();
                     set.spawn(
                         parse_task(
                             parse_native_result,
                             self.layout_queue.clone(),
                             tmp_dir,
                             callback,
+                            cancel_cb_clone,
                         )
                         .in_current_span(),
                     );
@@ -281,6 +323,15 @@ impl FerrulesParser {
         // Get results
         let mut parsed_pages = Vec::new();
         while let Some(result) = set.join_next().await {
+            // Check for cancellation while collecting results
+            if let Some(ref cancel_cb) = cancellation_callback {
+                if cancel_cb() {
+                    // Flush layout queue to stop background processing
+                    let _ = self.layout_queue.flush().await;
+                    return Err(anyhow::anyhow!("Document processing was cancelled"));
+                }
+            }
+
             match result {
                 Ok(Ok(page)) => {
                     parsed_pages.push(page);

@@ -25,6 +25,7 @@ tempfile = "3.16.0"
 # SSE support
 futures-util = "0.3"
 tokio-stream = "0.1"
+tokio-util = "0.7"
 
 
 # OTEL

@@ -1,0 +1,4 @@
+# Rust formatting configuration
+# Ensure empty lines are truly empty (no whitespace)
+blank_lines_upper_bound = 1
+blank_lines_lower_bound = 0

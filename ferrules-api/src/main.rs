@@ -1,5 +1,5 @@
 use axum::{
-    extract::{DefaultBodyLimit, Multipart, State},
+    extract::{DefaultBodyLimit, Multipart, Path, State},
     http::{
         header::{ACCEPT, CONTENT_TYPE},
         HeaderMap, Response, StatusCode,
@@ -19,10 +19,11 @@ use ferrules_core::{
 use memmap2::Mmap;
 use mimalloc::MiMalloc;
 use serde::{Deserialize, Serialize};
-use std::io::{Seek, Write};
+use std::{collections::HashMap, io::{Seek, Write}, sync::Arc};
 use tempfile::NamedTempFile;
-use tokio::{fs::File, net::TcpListener, sync::mpsc};
+use tokio::{fs::File, net::TcpListener, sync::{mpsc, Mutex}};
 use tokio_stream::{wrappers::ReceiverStream, StreamExt};
+use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
 
 #[global_allocator]
@@ -145,6 +146,10 @@ struct ParseOptions {
 #[derive(Debug, Serialize)]
 #[serde(tag = "type")]
 enum ParseEvent {
+    #[serde(rename = "job_started")]
+    JobStarted {
+        job_id: Uuid,
+    },
     #[serde(rename = "progress")]
     Progress {
         pages_completed: usize,
@@ -156,15 +161,79 @@ enum ParseEvent {
         document: serde_json::Value,
         total_pages: usize,
     },
+    #[serde(rename = "cancelled")]
+    Cancelled {
+        message: String,
+    },
     #[serde(rename = "error")]
     Error {
         message: String,
     },
 }
 
+#[derive(Debug)]
+struct JobHandle {
+    cancellation_token: CancellationToken,
+    tx: mpsc::Sender<ParseEvent>,
+}
+
+#[derive(Debug, Clone)]
+struct JobManager {
+    active_jobs: Arc<Mutex<HashMap<Uuid, JobHandle>>>,
+}
+
 #[derive(Clone)]
 struct AppState {
     parser: FerrulesParser,
+    job_manager: JobManager,
+}
+
+impl JobManager {
+    fn new() -> Self {
+        Self {
+            active_jobs: Arc::new(Mutex::new(HashMap::new())),
+        }
+    }
+
+    async fn start_job(&self, job_id: Uuid, tx: mpsc::Sender<ParseEvent>) -> CancellationToken {
+        let cancellation_token = CancellationToken::new();
+        let job_handle = JobHandle {
+            cancellation_token: cancellation_token.clone(),
+            tx,
+        };
+
+        let mut jobs = self.active_jobs.lock().await;
+        jobs.insert(job_id, job_handle);
+        tracing::info!("Started job {}", job_id);
+
+        cancellation_token
+    }
+
+    async fn cancel_job(&self, job_id: Uuid) -> Result<(), String> {
+        let jobs = self.active_jobs.lock().await;
+
+        if let Some(job_handle) = jobs.get(&job_id) {
+            job_handle.cancellation_token.cancel();
+
+            // Send cancellation event
+            let _ = job_handle.tx.send(ParseEvent::Cancelled {
+                message: "Job was cancelled by user request".to_string(),
+            }).await;
+
+            tracing::info!("Cancelled job {}", job_id);
+            Ok(())
+        } else {
+            Err(format!("Job {} not found or already completed", job_id))
+        }
+    }
+
+    async fn complete_job(&self, job_id: Uuid) {
+        let mut jobs = self.active_jobs.lock().await;
+        if jobs.remove(&job_id).is_some() {
+            tracing::info!("Completed job {}", job_id);
+        }
+    }
+
 }
 
 #[tokio::main]
@@ -205,14 +274,16 @@ async fn main() {
     };
     // Initialize the layout model and queues
     let parser = FerrulesParser::new(ort_config);
+    let job_manager = JobManager::new();
 
-    let app_state = AppState { parser };
+    let app_state = AppState { parser, job_manager };
 
     // Build our application with a route
     let app = Router::new()
         .route("/health", get(health_check))
         .route("/parse", post(parse_document_handler))
         .route("/parse/sse", post(parse_document_sse_handler))
+        .route("/parse/cancel/:job_id", post(cancel_job_handler))
         .with_state(app_state)
         .layer(OtelAxumLayer::default())
         .layer(DefaultBodyLimit::max(MAX_SIZE_LIMIT));
@@ -392,7 +463,7 @@ async fn parse_document_handler(
     };
     let doc = state
         .parser
-        .parse_document(&mmap, Uuid::new_v4().to_string(), config, Some(|_| {}))
+        .parse_document(&mmap, Uuid::new_v4().to_string(), config, Some(|_| {}), None::<fn() -> bool>)
         .await
         .map_err(|e| {
             (
@@ -478,7 +549,11 @@ async fn parse_document_sse_handler(
 ) -> Result<impl IntoResponse, (StatusCode, Json<ApiResponse<()>>)> {
     // Create a channel for sending events
     let (tx, rx) = mpsc::channel::<ParseEvent>(32);
-    
+
+    // Generate job ID and start job tracking
+    let job_id = Uuid::new_v4();
+    let cancellation_token = state.job_manager.start_job(job_id, tx.clone()).await;
+
     // Extract the file from multipart form (same as regular handler)
     let mut temp_file = NamedTempFile::new().map_err(|e| {
         (
@@ -623,20 +698,31 @@ async fn parse_document_sse_handler(
         })?
     };
 
+    // Send job started event
+    let _ = tx.send(ParseEvent::JobStarted { job_id }).await;
+
     // Spawn parsing task
     let tx_clone = tx.clone();
     let parser = state.parser.clone();
-    
+    let job_manager = state.job_manager.clone();
+    let cancellation_token_clone = cancellation_token.clone();
+
     tokio::spawn(async move {
         // Keep the temp file alive by moving it into the task
         let _temp_file = temp_file; // Keep alive until end of task
-        
+
         let config = FerrulesParseConfig {
             password: None,
             flatten_pdf: true,
             page_range,
             debug_dir: None,
         };
+
+        // Check for cancellation before starting
+        if cancellation_token_clone.is_cancelled() {
+            job_manager.complete_job(job_id).await;
+            return;
+        }
 
         // Get page count using the fixed method
         let total_pages = match parser.get_page_count(&mmap, config.password).await {
@@ -645,6 +731,7 @@ async fn parse_document_sse_handler(
                 let _ = tx_clone.send(ParseEvent::Error {
                     message: format!("Failed to get page count: {}", e),
                 }).await;
+                job_manager.complete_job(job_id).await;
                 return;
             }
         };
@@ -653,29 +740,67 @@ async fn parse_document_sse_handler(
         let tx_progress = tx_clone.clone();
         let pages_completed_clone = pages_completed.clone();
 
-        match parser.parse_document(&mmap, Uuid::new_v4().to_string(), config, Some({
+        // Create progress callback
+        let progress_callback = {
             let tx_progress = tx_progress.clone();
             move |page_id| {
                 let completed = pages_completed_clone.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
+                tracing::info!("Progress callback called for page {} (completed: {}/{})", page_id, completed, total_pages);
                 let _ = tx_progress.try_send(ParseEvent::Progress {
                     pages_completed: completed,
                     total_pages,
                     page_id,
                 });
             }
-        })).await {
+        };
+
+        // Create cancellation callback
+        let cancellation_callback = {
+            let token = cancellation_token_clone.clone();
+            move || {
+                let is_cancelled = token.is_cancelled();
+                if is_cancelled {
+                    tracing::info!("Cancellation callback detected cancellation!");
+                }
+                is_cancelled
+            }
+        };
+
+        // Parse document with cancellation callback - much simpler!
+        let result = parser.parse_document(
+            &mmap, 
+            job_id.to_string(), 
+            config, 
+            Some(progress_callback),
+            Some(cancellation_callback)
+        ).await;
+
+        match result {
             Ok(doc) => {
-                let _ = tx_clone.send(ParseEvent::Complete {
-                    document: serde_json::to_value(&doc).unwrap_or_default(),
-                    total_pages: doc.pages.len(),
-                }).await;
+                if !cancellation_token_clone.is_cancelled() {
+                    let _ = tx_clone.send(ParseEvent::Complete {
+                        document: serde_json::to_value(&doc).unwrap_or_default(),
+                        total_pages: doc.pages.len(),
+                    }).await;
+                }
             }
             Err(e) => {
-                let _ = tx_clone.send(ParseEvent::Error {
-                    message: e.to_string(),
-                }).await;
+                // Check if the error is due to cancellation
+                if e.to_string().contains("cancelled") {
+                    tracing::info!("Document processing was cancelled: {}", e);
+                    let _ = tx_clone.send(ParseEvent::Cancelled {
+                        message: "Processing was cancelled".to_string(),
+                    }).await;
+                } else if !cancellation_token_clone.is_cancelled() {
+                    let _ = tx_clone.send(ParseEvent::Error {
+                        message: e.to_string(),
+                    }).await;
+                }
             }
         }
+
+        // Clean up job when done
+        job_manager.complete_job(job_id).await;
     });
 
     // Create SSE stream
@@ -685,8 +810,10 @@ async fn parse_document_sse_handler(
             Ok::<_, std::convert::Infallible>(
                 axum::response::sse::Event::default()
                     .event(match &event {
+                        ParseEvent::JobStarted { .. } => "job_started",
                         ParseEvent::Progress { .. } => "progress",
                         ParseEvent::Complete { .. } => "complete",
+                        ParseEvent::Cancelled { .. } => "cancelled",
                         ParseEvent::Error { .. } => "error",
                     })
                     .data(data)
@@ -698,4 +825,26 @@ async fn parse_document_sse_handler(
             .interval(std::time::Duration::from_secs(30))
             .text("keep-alive-text"),
     ))
+}
+
+#[tracing::instrument(skip_all)]
+async fn cancel_job_handler(
+    Path(job_id): Path<Uuid>,
+    State(app_state): State<AppState>,
+) -> Result<impl IntoResponse, (StatusCode, Json<ApiResponse<()>>)> {
+    match app_state.job_manager.cancel_job(job_id).await {
+        Ok(()) => Ok(Json(ApiResponse {
+            success: true,
+            data: Some("Job cancelled successfully"),
+            error: None,
+        })),
+        Err(error_msg) => Err((
+            StatusCode::NOT_FOUND,
+            Json(ApiResponse {
+                success: false,
+                data: None,
+                error: Some(error_msg),
+            }),
+        )),
+    }
 }
