@@ -95,9 +95,9 @@ impl ParseNativeRequest {
         ParseNativeRequest {
             doc_data: Arc::from(data),
             password: password.map(|p| p.to_string()),
-            flatten: false, // Not needed for counting
-            page_range: None, // Count all pages
-            required_raster_width: 0, // Not needed for counting
+            flatten: false,            // Not needed for counting
+            page_range: None,          // Count all pages
+            required_raster_width: 0,  // Not needed for counting
             required_raster_height: 0, // Not needed for counting
             sender_tx,
             count_only: true,
@@ -241,11 +241,18 @@ fn handle_parse_native_req(
         let count_result = ParseNativePageResult {
             page_id: 0,
             text_lines: Vec::new(),
-            page_bbox: crate::entities::BBox { x0: 0.0, y0: 0.0, x1: 0.0, y1: 0.0 },
+            page_bbox: crate::entities::BBox {
+                x0: 0.0,
+                y0: 0.0,
+                x1: 0.0,
+                y1: 0.0,
+            },
             page_image: Arc::new(dummy_image.clone()),
             page_image_scale1: dummy_image,
             downscale_factor: 1.0,
-            metadata: ParseNativeMetadata { parse_native_duration_ms: 0 },
+            metadata: ParseNativeMetadata {
+                parse_native_duration_ms: 0,
+            },
             is_count_result: true,
             total_page_count: Some(total_pages),
         };
