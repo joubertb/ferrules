@@ -19,9 +19,17 @@ use ferrules_core::{
 use memmap2::Mmap;
 use mimalloc::MiMalloc;
 use serde::{Deserialize, Serialize};
-use std::{collections::HashMap, io::{Seek, Write}, sync::Arc};
+use std::{
+    collections::HashMap,
+    io::{Seek, Write},
+    sync::Arc,
+};
 use tempfile::NamedTempFile;
-use tokio::{fs::File, net::TcpListener, sync::{mpsc, Mutex}};
+use tokio::{
+    fs::File,
+    net::TcpListener,
+    sync::{mpsc, Mutex},
+};
 use tokio_stream::{wrappers::ReceiverStream, StreamExt};
 use tokio_util::sync::CancellationToken;
 use uuid::Uuid;
@@ -147,9 +155,7 @@ struct ParseOptions {
 #[serde(tag = "type")]
 enum ParseEvent {
     #[serde(rename = "job_started")]
-    JobStarted {
-        job_id: Uuid,
-    },
+    JobStarted { job_id: Uuid },
     #[serde(rename = "progress")]
     Progress {
         pages_completed: usize,
@@ -162,13 +168,9 @@ enum ParseEvent {
         total_pages: usize,
     },
     #[serde(rename = "cancelled")]
-    Cancelled {
-        message: String,
-    },
+    Cancelled { message: String },
     #[serde(rename = "error")]
-    Error {
-        message: String,
-    },
+    Error { message: String },
 }
 
 #[derive(Debug)]
@@ -216,9 +218,12 @@ impl JobManager {
             job_handle.cancellation_token.cancel();
 
             // Send cancellation event
-            let _ = job_handle.tx.send(ParseEvent::Cancelled {
-                message: "Job was cancelled by user request".to_string(),
-            }).await;
+            let _ = job_handle
+                .tx
+                .send(ParseEvent::Cancelled {
+                    message: "Job was cancelled by user request".to_string(),
+                })
+                .await;
 
             tracing::info!("Cancelled job {}", job_id);
             Ok(())
@@ -233,7 +238,6 @@ impl JobManager {
             tracing::info!("Completed job {}", job_id);
         }
     }
-
 }
 
 #[tokio::main]
@@ -276,7 +280,10 @@ async fn main() {
     let parser = FerrulesParser::new(ort_config);
     let job_manager = JobManager::new();
 
-    let app_state = AppState { parser, job_manager };
+    let app_state = AppState {
+        parser,
+        job_manager,
+    };
 
     // Build our application with a route
     let app = Router::new()
@@ -463,7 +470,13 @@ async fn parse_document_handler(
     };
     let doc = state
         .parser
-        .parse_document(&mmap, Uuid::new_v4().to_string(), config, Some(|_| {}), None::<fn() -> bool>)
+        .parse_document(
+            &mmap,
+            Uuid::new_v4().to_string(),
+            config,
+            Some(|_| {}),
+            None::<fn() -> bool>,
+        )
         .await
         .map_err(|e| {
             (
@@ -728,9 +741,11 @@ async fn parse_document_sse_handler(
         let total_pages = match parser.get_page_count(&mmap, config.password).await {
             Ok(count) => count,
             Err(e) => {
-                let _ = tx_clone.send(ParseEvent::Error {
-                    message: format!("Failed to get page count: {}", e),
-                }).await;
+                let _ = tx_clone
+                    .send(ParseEvent::Error {
+                        message: format!("Failed to get page count: {}", e),
+                    })
+                    .await;
                 job_manager.complete_job(job_id).await;
                 return;
             }
@@ -744,8 +759,14 @@ async fn parse_document_sse_handler(
         let progress_callback = {
             let tx_progress = tx_progress.clone();
             move |page_id| {
-                let completed = pages_completed_clone.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
-                tracing::info!("Progress callback called for page {} (completed: {}/{})", page_id, completed, total_pages);
+                let completed =
+                    pages_completed_clone.fetch_add(1, std::sync::atomic::Ordering::SeqCst) + 1;
+                tracing::info!(
+                    "Progress callback called for page {} (completed: {}/{})",
+                    page_id,
+                    completed,
+                    total_pages
+                );
                 let _ = tx_progress.try_send(ParseEvent::Progress {
                     pages_completed: completed,
                     total_pages,
@@ -767,34 +788,42 @@ async fn parse_document_sse_handler(
         };
 
         // Parse document with cancellation callback - much simpler!
-        let result = parser.parse_document(
-            &mmap, 
-            job_id.to_string(), 
-            config, 
-            Some(progress_callback),
-            Some(cancellation_callback)
-        ).await;
+        let result = parser
+            .parse_document(
+                &mmap,
+                job_id.to_string(),
+                config,
+                Some(progress_callback),
+                Some(cancellation_callback),
+            )
+            .await;
 
         match result {
             Ok(doc) => {
                 if !cancellation_token_clone.is_cancelled() {
-                    let _ = tx_clone.send(ParseEvent::Complete {
-                        document: serde_json::to_value(&doc).unwrap_or_default(),
-                        total_pages: doc.pages.len(),
-                    }).await;
+                    let _ = tx_clone
+                        .send(ParseEvent::Complete {
+                            document: serde_json::to_value(&doc).unwrap_or_default(),
+                            total_pages: doc.pages.len(),
+                        })
+                        .await;
                 }
             }
             Err(e) => {
                 // Check if the error is due to cancellation
                 if e.to_string().contains("cancelled") {
                     tracing::info!("Document processing was cancelled: {}", e);
-                    let _ = tx_clone.send(ParseEvent::Cancelled {
-                        message: "Processing was cancelled".to_string(),
-                    }).await;
+                    let _ = tx_clone
+                        .send(ParseEvent::Cancelled {
+                            message: "Processing was cancelled".to_string(),
+                        })
+                        .await;
                 } else if !cancellation_token_clone.is_cancelled() {
-                    let _ = tx_clone.send(ParseEvent::Error {
-                        message: e.to_string(),
-                    }).await;
+                    let _ = tx_clone
+                        .send(ParseEvent::Error {
+                            message: e.to_string(),
+                        })
+                        .await;
                 }
             }
         }
@@ -804,21 +833,20 @@ async fn parse_document_sse_handler(
     });
 
     // Create SSE stream
-    let stream = ReceiverStream::new(rx)
-        .map(|event| {
-            let data = serde_json::to_string(&event).unwrap_or_default();
-            Ok::<_, std::convert::Infallible>(
-                axum::response::sse::Event::default()
-                    .event(match &event {
-                        ParseEvent::JobStarted { .. } => "job_started",
-                        ParseEvent::Progress { .. } => "progress",
-                        ParseEvent::Complete { .. } => "complete",
-                        ParseEvent::Cancelled { .. } => "cancelled",
-                        ParseEvent::Error { .. } => "error",
-                    })
-                    .data(data)
-            )
-        });
+    let stream = ReceiverStream::new(rx).map(|event| {
+        let data = serde_json::to_string(&event).unwrap_or_default();
+        Ok::<_, std::convert::Infallible>(
+            axum::response::sse::Event::default()
+                .event(match &event {
+                    ParseEvent::JobStarted { .. } => "job_started",
+                    ParseEvent::Progress { .. } => "progress",
+                    ParseEvent::Complete { .. } => "complete",
+                    ParseEvent::Cancelled { .. } => "cancelled",
+                    ParseEvent::Error { .. } => "error",
+                })
+                .data(data),
+        )
+    });
 
     Ok(Sse::new(stream).keep_alive(
         axum::response::sse::KeepAlive::new()
