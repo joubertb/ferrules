@@ -80,10 +80,13 @@ async fn start_layout_parser(
             LayoutQueueMessage::Request(req, span) => {
                 let queue_time = req.metadata.queue_time.elapsed().as_millis();
                 let page_id = req.page_id;
-                tracing::debug!("layout request queue time for page {page_id} took: {queue_time}ms");
+                tracing::debug!(
+                    "layout request queue time for page {page_id} took: {queue_time}ms"
+                );
                 let _guard = span.enter();
                 tokio::spawn(
-                    handle_request(s.clone(), layout_parser.clone(), req, queue_time).in_current_span(),
+                    handle_request(s.clone(), layout_parser.clone(), req, queue_time)
+                        .in_current_span(),
                 );
             }
             LayoutQueueMessage::Flush => {
@@ -93,7 +96,9 @@ async fn start_layout_parser(
                     match message {
                         LayoutQueueMessage::Request(req, _span) => {
                             // Send error response to indicate cancellation
-                            let _ = req.metadata.response_tx.send(Err(anyhow::anyhow!("Layout processing cancelled due to document cancellation")));
+                            let _ = req.metadata.response_tx.send(Err(anyhow::anyhow!(
+                                "Layout processing cancelled due to document cancellation"
+                            )));
                         }
                         LayoutQueueMessage::Flush => {
                             // Multiple flush commands, ignore additional ones
@@ -137,6 +142,9 @@ async fn handle_request(
     });
     // Handle the case where the receiver is dropped (due to cancellation)
     if let Err(_) = metadata.response_tx.send(layout_result) {
-        tracing::debug!("Layout parsing result receiver dropped (likely due to cancellation) for page {}", page_id);
+        tracing::debug!(
+            "Layout parsing result receiver dropped (likely due to cancellation) for page {}",
+            page_id
+        );
     }
 }

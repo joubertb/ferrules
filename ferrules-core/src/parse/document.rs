@@ -70,7 +70,13 @@ where
         }
     }
 
-    let result = parse_page_full(parse_native_result, debug_dir, layout_queue.clone(), cancellation_callback.clone()).await;
+    let result = parse_page_full(
+        parse_native_result,
+        debug_dir,
+        layout_queue.clone(),
+        cancellation_callback.clone(),
+    )
+    .await;
 
     // Check for cancellation after processing
     if let Some(ref cancel_cb) = cancellation_callback {
@@ -137,7 +143,11 @@ impl FerrulesParser {
     ///     println!("Document has {} pages", page_count);
     /// }
     /// ```
-    pub async fn get_page_count(&self, doc: &[u8], password: Option<&str>) -> anyhow::Result<usize> {
+    pub async fn get_page_count(
+        &self,
+        doc: &[u8],
+        password: Option<&str>,
+    ) -> anyhow::Result<usize> {
         use super::native::ParseNativeRequest;
         use tokio::sync::mpsc;
 
@@ -148,17 +158,22 @@ impl FerrulesParser {
         let request = ParseNativeRequest::new_count_only(doc, password, result_tx);
 
         // Send the request to the native queue
-        self.native_queue.push(request).await
+        self.native_queue
+            .push(request)
+            .await
             .context("Failed to send page count request to native queue")?;
 
         // Wait for the result
-        let result = result_rx.recv().await
+        let result = result_rx
+            .recv()
+            .await
             .context("Failed to receive page count result")?
             .context("Native parsing error")?;
 
         // Extract the page count from the result
         if result.is_count_result {
-            result.total_page_count
+            result
+                .total_page_count
                 .context("Count result missing total_page_count")
         } else {
             anyhow::bail!("Received non-count result for page count request")
