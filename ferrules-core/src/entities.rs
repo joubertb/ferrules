@@ -11,6 +11,76 @@ pub type PageID = usize;
 pub type ElementID = usize;
 
 const FERRULES_VERSION: &str = env!("CARGO_PKG_VERSION");
+
+/// UTF-8 reconstruction function to fix corrupted mathematical symbols
+/// 
+/// PDFium sometimes returns UTF-8 bytes as individual Latin-1 characters.
+/// This function detects and reconstructs proper Unicode from corrupted sequences.
+fn fix_utf8_corruption(text: &str) -> String {
+    if text.is_empty() {
+        return text.to_string();
+    }
+    
+    let mut result = String::new();
+    let chars: Vec<char> = text.chars().collect();
+    let mut i = 0;
+    
+    while i < chars.len() {
+        let ch = chars[i];
+        let code_point = ch as u32;
+        
+        // Look for UTF-8 4-byte sequence starter (0xF0) for mathematical symbols
+        if code_point == 0xF0 && i + 3 < chars.len() {
+            let byte1 = chars[i] as u8;
+            let byte2 = chars[i + 1] as u32;
+            let byte3 = chars[i + 2] as u32;
+            let byte4 = chars[i + 3] as u32;
+            
+            // Check if the next 3 characters form a valid UTF-8 continuation
+            if (0x80..=0xBF).contains(&byte2) 
+                && (0x80..=0xBF).contains(&byte3) 
+                && (0x80..=0xBF).contains(&byte4) {
+                
+                // Reconstruct the UTF-8 bytes
+                let utf8_bytes = [byte1, byte2 as u8, byte3 as u8, byte4 as u8];
+                
+                // Try to decode the UTF-8 sequence
+                if let Ok(decoded_str) = std::str::from_utf8(&utf8_bytes) {
+                    result.push_str(decoded_str);
+                    i += 4; // Skip all 4 characters
+                    continue;
+                }
+            }
+        }
+        
+        // Look for UTF-8 3-byte sequence starter (0xE2) for mathematical operators
+        if code_point == 0xE2 && i + 2 < chars.len() {
+            let byte1 = chars[i] as u8;
+            let byte2 = chars[i + 1] as u32;
+            let byte3 = chars[i + 2] as u32;
+            
+            // Check if the next 2 characters form a valid UTF-8 continuation
+            if (0x80..=0xBF).contains(&byte2) && (0x80..=0xBF).contains(&byte3) {
+                // Reconstruct the UTF-8 bytes
+                let utf8_bytes = [byte1, byte2 as u8, byte3 as u8];
+                
+                // Try to decode the UTF-8 sequence
+                if let Ok(decoded_str) = std::str::from_utf8(&utf8_bytes) {
+                    result.push_str(decoded_str);
+                    i += 3; // Skip all 3 characters
+                    continue;
+                }
+            }
+        }
+        
+        // No UTF-8 sequence detected, add character as-is
+        result.push(ch);
+        i += 1;
+    }
+    
+    result
+}
+
 #[derive(Debug, Default, Clone, Deserialize, Serialize)]
 pub struct BBox {
     pub x0: f32,
@@ -346,7 +416,9 @@ impl Line {
         || span.bbox.y0 > self.bbox.y1
         || span.text.ends_with("\n") || span.text.ends_with("\x02")
         {
-            self.text = fix_text(&self.text, None);
+            // First fix UTF-8 corruption, then apply plsfix
+            let utf8_fixed = fix_utf8_corruption(&self.text);
+            self.text = fix_text(&utf8_fixed, None);
             Err(span)
         } else {
             if self.bbox.height() == 0f32 || self.bbox.width() == 0f32 {
