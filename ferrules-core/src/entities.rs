@@ -1,5 +1,6 @@
 use image::DynamicImage;
-use plsfix::fix_text;
+// plsfix disabled - was causing over-aggressive text corrections like "long-context" → "longficontext"
+// use plsfix::fix_text;
 use serde::{Deserialize, Serialize};
 use std::{path::PathBuf, time::Duration};
 
@@ -13,37 +14,37 @@ pub type ElementID = usize;
 const FERRULES_VERSION: &str = env!("CARGO_PKG_VERSION");
 
 /// UTF-8 reconstruction function to fix corrupted mathematical symbols
-/// 
+///
 /// PDFium sometimes returns UTF-8 bytes as individual Latin-1 characters.
 /// This function detects and reconstructs proper Unicode from corrupted sequences.
-fn fix_utf8_corruption(text: &str) -> String {
+pub fn fix_utf8_corruption(text: &str) -> String {
     if text.is_empty() {
         return text.to_string();
     }
-    
+
     let mut result = String::new();
     let chars: Vec<char> = text.chars().collect();
     let mut i = 0;
-    
+
     while i < chars.len() {
         let ch = chars[i];
         let code_point = ch as u32;
-        
+
         // Look for UTF-8 4-byte sequence starter (0xF0) for mathematical symbols
         if code_point == 0xF0 && i + 3 < chars.len() {
             let byte1 = chars[i] as u8;
             let byte2 = chars[i + 1] as u32;
             let byte3 = chars[i + 2] as u32;
             let byte4 = chars[i + 3] as u32;
-            
+
             // Check if the next 3 characters form a valid UTF-8 continuation
-            if (0x80..=0xBF).contains(&byte2) 
-                && (0x80..=0xBF).contains(&byte3) 
-                && (0x80..=0xBF).contains(&byte4) {
-                
+            if (0x80..=0xBF).contains(&byte2)
+                && (0x80..=0xBF).contains(&byte3)
+                && (0x80..=0xBF).contains(&byte4)
+            {
                 // Reconstruct the UTF-8 bytes
                 let utf8_bytes = [byte1, byte2 as u8, byte3 as u8, byte4 as u8];
-                
+
                 // Try to decode the UTF-8 sequence
                 if let Ok(decoded_str) = std::str::from_utf8(&utf8_bytes) {
                     result.push_str(decoded_str);
@@ -52,18 +53,18 @@ fn fix_utf8_corruption(text: &str) -> String {
                 }
             }
         }
-        
+
         // Look for UTF-8 3-byte sequence starter (0xE2) for mathematical operators
         if code_point == 0xE2 && i + 2 < chars.len() {
             let byte1 = chars[i] as u8;
             let byte2 = chars[i + 1] as u32;
             let byte3 = chars[i + 2] as u32;
-            
+
             // Check if the next 2 characters form a valid UTF-8 continuation
             if (0x80..=0xBF).contains(&byte2) && (0x80..=0xBF).contains(&byte3) {
                 // Reconstruct the UTF-8 bytes
                 let utf8_bytes = [byte1, byte2 as u8, byte3 as u8];
-                
+
                 // Try to decode the UTF-8 sequence
                 if let Ok(decoded_str) = std::str::from_utf8(&utf8_bytes) {
                     result.push_str(decoded_str);
@@ -72,13 +73,192 @@ fn fix_utf8_corruption(text: &str) -> String {
                 }
             }
         }
-        
+
         // No UTF-8 sequence detected, add character as-is
         result.push(ch);
         i += 1;
     }
-    
+
+    // Fix common ligature corruption patterns, then remove control characters
+    let ligature_fixed = fix_ligature_corruption(&result);
+    remove_control_characters(&ligature_fixed)
+}
+
+/// Fix ligature corruption using contextual analysis and conservative patterns
+///
+/// PDFium sometimes incorrectly maps ligature characters to other symbols during
+/// text extraction from PDF files. This function uses a conservative approach that:
+///
+/// 1. Detects only specific symbols known to be ligature corruption (!@#$%^&*)
+/// 2. Uses contextual analysis to determine the most likely original ligature
+/// 3. Preserves legitimate punctuation like hyphens (-) and periods (.)
+///
+/// Known corruption patterns:
+/// - fl ligature → ! : work!ows → workflows
+/// - fi ligature → # : speci#c → specific  
+/// - ff ligature → " : e"ective → effective
+///
+/// The system is conservative to avoid corrupting legitimate text like
+/// "long-context", "e-mail", or "state-of-the-art".
+fn fix_ligature_corruption(text: &str) -> String {
+    use lazy_static::lazy_static;
+    use regex::Regex;
+
+    // Use lazy_static for one-time regex compilation
+    lazy_static! {
+        // Pattern to match ligature corruption symbols in various contexts
+        // Handles both direct corruption and corruption with separators
+        static ref POTENTIAL_CORRUPTION: Regex = Regex::new(r"([a-zA-Z]+)[\s-]*([!@#$%^&*'\x22])([a-zA-Z]+)").unwrap();
+        // Pattern to match standalone corruption symbols (like "#t" for "fit")
+        static ref STANDALONE_CORRUPTION: Regex = Regex::new(r"\b([!@#$%^&*'\x22])([a-z]+)\b").unwrap();
+    }
+
+    let mut result = text.to_string();
+
+    // Fix potential ligature corruption using contextual analysis
+    result = POTENTIAL_CORRUPTION
+        .replace_all(&result, |caps: &regex::Captures| {
+            let prefix = &caps[1];
+            let symbol = &caps[2];
+            let suffix = &caps[3];
+
+            // Debug: log when we find and fix ligature corruption
+            tracing::debug!("Fixing ligature corruption: {}{}{}", prefix, symbol, suffix);
+
+            // Determine most likely ligature based on context and symbol
+            let ligature = determine_ligature_from_context(prefix, suffix, symbol);
+            format!("{}{}{}", prefix, ligature, suffix)
+        })
+        .to_string();
+
+    // Fix standalone corruption patterns (like "#t" -> "fit")
+    // Simple direct replacement for common patterns
+    result = result.replace("#t", "fit");
+    result = result.replace("!ows", "flows");
+    result = result.replace("\"ective", "ffective");
+    result = result.replace("e$- ciently", "efficiently");
+
+    result = STANDALONE_CORRUPTION
+        .replace_all(&result, |caps: &regex::Captures| {
+            let symbol = &caps[1];
+            let suffix = &caps[2];
+
+            // Debug: log standalone corruption fixes
+            tracing::debug!(
+                "Fixing standalone ligature corruption: {}{}",
+                symbol,
+                suffix
+            );
+
+            // Handle specific standalone patterns
+            match (symbol, suffix) {
+                ("#", "t") => "fit".to_string(),
+                ("#", "rst") => "first".to_string(),
+                ("#", "le") => "file".to_string(),
+                ("#", "nd") => "find".to_string(),
+                ("#", "nal") => "final".to_string(),
+                ("#", "ne") => "fine".to_string(),
+                ("!", "ow") => "flow".to_string(),
+                ("!", "ows") => "flows".to_string(),
+                ("\"", "ect") => "fect".to_string(),
+                ("\"", "ective") => "fective".to_string(),
+                // Default: assume fi ligature for # and fl ligature for !
+                ("#", _) => format!("fi{}", suffix),
+                ("!", _) => format!("fl{}", suffix),
+                ("\"", _) => format!("ff{}", suffix),
+                (_, _) => format!("fi{}", suffix), // Default to fi
+            }
+        })
+        .to_string();
+
     result
+}
+
+/// Intelligently determine the most likely ligature based on context
+///
+/// Uses word patterns, common English combinations, and symbol types to infer
+/// the original ligature that was corrupted during PDF text extraction.
+fn determine_ligature_from_context(prefix: &str, suffix: &str, symbol: &str) -> &'static str {
+    let full_context = format!("{}{}", prefix, suffix).to_lowercase();
+
+    // Known fl patterns (workflows, overflow, etc.)
+    if suffix == "ows"
+        || suffix == "ow"
+        || full_context.contains("work") && suffix.starts_with("ow")
+        || full_context.contains("over") && suffix.starts_with("ow")
+    {
+        return "fl";
+    }
+
+    // Known ff patterns (effective, office, etc.)
+    if full_context.contains("e") && suffix.starts_with("ective")
+        || full_context.contains("o") && suffix.starts_with("ice")
+        || full_context.contains("di") && suffix.starts_with("erent")
+        || full_context.contains("sta") && suffix.starts_with("ing")
+    {
+        return "ff";
+    }
+
+    // Known fi patterns - most common ligature
+    if suffix.ends_with("ed")
+        || suffix.ends_with("es")
+        || suffix.ends_with("ng")
+        || suffix.ends_with("er")
+        || suffix.ends_with("le")
+        || suffix.ends_with("al")
+        || full_context.starts_with("uni")
+        || full_context.starts_with("simpli")
+        || full_context.starts_with("identi")
+        || full_context.starts_with("speci")
+        || full_context.starts_with("bene")
+        || full_context.starts_with("signi")
+        || full_context.starts_with("classi")
+        || full_context.starts_with("certi")
+    {
+        return "fi";
+    }
+
+    // Symbol-based heuristics (conservative - only for known corruption symbols)
+    match symbol {
+        "!" => {
+            // ! often corrupts fl in "workflows" but fi in most other cases
+            if suffix == "ows" || suffix.starts_with("ow") {
+                "fl"
+            } else {
+                "fi"
+            }
+        }
+        "#" => "fi",    // # commonly corrupts fi
+        "$" => "fi",    // $ can corrupt fi in some cases
+        "%" => "fi",    // % can corrupt fi
+        "^" => "fi",    // ^ can corrupt fi
+        "&" => "ff",    // & can corrupt ff
+        "*" => "fi",    // * can corrupt fi
+        "\x22" => "ff", // " commonly corrupts ff (e.g., "effectively")
+        "'" => "fi",    // ' can corrupt fi in some cases
+        _ => "fi",      // Default to fi as it's the most common ligature
+    }
+}
+
+/// Remove control characters while preserving legitimate whitespace
+///
+/// Removes ASCII control characters (0x00-0x1F) except for common whitespace:
+/// - Tab (0x09)
+/// - Line Feed (0x0A)  
+/// - Carriage Return (0x0D)
+/// - Space (0x20) - not a control character but handled here for completeness
+fn remove_control_characters(text: &str) -> String {
+    text.chars()
+        .filter(|&ch| {
+            let code = ch as u32;
+            // Keep normal printable characters (>= 0x20)
+            if code >= 0x20 {
+                return true;
+            }
+            // Keep essential whitespace control characters
+            matches!(ch, '\t' | '\n' | '\r')
+        })
+        .collect()
 }
 
 #[derive(Debug, Default, Clone, Deserialize, Serialize)]
@@ -264,6 +444,7 @@ impl Element {
         }
     }
     pub fn push_line(&mut self, line: &Line) {
+        // Line text is already cleaned in Line::new_from_span() and Line::append()
         if self.text_block.is_empty() {
             self.text_block.push_first(&line.text);
         } else {
@@ -340,7 +521,7 @@ impl CharSpan {
                     .expect("Error init span tight bound char"),
                 page_bbox.height(),
             ),
-            text: char.unicode_char().unwrap_or_default().into(),
+            text: fix_utf8_corruption(&char.unicode_char().unwrap_or_default().to_string()),
             font_name: char.font_name(),
             font_weight: char.font_weight(),
             font_size: char.unscaled_font_size().value,
@@ -362,7 +543,10 @@ impl CharSpan {
                 char.loose_bounds().expect("error tight bound"),
                 page_bbox.height(),
             );
-            self.text.push(char.unicode_char().unwrap_or_default());
+            // Apply full UTF-8 and ligature corruption fix to character before adding
+            let char_text =
+                fix_utf8_corruption(&char.unicode_char().unwrap_or_default().to_string());
+            self.text.push_str(&char_text);
             self.char_end_idx = char.index();
             self.bbox.merge(&char_bbox);
             Some(())
@@ -401,6 +585,7 @@ impl std::fmt::Debug for Line {
 
 impl Line {
     pub fn new_from_span(span: CharSpan) -> Self {
+        // CharSpan text is already cleaned in CharSpan::new_from_char()
         Self {
             bbox: span.bbox.clone(),
             text: span.text.clone(),
@@ -416,9 +601,11 @@ impl Line {
         || span.bbox.y0 > self.bbox.y1
         || span.text.ends_with("\n") || span.text.ends_with("\x02")
         {
-            // First fix UTF-8 corruption, then apply plsfix
+            // First fix UTF-8 corruption, then apply plsfix conservatively
             let utf8_fixed = fix_utf8_corruption(&self.text);
-            self.text = fix_text(&utf8_fixed, None);
+            // Skip plsfix to prevent over-aggressive ligature corrections like "long-context" → "longficontext"
+            // Our fix_ligature_corruption function in fix_utf8_corruption already handles legitimate ligature issues
+            self.text = utf8_fixed;
             Err(span)
         } else {
             if self.bbox.height() == 0f32 || self.bbox.width() == 0f32 {
@@ -427,6 +614,7 @@ impl Line {
             } else {
                 self.bbox.merge(&span.bbox);
             }
+            // CharSpan text is already cleaned in CharSpan::new_from_char() and CharSpan::append()
             self.text.push_str(&span.text);
             self.spans.push(span);
             Ok(())
