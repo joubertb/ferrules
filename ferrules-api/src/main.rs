@@ -296,7 +296,7 @@ async fn main() {
         .layer(DefaultBodyLimit::max(MAX_SIZE_LIMIT));
 
     // Run it
-    let listener = TcpListener::bind("0.0.0.0:3002").await.unwrap();
+    let listener = TcpListener::bind(&args.listen_addr).await.unwrap();
     tracing::info!(
         "Starting ferrules service listening on {}",
         listener.local_addr().unwrap()
@@ -516,11 +516,15 @@ async fn parse_document_handler(
                 .status(StatusCode::OK)
                 .header(CONTENT_TYPE, "application/json")
                 .body(
-                    serde_json::to_string(&ApiResponse {
-                        success: true,
-                        data: Some(doc),
-                        error: None,
-                    })
+                    // Use to_vec + from_utf8 to preserve Unicode characters instead of escaping them
+                    String::from_utf8(
+                        serde_json::to_vec(&ApiResponse {
+                            success: true,
+                            data: Some(doc),
+                            error: None,
+                        })
+                        .unwrap(),
+                    )
                     .unwrap(),
                 )
                 .unwrap())
@@ -834,7 +838,9 @@ async fn parse_document_sse_handler(
 
     // Create SSE stream
     let stream = ReceiverStream::new(rx).map(|event| {
-        let data = serde_json::to_string(&event).unwrap_or_default();
+        // Use to_vec + from_utf8 to preserve Unicode characters instead of escaping them
+        let data =
+            String::from_utf8(serde_json::to_vec(&event).unwrap_or_default()).unwrap_or_default();
         Ok::<_, std::convert::Infallible>(
             axum::response::sse::Event::default()
                 .event(match &event {
