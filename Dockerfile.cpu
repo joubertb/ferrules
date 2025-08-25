@@ -38,6 +38,7 @@ FROM ubuntu:${UBUNTU_VERSION}
 RUN apt-get update && apt-get install -y \
     libssl3 \
     ca-certificates \
+    curl \
     && rm -rf /var/lib/apt/lists/*
 
 # Copy the binary and libs from builder
