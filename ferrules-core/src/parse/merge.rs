@@ -232,6 +232,18 @@ pub(crate) fn merge_elements_into_blocks(
                 block_id += 1;
                 blocks.push(text_block);
             }
+            ElementType::Formula => {
+                let formula_block = Block {
+                    id: block_id,
+                    kind: crate::blocks::BlockType::TextBlock(TextBlock {
+                        text: format!("FORMULA({})", curr_el.text_block.text),
+                    }),
+                    pages_id: vec![curr_el.page_id],
+                    bbox: curr_el.bbox,
+                };
+                block_id += 1;
+                blocks.push(formula_block);
+            }
             ElementType::ListItem => {
                 let mut list_block = Block {
                     id: block_id,

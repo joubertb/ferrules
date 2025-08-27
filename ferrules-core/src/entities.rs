@@ -1,6 +1,7 @@
 use image::DynamicImage;
 // plsfix disabled - was causing over-aggressive text corrections like "long-context" → "longficontext"
 // use plsfix::fix_text;
+use regex::Regex;
 use serde::{Deserialize, Serialize};
 use std::{path::PathBuf, time::Duration};
 
@@ -261,6 +262,260 @@ fn remove_control_characters(text: &str) -> String {
         .collect()
 }
 
+/// Detect and convert subscripts and superscripts to audio-friendly bracket notation
+///
+/// Analyzes character positioning and font sizes to identify mathematical subscripts
+/// and superscripts, converting them to bracket notation for better TTS pronunciation:
+/// - Subscripts: "ni" → "n[i]", "LossMSP" → "Loss[MSP]"  
+/// - Superscripts: "x²" → "x^[2]", "a³" → "a^[3]"
+///
+/// Detection criteria:
+/// - Vertical position offset (y-coordinate difference)
+/// - Font size difference between base and script characters
+/// - Horizontal proximity for character grouping
+fn detect_script_notation(spans: &[CharSpan]) -> String {
+    if spans.is_empty() {
+        return String::new();
+    }
+
+    // Configuration thresholds - made more lenient
+    const SUBSCRIPT_Y_THRESHOLD: f32 = 1.0; // Reduced from 2.0 - more sensitive to small position changes
+    const SUPERSCRIPT_Y_THRESHOLD: f32 = 1.0; // Reduced from 2.0
+    const FONT_SIZE_RATIO_THRESHOLD: f32 = 0.9; // Increased from 0.85 - less strict font size requirement
+    const HORIZONTAL_PROXIMITY: f32 = 20.0; // Increased from 10.0 - allow wider gaps
+
+    let mut result = String::new();
+    let mut i = 0;
+
+    while i < spans.len() {
+        let base_span = &spans[i];
+        let mut script_chars = Vec::new();
+        let mut script_type = None; // None, Some("sub"), Some("sup")
+
+        // Also check for common subscript patterns in single spans
+        if let Some((base_part, script_part)) = detect_inline_subscript(&base_span.text) {
+            result.push_str(&format!("{}[{}]", base_part, script_part));
+            i += 1;
+            continue;
+        }
+
+        // Look ahead for potential script characters
+        let mut j = i + 1;
+        while j < spans.len() {
+            let next_span = &spans[j];
+
+            // Check horizontal proximity - use previous span for proximity, not base
+            let prev_span = if j > i + 1 { &spans[j - 1] } else { base_span };
+            if next_span.bbox.x0 - prev_span.bbox.x1 > HORIZONTAL_PROXIMITY {
+                break;
+            }
+
+            // Determine if this is a subscript or superscript relative to base character
+            let y_diff = next_span.bbox.y0 - base_span.bbox.y0;
+            let font_ratio = next_span.font_size / base_span.font_size;
+
+            // Check if the character is just whitespace or empty - skip these for script detection
+            let is_whitespace_only = next_span.text.trim().is_empty();
+
+            // More lenient detection for subscripts, but stricter for superscripts
+            let is_subscript = !is_whitespace_only
+                && (
+                    (y_diff > SUBSCRIPT_Y_THRESHOLD && font_ratio <= FONT_SIZE_RATIO_THRESHOLD)
+                        || (y_diff > 0.5 && font_ratio <= 1.0)
+                    // Even more lenient for slight position changes
+                );
+            // Be much more conservative with superscript detection to avoid false positives
+            let is_superscript = !is_whitespace_only
+                && y_diff < -SUPERSCRIPT_Y_THRESHOLD
+                && font_ratio <= FONT_SIZE_RATIO_THRESHOLD
+                && font_ratio < 0.8; // Require significant font size difference for superscripts
+
+            if is_subscript {
+                if script_type.is_none() {
+                    script_type = Some("sub");
+                } else if script_type != Some("sub") {
+                    break; // Mixed script types, stop grouping
+                }
+                script_chars.push(&next_span.text);
+                j += 1;
+            } else if is_superscript {
+                if script_type.is_none() {
+                    script_type = Some("sup");
+                } else if script_type != Some("sup") {
+                    break; // Mixed script types, stop grouping
+                }
+                script_chars.push(&next_span.text);
+                j += 1;
+            } else {
+                break; // Not a script character
+            }
+        }
+
+        // Generate output based on detected script pattern
+        if !script_chars.is_empty() {
+            let script_text: String = script_chars.iter().map(|s| s.as_str()).collect();
+            // Only apply bracket notation if script text is not empty or just whitespace
+            let trimmed_script = script_text.trim();
+            if !trimmed_script.is_empty() {
+                match script_type {
+                    Some("sub") => {
+                        // Check if the script text itself contains inline subscripts
+                        if let Some((inner_base, inner_script)) =
+                            detect_inline_subscript(trimmed_script)
+                        {
+                            result.push_str(&format!(
+                                "{}{}[{}]",
+                                base_span.text.trim_end(),
+                                inner_base,
+                                inner_script
+                            ));
+                        } else {
+                            result.push_str(&format!(
+                                "{}[{}]",
+                                base_span.text.trim_end(),
+                                trimmed_script
+                            ));
+                        }
+                    }
+                    Some("sup") => {
+                        // Check if the script text itself contains inline subscripts
+                        if let Some((inner_base, inner_script)) =
+                            detect_inline_subscript(trimmed_script)
+                        {
+                            result.push_str(&format!(
+                                "{}{}^[{}]",
+                                base_span.text.trim_end(),
+                                inner_base,
+                                inner_script
+                            ));
+                        } else {
+                            result.push_str(&format!(
+                                "{}^[{}]",
+                                base_span.text.trim_end(),
+                                trimmed_script
+                            ));
+                        }
+                    }
+                    _ => {
+                        result.push_str(&base_span.text);
+                    }
+                }
+            } else {
+                // If script text is empty/whitespace, treat as regular text
+                result.push_str(&base_span.text);
+                for script_char in &script_chars {
+                    result.push_str(script_char);
+                }
+            }
+            i = j; // Skip processed script characters
+        } else {
+            result.push_str(&base_span.text);
+            i += 1;
+        }
+    }
+
+    // Add spaces around mathematical symbols for better readability
+    add_math_symbol_spacing(&result)
+}
+
+// Helper function to add spaces around common mathematical symbols and fix corruptions
+fn add_math_symbol_spacing(text: &str) -> String {
+    let mut result = text.to_string();
+
+    // First, fix common mathematical symbol corruptions
+    result = fix_math_symbol_corruptions(&result);
+
+    let math_symbols = [
+        "∈", "∉", "⊂", "⊃", "⊆", "⊇", "∪", "∩", "×", "⋅", "∘", "≤", "≥", "≠", "≡", "≈", "∝", "∞",
+        "∑", "∏", "∫", "∂", "∇", "△", "∴", "∵", "→", "←", "↔", "⇒", "⇔",
+    ];
+
+    for symbol in &math_symbols {
+        // Add spaces around the symbol if they're not already there
+        let with_spaces = format!(" {} ", symbol);
+        let patterns_to_replace = [
+            (format!("{}", symbol), with_spaces.clone()), // symbol with no spaces
+            (format!(" {}", symbol), with_spaces.clone()), // symbol with space before only
+            (format!("{} ", symbol), with_spaces.clone()), // symbol with space after only
+        ];
+
+        for (pattern, replacement) in &patterns_to_replace {
+            if result.contains(pattern) && !result.contains(&with_spaces) {
+                result = result.replace(pattern, replacement);
+                break; // Only replace once per symbol to avoid double-spacing
+            }
+        }
+    }
+
+    // Clean up any double spaces that might have been created
+    while result.contains("  ") {
+        result = result.replace("  ", " ");
+    }
+
+    result
+}
+
+// Helper function to fix common mathematical symbol corruptions
+fn fix_math_symbol_corruptions(text: &str) -> String {
+    let mut result = text.to_string();
+
+    // Fix "∈ /" or "∈/" to "∉" (not element of)
+    result = result.replace("∈ /", "∉");
+    result = result.replace("∈/", "∉");
+
+    // Fix "6=" or "6[=]" to "≠" (not equal)
+    result = result.replace("6=", "≠");
+    result = result.replace("6[=]", "≠");
+
+    // Fix bracket corruption around punctuation
+    result = result.replace("otherwise[.]", "otherwise.");
+    result = result.replace("[.]", ".");
+    result = result.replace("[,]", ",");
+    result = result.replace("[;]", ";");
+    result = result.replace("[:]", ":");
+
+    // Fix angle bracket corruptions like "hn[i], n[j]i" to "(n[i], n[j])"
+    if let Ok(re) = Regex::new(r"h([^h]+)i") {
+        result = re.replace_all(&result, "($1)").to_string();
+    }
+
+    result
+}
+
+// Helper function to detect common subscript patterns within a single text span
+fn detect_inline_subscript(text: &str) -> Option<(String, String)> {
+    // Only handle very specific mathematical subscript patterns
+    // Be conservative to avoid breaking regular words
+
+    // Handle specific patterns like "Nmask" (capital N + mask)
+    if text == "Nmask" {
+        return Some(("N".to_string(), "mask".to_string()));
+    }
+
+    // Handle comma-separated subscripts like "ei,j", "xi,j", etc.
+    if let Ok(re) = Regex::new(r"^([a-z])([ij],[ij]|[ij],[0-9]|[0-9],[ij]|[0-9],[0-9])$") {
+        if let Some(caps) = re.captures(text) {
+            return Some((caps[1].to_string(), caps[2].to_string()));
+        }
+    }
+
+    // Handle common single-letter mathematical subscripts: ni, nj, xi, xj, etc.
+    if let Ok(re2) = Regex::new(r"^([nxyzeh])([ij])$") {
+        if let Some(caps) = re2.captures(text) {
+            return Some((caps[1].to_string(), caps[2].to_string()));
+        }
+    }
+
+    // Handle patterns like "n0", "n1", "x0", "x1" etc (single letter + single digit)
+    if let Ok(re3) = Regex::new(r"^([nxyzeh])([0-9])$") {
+        if let Some(caps) = re3.captures(text) {
+            return Some((caps[1].to_string(), caps[2].to_string()));
+        }
+    }
+
+    None
+}
+
 #[derive(Debug, Default, Clone, Deserialize, Serialize)]
 pub struct BBox {
     pub x0: f32,
@@ -405,6 +660,7 @@ pub enum ElementType {
     Caption,
     Image,
     Table,
+    Formula,
 }
 
 #[derive(Debug, Deserialize, Serialize, Clone)]
@@ -421,7 +677,8 @@ impl Element {
     pub fn from_layout_block(id: usize, layout_block: &LayoutBBox, page_id: usize) -> Self {
         let kind = match layout_block.label {
             "Caption" => ElementType::Caption,
-            "Formula" | "Text" => ElementType::Text,
+            "Formula" => ElementType::Formula,
+            "Text" => ElementType::Text,
             "List-item" => ElementType::ListItem,
             "Footnote" => ElementType::FootNote,
             "Page-footer" => ElementType::Footer,
@@ -601,11 +858,20 @@ impl Line {
         || span.bbox.y0 > self.bbox.y1
         || span.text.ends_with("\n") || span.text.ends_with("\x02")
         {
-            // First fix UTF-8 corruption, then apply plsfix conservatively
+            // Apply comprehensive text processing when finalizing the line
             let utf8_fixed = fix_utf8_corruption(&self.text);
-            // Skip plsfix to prevent over-aggressive ligature corrections like "long-context" → "longficontext"
-            // Our fix_ligature_corruption function in fix_utf8_corruption already handles legitimate ligature issues
-            self.text = utf8_fixed;
+
+            // Apply script notation detection to spans for mathematical subscripts/superscripts
+            let script_processed = detect_script_notation(&self.spans);
+
+            // Use script-processed text if it differs significantly from original
+            // This preserves regular text while converting mathematical notation
+            if !script_processed.is_empty() && script_processed.contains('[') {
+                self.text = script_processed;
+            } else {
+                self.text = utf8_fixed;
+            }
+
             Err(span)
         } else {
             if self.bbox.height() == 0f32 || self.bbox.width() == 0f32 {
@@ -809,5 +1075,290 @@ mod tests {
         let y_weight = 3.0;
         let distance = bbox1.distance(&bbox2, x_weight, y_weight);
         assert_eq!(distance, 45.0); // (3-1)^2 * 2 + (4-1)^2 * 3
+    }
+
+    #[test]
+    fn test_detect_script_notation_subscript() {
+        // Test subscript detection: "ni" → "n[i]"
+        let spans = vec![
+            CharSpan {
+                bbox: BBox {
+                    x0: 10.0,
+                    y0: 10.0,
+                    x1: 15.0,
+                    y1: 20.0,
+                },
+                text: "n".to_string(),
+                rotation: 0.0,
+                font_name: "Arial".to_string(),
+                font_size: 12.0,
+                font_weight: None,
+                char_start_idx: 0,
+                char_end_idx: 0,
+            },
+            CharSpan {
+                bbox: BBox {
+                    x0: 15.0,
+                    y0: 13.0,
+                    x1: 18.0,
+                    y1: 18.0,
+                }, // Lower position (subscript)
+                text: "i".to_string(),
+                rotation: 0.0,
+                font_name: "Arial".to_string(),
+                font_size: 9.0, // Smaller font
+                font_weight: None,
+                char_start_idx: 1,
+                char_end_idx: 1,
+            },
+        ];
+
+        let result = detect_script_notation(&spans);
+        assert_eq!(result, "n[i]");
+    }
+
+    #[test]
+    fn test_detect_script_notation_subscript_with_trailing_space() {
+        // Test subscript detection with trailing space: "Loss " + "total" → "Loss[total]" (no space before bracket)
+        let spans = vec![
+            CharSpan {
+                bbox: BBox {
+                    x0: 10.0,
+                    y0: 10.0,
+                    x1: 30.0,
+                    y1: 20.0,
+                },
+                text: "Loss ".to_string(), // Note the trailing space
+                rotation: 0.0,
+                font_name: "Arial".to_string(),
+                font_size: 12.0,
+                font_weight: None,
+                char_start_idx: 0,
+                char_end_idx: 4,
+            },
+            CharSpan {
+                bbox: BBox {
+                    x0: 30.0,
+                    y0: 13.0,
+                    x1: 50.0,
+                    y1: 18.0,
+                }, // Lower position (subscript)
+                text: "total".to_string(),
+                rotation: 0.0,
+                font_name: "Arial".to_string(),
+                font_size: 9.0, // Smaller font
+                font_weight: None,
+                char_start_idx: 5,
+                char_end_idx: 9,
+            },
+        ];
+
+        let result = detect_script_notation(&spans);
+        assert_eq!(result, "Loss[total]"); // Should be trimmed, no space before bracket
+    }
+
+    #[test]
+    fn test_detect_script_notation_superscript() {
+        // Test superscript detection: "x²" → "x^[2]"
+        let spans = vec![
+            CharSpan {
+                bbox: BBox {
+                    x0: 10.0,
+                    y0: 10.0,
+                    x1: 15.0,
+                    y1: 20.0,
+                },
+                text: "x".to_string(),
+                rotation: 0.0,
+                font_name: "Arial".to_string(),
+                font_size: 12.0,
+                font_weight: None,
+                char_start_idx: 0,
+                char_end_idx: 0,
+            },
+            CharSpan {
+                bbox: BBox {
+                    x0: 15.0,
+                    y0: 7.0,
+                    x1: 18.0,
+                    y1: 12.0,
+                }, // Higher position (superscript)
+                text: "2".to_string(),
+                rotation: 0.0,
+                font_name: "Arial".to_string(),
+                font_size: 9.0, // Smaller font
+                font_weight: None,
+                char_start_idx: 1,
+                char_end_idx: 1,
+            },
+        ];
+
+        let result = detect_script_notation(&spans);
+        assert_eq!(result, "x^[2]");
+    }
+
+    #[test]
+    fn test_detect_script_notation_multichar_subscript() {
+        // Test multi-character subscript: "Nmask" → "N[mask]"
+        let spans = vec![
+            CharSpan {
+                bbox: BBox {
+                    x0: 10.0,
+                    y0: 10.0,
+                    x1: 18.0,
+                    y1: 20.0,
+                },
+                text: "N".to_string(),
+                rotation: 0.0,
+                font_name: "Arial".to_string(),
+                font_size: 12.0,
+                font_weight: None,
+                char_start_idx: 0,
+                char_end_idx: 0,
+            },
+            CharSpan {
+                bbox: BBox {
+                    x0: 18.0,
+                    y0: 13.0,
+                    x1: 22.0,
+                    y1: 18.0,
+                }, // Lower position
+                text: "m".to_string(),
+                rotation: 0.0,
+                font_name: "Arial".to_string(),
+                font_size: 9.0,
+                font_weight: None,
+                char_start_idx: 1,
+                char_end_idx: 1,
+            },
+            CharSpan {
+                bbox: BBox {
+                    x0: 22.0,
+                    y0: 13.0,
+                    x1: 26.0,
+                    y1: 18.0,
+                }, // Continued subscript
+                text: "a".to_string(),
+                rotation: 0.0,
+                font_name: "Arial".to_string(),
+                font_size: 9.0,
+                font_weight: None,
+                char_start_idx: 2,
+                char_end_idx: 2,
+            },
+            CharSpan {
+                bbox: BBox {
+                    x0: 26.0,
+                    y0: 13.0,
+                    x1: 30.0,
+                    y1: 18.0,
+                }, // Continued subscript
+                text: "s".to_string(),
+                rotation: 0.0,
+                font_name: "Arial".to_string(),
+                font_size: 9.0,
+                font_weight: None,
+                char_start_idx: 3,
+                char_end_idx: 3,
+            },
+            CharSpan {
+                bbox: BBox {
+                    x0: 30.0,
+                    y0: 13.0,
+                    x1: 34.0,
+                    y1: 18.0,
+                }, // Continued subscript
+                text: "k".to_string(),
+                rotation: 0.0,
+                font_name: "Arial".to_string(),
+                font_size: 9.0,
+                font_weight: None,
+                char_start_idx: 4,
+                char_end_idx: 4,
+            },
+        ];
+
+        let result = detect_script_notation(&spans);
+        assert_eq!(result, "N[mask]");
+    }
+
+    #[test]
+    fn test_detect_script_notation_no_script() {
+        // Test normal text without subscripts/superscripts
+        let spans = vec![
+            CharSpan {
+                bbox: BBox {
+                    x0: 10.0,
+                    y0: 10.0,
+                    x1: 15.0,
+                    y1: 20.0,
+                },
+                text: "a".to_string(),
+                rotation: 0.0,
+                font_name: "Arial".to_string(),
+                font_size: 12.0,
+                font_weight: None,
+                char_start_idx: 0,
+                char_end_idx: 0,
+            },
+            CharSpan {
+                bbox: BBox {
+                    x0: 15.0,
+                    y0: 10.0,
+                    x1: 20.0,
+                    y1: 20.0,
+                }, // Same vertical position
+                text: "b".to_string(),
+                rotation: 0.0,
+                font_name: "Arial".to_string(),
+                font_size: 12.0, // Same font size
+                font_weight: None,
+                char_start_idx: 1,
+                char_end_idx: 1,
+            },
+        ];
+
+        let result = detect_script_notation(&spans);
+        assert_eq!(result, "ab"); // No script notation applied
+    }
+
+    #[test]
+    fn test_detect_script_notation_empty_script() {
+        // Test case where script detection finds space/empty text (should not create empty brackets)
+        let spans = vec![
+            CharSpan {
+                bbox: BBox {
+                    x0: 10.0,
+                    y0: 10.0,
+                    x1: 15.0,
+                    y1: 20.0,
+                },
+                text: "Loss".to_string(),
+                rotation: 0.0,
+                font_name: "Arial".to_string(),
+                font_size: 12.0,
+                font_weight: None,
+                char_start_idx: 0,
+                char_end_idx: 3,
+            },
+            CharSpan {
+                bbox: BBox {
+                    x0: 15.0,
+                    y0: 13.0,
+                    x1: 18.0,
+                    y1: 18.0,
+                }, // Lower position but empty/space
+                text: " ".to_string(), // Just a space
+                rotation: 0.0,
+                font_name: "Arial".to_string(),
+                font_size: 9.0,
+                font_weight: None,
+                char_start_idx: 4,
+                char_end_idx: 4,
+            },
+        ];
+
+        let result = detect_script_notation(&spans);
+        assert_eq!(result, "Loss "); // Should preserve space, not create "Loss[ ]"
     }
 }
