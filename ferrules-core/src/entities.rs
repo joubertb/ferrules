@@ -467,6 +467,9 @@ fn fix_math_symbol_corruptions(text: &str) -> String {
     result = result.replace("6=", "≠");
     result = result.replace("6[=]", "≠");
 
+    // Fix equals sign corruption: "E[=]" should be "E ="
+    result = result.replace("[=]", " =");
+
     // Fix bracket corruption around punctuation
     result = result.replace("otherwise[.]", "otherwise.");
     result = result.replace("[.]", ".");
@@ -474,9 +477,19 @@ fn fix_math_symbol_corruptions(text: &str) -> String {
     result = result.replace("[;]", ";");
     result = result.replace("[:]", ":");
 
+    // Fix misplaced brackets in subscripts like "[e1,]" to "e[1],"
+    if let Ok(re) = Regex::new(r"\[([a-zA-Z])([0-9]+),\]") {
+        result = re.replace_all(&result, "$1[$2],").to_string();
+    }
+
+    // Fix patterns like "[eLE]" to "e[LE]"
+    if let Ok(re2) = Regex::new(r"\[([a-zA-Z])([A-Z]+)\]") {
+        result = re2.replace_all(&result, "$1[$2]").to_string();
+    }
+
     // Fix angle bracket corruptions like "hn[i], n[j]i" to "(n[i], n[j])"
-    if let Ok(re) = Regex::new(r"h([^h]+)i") {
-        result = re.replace_all(&result, "($1)").to_string();
+    if let Ok(re3) = Regex::new(r"h([^h]+)i") {
+        result = re3.replace_all(&result, "($1)").to_string();
     }
 
     result
