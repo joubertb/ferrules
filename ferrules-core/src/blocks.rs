@@ -16,6 +16,32 @@ impl ImageBlock {
     }
 }
 
+impl TextBlock {
+    /// Get the text content of the block
+    pub fn text(&self) -> &str {
+        &self.text
+    }
+}
+
+impl Title {
+    /// Get the title text
+    pub fn text(&self) -> &str {
+        &self.text
+    }
+
+    /// Get the title level
+    pub fn level(&self) -> TitleLevel {
+        self.level
+    }
+}
+
+impl List {
+    /// Get the list items
+    pub fn items(&self) -> &[String] {
+        &self.items
+    }
+}
+
 #[derive(Debug, Default, Deserialize, Serialize)]
 pub struct TextBlock {
     pub(crate) text: String,

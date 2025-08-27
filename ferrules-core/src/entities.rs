@@ -7,12 +7,58 @@ use std::{path::PathBuf, time::Duration};
 
 use pdfium_render::prelude::{PdfFontWeight, PdfPageTextChar, PdfRect};
 
-use crate::{blocks::Block, layout::model::LayoutBBox};
+use crate::{blocks::Block, correction_engine::CorrectionEngine, layout::model::LayoutBBox};
+use std::sync::OnceLock;
 
 pub type PageID = usize;
 pub type ElementID = usize;
 
 const FERRULES_VERSION: &str = env!("CARGO_PKG_VERSION");
+
+/// Global correction engine instance (initialized lazily)
+static CORRECTION_ENGINE: OnceLock<Option<CorrectionEngine>> = OnceLock::new();
+
+/// Initialize the global correction engine with config file
+pub fn init_correction_engine(config_path: Option<&str>) -> Result<(), Box<dyn std::error::Error>> {
+    let engine = if let Some(path) = config_path {
+        if std::path::Path::new(path).exists() {
+            Some(CorrectionEngine::new(path)?)
+        } else {
+            tracing::warn!(
+                "Correction config file not found: {}, using pattern matching only",
+                path
+            );
+            None
+        }
+    } else {
+        // Try to find config in standard locations
+        let standard_paths = [
+            "configs/font_corrections.json",
+            "../configs/font_corrections.json",
+            "./font_corrections.json",
+        ];
+
+        let mut found_engine = None;
+        for path in &standard_paths {
+            if std::path::Path::new(path).exists() {
+                found_engine = Some(CorrectionEngine::new(path)?);
+                tracing::info!("🔧 Loaded font corrections from: {}", path);
+                break;
+            }
+        }
+        found_engine
+    };
+
+    CORRECTION_ENGINE
+        .set(engine)
+        .map_err(|_| "Failed to initialize correction engine")?;
+    Ok(())
+}
+
+/// Get the global correction engine instance
+fn get_correction_engine() -> Option<&'static CorrectionEngine> {
+    CORRECTION_ENGINE.get().and_then(|opt| opt.as_ref())
+}
 
 /// UTF-8 reconstruction function to fix corrupted mathematical symbols
 ///
@@ -27,11 +73,60 @@ pub fn fix_character_encoding_corruption(text: &str) -> String {
 pub fn fix_character_encoding_corruption_with_font(text: &str, font_name: Option<&str>) -> String {
     // First apply existing UTF-8 corruption fixes
     let utf8_fixed = fix_utf8_corruption_internal(text);
-    
-    // Then apply character encoding corruption fixes based on font
+
+    // Try to use the correction engine if available
+    if let Some(engine) = get_correction_engine() {
+        if let Some(font_name) = font_name {
+            // Apply font-specific corrections using the correction engine
+            let font_corrected = tokio::runtime::Handle::try_current()
+                .ok()
+                .and_then(|_| {
+                    // We're in an async context
+                    futures::executor::block_on(async {
+                        engine
+                            .apply_font_corrections(&utf8_fixed, font_name)
+                            .await
+                            .ok()
+                    })
+                })
+                .unwrap_or_else(|| {
+                    // Fallback: create a simple runtime for this correction
+                    tokio::runtime::Runtime::new()
+                        .ok()
+                        .and_then(|rt| {
+                            rt.block_on(engine.apply_font_corrections(&utf8_fixed, font_name))
+                                .ok()
+                        })
+                        .unwrap_or_else(|| utf8_fixed.clone())
+                });
+
+            // Apply pattern corrections
+            let pattern_corrected = tokio::runtime::Handle::try_current()
+                .ok()
+                .and_then(|_| {
+                    futures::executor::block_on(async {
+                        engine.apply_pattern_corrections(&font_corrected).await.ok()
+                    })
+                })
+                .unwrap_or_else(|| {
+                    tokio::runtime::Runtime::new()
+                        .ok()
+                        .and_then(|rt| {
+                            rt.block_on(engine.apply_pattern_corrections(&font_corrected))
+                                .ok()
+                        })
+                        .unwrap_or_else(|| font_corrected.clone())
+                });
+
+            return pattern_corrected;
+        }
+    }
+
+    // Fallback to original function if correction engine not available
     fix_parentheses_character_corruption_with_font(&utf8_fixed, font_name)
 }
 
+#[allow(dead_code)]
 fn fix_parentheses_character_corruption(text: &str) -> String {
     fix_parentheses_character_corruption_with_font(text, None)
 }
@@ -45,91 +140,101 @@ fn fix_parentheses_character_corruption_with_font(text: &str, font_name: Option<
         name.contains("Helvetica") ||
         name.contains("CMR") ||     // Computer Modern fonts
         name.contains("TeX") ||     // TeX fonts
-        name.to_lowercase().contains("math")  // Mathematical fonts
+        name.to_lowercase().contains("math") ||  // Mathematical fonts
+        name.contains("DejaVu") ||
+        name.contains("Nimbus") ||
+        name.contains("Liberation") ||
+        // Be more aggressive - most PDF fonts can have this issue
+        true // Apply corruption detection to all fonts for now
     });
-    
+
     if !has_encoding_corruption {
         return text.to_string();
     }
-    
-    let mut result = String::new();
-    let chars: Vec<char> = text.chars().collect();
-    let mut i = 0;
-    
-    while i < chars.len() {
-        let ch = chars[i];
-        
-        match ch {
-            '(' => {
-                // Check if this should be 'h' based on context
-                if should_be_h_character(&chars, i) {
-                    result.push('h');
-                } else {
-                    result.push('(');
-                }
-            }
-            ')' => {
-                // Check if this should be 'i' based on context  
-                if should_be_i_character(&chars, i) {
-                    result.push('i');
-                } else {
-                    result.push(')');
-                }
-            }
-            _ => result.push(ch),
+
+    // First handle single character corruptions immediately
+    let single_char_fixed = fix_single_character_corruption(text);
+
+    // Then apply comprehensive corruption detection
+    detect_and_fix_character_corruption(&single_char_fixed)
+}
+
+/// Fix single character corruptions at the font level
+fn fix_single_character_corruption(text: &str) -> String {
+    match text {
+        ")" => {
+            // Debug: uncomment to see when single char fixes are applied
+            // eprintln!("DEBUG: Fixing single char ')' → 'i'");
+            "i"
         }
-        i += 1;
+        "(" => {
+            // Debug: uncomment to see when single char fixes are applied
+            // eprintln!("DEBUG: Fixing single char '(' → 'h'");
+            "h"
+        }
+        "[" => "fi",  // Ligature corruption
+        "]" => "fl",  // Ligature corruption
+        "{" => "ff",  // Ligature corruption
+        "}" => "ffi", // Ligature corruption
+        _ => text,
     }
-    
+    .to_string()
+}
+
+/// Minimal character encoding corruption detection for any remaining edge cases
+/// Most corruption is now fixed at the font level, but this handles any remaining patterns
+fn detect_and_fix_character_corruption(text: &str) -> String {
+    // Text-level corruption detection for patterns that span multiple characters
+    // Only keep essential multi-character fixes that can't be handled at font level
+    let essential_fixes = [
+        // These are multi-character patterns that span across character boundaries
+        ("t(e", "the"),
+        ("w)th", "with"),
+        ("w(ere", "where"),
+        ("w(ic(", "which"),
+        ("whic(", "which"),
+        ("w(ose", "whose"),
+        (")n", "in"),
+        (")s", "is"),
+        (")ts", "its"),
+        ("(as", "has"),
+        ("g)ven", "given"),
+        ("t(at", "that"),
+        ("t(eir", "their"),
+        ("cons)sts", "consists"),
+        ("ex)st", "exist"),
+        ("f)nal", "final"),
+        ("impl)ed", "implied"),
+        ("(idden", "hidden"),
+        ("pred)ct", "predict"),
+        ("predict)ng", "predicting"),
+        (")nput", "input"),
+        ("concatenat)on", "concatenation"),
+        ("connect)on", "connection"),
+        ("direct)on", "direction"),
+        ("funct)on", "function"),
+        ("operat)on", "operation"),
+        ("informat)on", "information"),
+        ("representat)on", "representation"),
+        ("translat)on", "translation"),
+        ("generat)on", "generation"),
+        ("classificat)on", "classification"),
+    ];
+
+    let mut result = text.to_string();
+    for (corrupted, correct) in &essential_fixes {
+        if result.contains(corrupted) {
+            result = result.replace(corrupted, correct);
+        }
+    }
+
+    // Handle Unicode quote corruptions
+    result = result.replace("\u{201C}", "\""); // Left double quotation mark
+    result = result.replace("\u{201D}", "\""); // Right double quotation mark
+    result = result.replace("\u{2018}", "'"); // Left single quotation mark
+    result = result.replace("\u{2019}", "'"); // Right single quotation mark
+
     result
-}
-
-fn should_be_h_character(chars: &[char], pos: usize) -> bool {
-    // Context analysis: does replacing '(' with 'h' create valid words?
-    
-    // Pattern: t(e -> the
-    if pos > 0 && pos + 1 < chars.len() && chars[pos-1] == 't' && chars[pos+1] == 'e' {
-        return true;
-    }
-    
-    // Pattern: w(ere -> where, w(ic( -> which, w(ose -> whose
-    if pos > 0 && chars[pos-1] == 'w' && pos + 2 < chars.len() {
-        let next_two: String = chars[pos+1..=pos+2].iter().collect();
-        if next_two == "er" || next_two == "ic" || next_two == "os" {
-            return true;
-        }
-    }
-    
-    false
-}
-
-fn should_be_i_character(chars: &[char], pos: usize) -> bool {
-    // Context analysis: does replacing ')' with 'i' create valid words?
-    
-    // Pattern: w)th -> with  
-    if pos > 0 && pos + 2 < chars.len() && 
-       chars[pos-1] == 'w' && chars[pos+1] == 't' && chars[pos+2] == 'h' {
-        return true;
-    }
-    
-    // Pattern: g)ven -> given
-    if pos > 0 && pos + 3 < chars.len() &&
-       chars[pos-1] == 'g' && 
-       chars[pos+1..pos+4].iter().collect::<String>() == "ven" {
-        return true;
-    }
-    
-    // Pattern: standalone ) as 'i' in common words
-    let after = if pos + 1 < chars.len() { chars[pos+1] } else { ' ' };
-    if after == 's' || after == 'n' || after == 't' {
-        // )s -> is, )n -> in, )ts -> its
-        let before = if pos > 0 { chars[pos-1] } else { ' ' };
-        if before.is_whitespace() || before.is_alphabetic() {
-            return true;
-        }
-    }
-    
-    false
 }
 
 pub fn fix_utf8_corruption_internal(text: &str) -> String {
@@ -376,6 +481,99 @@ fn remove_control_characters(text: &str) -> String {
         .collect()
 }
 
+/// Check if a character/text is suspicious and might indicate font encoding issues
+fn is_suspicious_character(text: &str, font_name: &str) -> bool {
+    // Parentheses appearing in mathematical contexts often indicate corruption
+    if text == "(" || text == ")" {
+        // More likely to be corruption in mathematical fonts
+        if font_name.contains("Math") || font_name.contains("CMR") || font_name.contains("TeX") {
+            return true;
+        }
+        return true; // Always suspicious for now
+    }
+
+    // Brackets and other punctuation that commonly corrupt to parentheses
+    if matches!(text, "[" | "]" | "{" | "}") {
+        return true;
+    }
+
+    // Check for unusual Unicode code points that might be misencoded
+    for ch in text.chars() {
+        let code = ch as u32;
+        // Characters in ranges that often indicate encoding issues
+        if (0x80..0xFF).contains(&code) && !text.chars().all(|c| c.is_ascii()) {
+            return true;
+        }
+    }
+
+    false
+}
+
+/// Log comprehensive font diagnostic information when corruption or suspicious patterns are detected
+fn log_font_diagnostics(
+    font_name: &str,
+    original_text: &str,
+    corrected_text: &str,
+    char_info: &PdfPageTextChar,
+    has_corruption: bool,
+) {
+    let char_index = char_info.index();
+    let font_size = char_info.unscaled_font_size().value;
+    let font_weight = char_info.font_weight();
+
+    if has_corruption {
+        tracing::warn!(
+            font_diagnostics = true,
+            font_name = font_name,
+            original_char = original_text,
+            corrected_char = corrected_text,
+            char_index = char_index,
+            font_size = font_size,
+            font_weight = ?font_weight,
+            "CHARACTER CORRUPTION DETECTED: '{}' → '{}' in font '{}' (size: {:.1})",
+            original_text, corrected_text, font_name, font_size
+        );
+    } else {
+        tracing::debug!(
+            font_diagnostics = true,
+            font_name = font_name,
+            suspicious_char = original_text,
+            char_index = char_index,
+            font_size = font_size,
+            font_weight = ?font_weight,
+            "Suspicious character '{}' in font '{}' (size: {:.1}) - no correction applied",
+            original_text, font_name, font_size
+        );
+    }
+
+    // Additional diagnostics for specific fonts known to have issues
+    if font_name.contains("Times") || font_name.contains("Arial") || font_name.contains("Helvetica")
+    {
+        tracing::debug!(
+            font_type = "standard",
+            font_name = font_name,
+            "Standard font detected - may have ToUnicode mapping issues"
+        );
+    }
+
+    if font_name.contains("Math") || font_name.contains("CMR") || font_name.contains("TeX") {
+        tracing::debug!(
+            font_type = "mathematical",
+            font_name = font_name,
+            "Mathematical font detected - higher risk of glyph remapping issues"
+        );
+    }
+
+    // Log potential font subset indicators
+    if font_name.contains("+") || font_name.len() > 20 {
+        tracing::debug!(
+            font_subset = true,
+            font_name = font_name,
+            "Potential font subset detected (name contains '+' or is unusually long)"
+        );
+    }
+}
+
 /// Detect and convert subscripts and superscripts to audio-friendly bracket notation
 ///
 /// Analyzes character positioning and font sizes to identify mathematical subscripts
@@ -584,7 +782,7 @@ fn fix_math_symbol_corruptions(text: &str) -> String {
     // Fix equals sign corruption patterns
     result = result.replace("[=]", " =");
     result = result.replace("< =>", " =");
-    
+
     // Fix any double spaces around equals
     result = result.replace("  =", " =");
     result = result.replace("=  ", "= ");
@@ -614,22 +812,26 @@ fn fix_math_symbol_corruptions(text: &str) -> String {
     // Fix systematic parentheses corruption where '(' and ')' replace 'h'
     // This appears to be a PDF extraction artifact
     if let Ok(re4) = Regex::new(r"\b([a-zA-Z]+)\(([a-zA-Z]+)\)([a-zA-Z]*)\b") {
-        result = re4.replace_all(&result, |caps: &regex::Captures| {
-            let prefix = &caps[1];
-            let middle = &caps[2];  
-            let suffix = &caps[3];
-            // Reconstruct word by replacing parentheses with 'h'
-            format!("{}h{}{}", prefix, middle, suffix)
-        }).to_string();
+        result = re4
+            .replace_all(&result, |caps: &regex::Captures| {
+                let prefix = &caps[1];
+                let middle = &caps[2];
+                let suffix = &caps[3];
+                // Reconstruct word by replacing parentheses with 'h'
+                format!("{}h{}{}", prefix, middle, suffix)
+            })
+            .to_string();
     }
-    
+
     // Handle cases with missing closing parenthesis
     if let Ok(re5) = Regex::new(r"\b([a-zA-Z]+)\(([a-zA-Z]+)\b") {
-        result = re5.replace_all(&result, |caps: &regex::Captures| {
-            let prefix = &caps[1];
-            let suffix = &caps[2];
-            format!("{}h{}", prefix, suffix)
-        }).to_string();
+        result = re5
+            .replace_all(&result, |caps: &regex::Captures| {
+                let prefix = &caps[1];
+                let suffix = &caps[2];
+                format!("{}h{}", prefix, suffix)
+            })
+            .to_string();
     }
 
     result
@@ -921,27 +1123,48 @@ pub struct CharSpan {
     pub font_weight: Option<PdfFontWeight>,
     pub char_start_idx: usize,
     pub char_end_idx: usize,
+    // Font diagnostic information
+    pub original_unicode: Option<char>,
+    pub has_corruption: bool,
 }
 
 impl CharSpan {
     pub fn new_from_char(char: &PdfPageTextChar, page_bbox: &BBox) -> Self {
         let font_name = char.font_name();
+        let original_unicode = char.unicode_char();
+        let original_text = original_unicode.unwrap_or_default().to_string();
+
+        // Apply font-specific corruption fixes and track if corruption was detected
+        let corrected_text =
+            fix_character_encoding_corruption_with_font(&original_text, Some(&font_name));
+        let has_corruption = original_text != corrected_text;
+
+        // Log detailed font diagnostics when corruption is detected or for specific suspicious patterns
+        if has_corruption || is_suspicious_character(&original_text, &font_name) {
+            log_font_diagnostics(
+                &font_name,
+                &original_text,
+                &corrected_text,
+                char,
+                has_corruption,
+            );
+        }
+
         Self {
             bbox: BBox::from_pdfrect(
                 char.tight_bounds()
                     .expect("Error init span tight bound char"),
                 page_bbox.height(),
             ),
-            text: fix_character_encoding_corruption_with_font(
-                &char.unicode_char().unwrap_or_default().to_string(),
-                Some(&font_name)
-            ),
+            text: corrected_text,
             font_name,
             font_weight: char.font_weight(),
             font_size: char.unscaled_font_size().value,
             rotation: char.get_rotation_clockwise_degrees(),
             char_start_idx: char.index(),
             char_end_idx: char.index(),
+            original_unicode,
+            has_corruption,
         }
     }
     pub fn append(&mut self, char: &PdfPageTextChar, page_bbox: &BBox) -> Option<()> {
@@ -957,14 +1180,35 @@ impl CharSpan {
                 char.loose_bounds().expect("error tight bound"),
                 page_bbox.height(),
             );
+
+            let original_text = char.unicode_char().unwrap_or_default().to_string();
             // Apply full UTF-8 and ligature corruption fix to character before adding
             let char_text = fix_character_encoding_corruption_with_font(
-                &char.unicode_char().unwrap_or_default().to_string(),
-                Some(&char.font_name())
+                &original_text,
+                Some(&char.font_name()),
             );
+            let char_has_corruption = original_text != char_text;
+
+            // Log diagnostics for appended characters with corruption
+            if char_has_corruption || is_suspicious_character(&original_text, &char.font_name()) {
+                log_font_diagnostics(
+                    &char.font_name(),
+                    &original_text,
+                    &char_text,
+                    char,
+                    char_has_corruption,
+                );
+            }
+
             self.text.push_str(&char_text);
             self.char_end_idx = char.index();
             self.bbox.merge(&char_bbox);
+
+            // Update corruption flag if any character in span has corruption
+            if char_has_corruption {
+                self.has_corruption = true;
+            }
+
             Some(())
         }
     }
@@ -1043,6 +1287,24 @@ impl Line {
             self.text.push_str(&span.text);
             self.spans.push(span);
             Ok(())
+        }
+    }
+
+    /// Finalize line text processing - apply comprehensive text processing for final output
+    pub fn finalize(&mut self) {
+        // Apply comprehensive text processing to the final line text
+        let utf8_fixed = fix_character_encoding_corruption(&self.text);
+
+        // Apply script notation detection to spans for mathematical subscripts/superscripts
+        let script_processed = detect_script_notation(&self.spans);
+
+        // Use script-processed text if it differs significantly from original
+        // This preserves regular text while converting mathematical notation
+        if !script_processed.is_empty() && script_processed.contains("<[") {
+            // Apply corruption fixes to the script-processed text as well
+            self.text = fix_character_encoding_corruption(&script_processed);
+        } else {
+            self.text = utf8_fixed;
         }
     }
 }
@@ -1254,6 +1516,8 @@ mod tests {
                 font_weight: None,
                 char_start_idx: 0,
                 char_end_idx: 0,
+                original_unicode: Some('n'),
+                has_corruption: false,
             },
             CharSpan {
                 bbox: BBox {
@@ -1269,6 +1533,8 @@ mod tests {
                 font_weight: None,
                 char_start_idx: 1,
                 char_end_idx: 1,
+                original_unicode: Some('i'),
+                has_corruption: false,
             },
         ];
 
@@ -1294,6 +1560,8 @@ mod tests {
                 font_weight: None,
                 char_start_idx: 0,
                 char_end_idx: 4,
+                original_unicode: None,
+                has_corruption: false,
             },
             CharSpan {
                 bbox: BBox {
@@ -1309,6 +1577,8 @@ mod tests {
                 font_weight: None,
                 char_start_idx: 5,
                 char_end_idx: 9,
+                original_unicode: None,
+                has_corruption: false,
             },
         ];
 
@@ -1334,6 +1604,8 @@ mod tests {
                 font_weight: None,
                 char_start_idx: 0,
                 char_end_idx: 0,
+                original_unicode: None,
+                has_corruption: false,
             },
             CharSpan {
                 bbox: BBox {
@@ -1349,6 +1621,8 @@ mod tests {
                 font_weight: None,
                 char_start_idx: 1,
                 char_end_idx: 1,
+                original_unicode: None,
+                has_corruption: false,
             },
         ];
 
@@ -1374,6 +1648,8 @@ mod tests {
                 font_weight: None,
                 char_start_idx: 0,
                 char_end_idx: 0,
+                original_unicode: None,
+                has_corruption: false,
             },
             CharSpan {
                 bbox: BBox {
@@ -1389,6 +1665,8 @@ mod tests {
                 font_weight: None,
                 char_start_idx: 1,
                 char_end_idx: 1,
+                original_unicode: None,
+                has_corruption: false,
             },
             CharSpan {
                 bbox: BBox {
@@ -1404,6 +1682,8 @@ mod tests {
                 font_weight: None,
                 char_start_idx: 2,
                 char_end_idx: 2,
+                original_unicode: None,
+                has_corruption: false,
             },
             CharSpan {
                 bbox: BBox {
@@ -1419,6 +1699,8 @@ mod tests {
                 font_weight: None,
                 char_start_idx: 3,
                 char_end_idx: 3,
+                original_unicode: None,
+                has_corruption: false,
             },
             CharSpan {
                 bbox: BBox {
@@ -1434,6 +1716,8 @@ mod tests {
                 font_weight: None,
                 char_start_idx: 4,
                 char_end_idx: 4,
+                original_unicode: None,
+                has_corruption: false,
             },
         ];
 
@@ -1459,6 +1743,8 @@ mod tests {
                 font_weight: None,
                 char_start_idx: 0,
                 char_end_idx: 0,
+                original_unicode: None,
+                has_corruption: false,
             },
             CharSpan {
                 bbox: BBox {
@@ -1474,6 +1760,8 @@ mod tests {
                 font_weight: None,
                 char_start_idx: 1,
                 char_end_idx: 1,
+                original_unicode: None,
+                has_corruption: false,
             },
         ];
 
@@ -1499,6 +1787,8 @@ mod tests {
                 font_weight: None,
                 char_start_idx: 0,
                 char_end_idx: 3,
+                original_unicode: None,
+                has_corruption: false,
             },
             CharSpan {
                 bbox: BBox {
@@ -1514,10 +1804,80 @@ mod tests {
                 font_weight: None,
                 char_start_idx: 4,
                 char_end_idx: 4,
+                original_unicode: None,
+                has_corruption: false,
             },
         ];
 
         let result = detect_script_notation(&spans);
         assert_eq!(result, "Loss "); // Should preserve space, not create "Loss[ ]"
+    }
+
+    #[test]
+    fn test_character_corruption_detection() {
+        // Test comprehensive character corruption detection
+        assert_eq!(fix_character_encoding_corruption("t(e"), "the");
+        assert_eq!(fix_character_encoding_corruption("w)th"), "with");
+        assert_eq!(fix_character_encoding_corruption("w(ere"), "where");
+        assert_eq!(fix_character_encoding_corruption(")n"), "in");
+        assert_eq!(fix_character_encoding_corruption(")s"), "is");
+        assert_eq!(fix_character_encoding_corruption("(as"), "has");
+        assert_eq!(fix_character_encoding_corruption("t(at"), "that");
+        assert_eq!(fix_character_encoding_corruption("cons)sts"), "consists");
+
+        // Test no corruption cases
+        assert_eq!(
+            fix_character_encoding_corruption("normal text"),
+            "normal text"
+        );
+        assert_eq!(
+            fix_character_encoding_corruption("hello world"),
+            "hello world"
+        );
+
+        // Test partial corruption
+        assert_eq!(
+            fix_character_encoding_corruption("t(e word )s good"),
+            "the word is good"
+        );
+
+        // Test Unicode quote corruption
+        assert_eq!(
+            fix_character_encoding_corruption("He said \u{201C}hello\u{201D}"),
+            "He said \"hello\""
+        );
+    }
+
+    #[test]
+    fn test_character_corruption_with_font() {
+        // Test font-specific corruption detection
+        assert_eq!(
+            fix_character_encoding_corruption_with_font("t(e", Some("Times-Roman")),
+            "the"
+        );
+        assert_eq!(
+            fix_character_encoding_corruption_with_font("w)th", Some("Arial")),
+            "with"
+        );
+
+        // Test single character corruption at font level
+        assert_eq!(
+            fix_character_encoding_corruption_with_font(")", Some("Times-Roman")),
+            "i"
+        );
+        assert_eq!(
+            fix_character_encoding_corruption_with_font("(", Some("Arial")),
+            "h"
+        );
+
+        // Test the specific cases from mathbert.json
+        assert_eq!(
+            fix_character_encoding_corruption_with_font(")nput", Some("Times-Roman")),
+            "input"
+        );
+        assert_eq!(
+            fix_character_encoding_corruption_with_font("concatenat)on", Some("Arial")),
+            "concatenation"
+        );
     }
 }

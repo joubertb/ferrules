@@ -1,0 +1,131 @@
+{
+  "version": "1.0.0",
+  "description": "Font-specific character corruption corrections for PDF text extraction",
+  "last_updated": "2025-08-27T00:00:00Z",
+  "font_corrections": {
+    "FYEQFE+NimbusRomNo9L-Regu": {
+      "description": "Nimbus Roman Regular subset font with parentheses/bracket corruption",
+      "corrections": {
+        "(": "h",
+        ")": "i",
+        "[": "fi",
+        "]": "fl"
+      },
+      "confidence": 0.95,
+      "enabled": true,
+      "is_subset": true,
+      "has_tounicode": false
+    },
+    "XSWLJE+NimbusRomNo9L-Medi": {
+      "description": "Nimbus Roman Medium subset font with similar corruption patterns",
+      "corrections": {
+        "(": "h",
+        ")": "i",
+        "[": "fi",
+        "]": "fl"
+      },
+      "confidence": 0.90,
+      "enabled": true,
+      "is_subset": true,
+      "has_tounicode": false
+    },
+    "WSFSSC+NimbusRomNo9L-ReguItal": {
+      "description": "Nimbus Roman Regular Italic subset font with corruption",
+      "corrections": {
+        "(": "h",
+        ")": "i",
+        "[": "fi",
+        "]": "fl"
+      },
+      "confidence": 0.90,
+      "enabled": true,
+      "is_subset": true,
+      "has_tounicode": false
+    },
+    "IOMCNP+CMSY10": {
+      "description": "Computer Modern Symbol font with ligature corruption",
+      "corrections": {
+        "{": "ff",
+        "}": "ffi"
+      },
+      "confidence": 0.85,
+      "enabled": true,
+      "is_subset": true,
+      "has_tounicode": false
+    },
+    "CMSY10": {
+      "description": "Computer Modern Symbol font (validated with mathbert.pdf)",
+      "corrections": {
+        "{": "ff",
+        "}": "ffi"
+      },
+      "confidence": 0.80,
+      "enabled": true,
+      "is_subset": false,
+      "has_tounicode": false
+    },
+    "NimbusRomNo9L-Regu": {
+      "description": "Nimbus Roman Regular (validated with mathbert.pdf)",
+      "corrections": {
+        "(": "h",
+        ")": "i"
+      },
+      "confidence": 0.50,
+      "enabled": true,
+      "is_subset": false,
+      "has_tounicode": false
+    },
+    "HWKMIT+CMMI10": {
+      "description": "Computer Modern Math Italic font - mathematical text corruption",
+      "corrections": {
+        "(": "h",
+        ")": "i"
+      },
+      "confidence": 0.80,
+      "enabled": true,
+      "is_subset": true,
+      "has_tounicode": false
+    },
+    "DCNJZV+CMR12": {
+      "description": "Computer Modern Roman 12pt subset font",
+      "corrections": {
+        "(": "h",
+        ")": "i"
+      },
+      "confidence": 0.85,
+      "enabled": true,
+      "is_subset": true,
+      "has_tounicode": false
+    },
+    "IDSIBS+CMR10": {
+      "description": "Computer Modern Roman 10pt subset font",
+      "corrections": {
+        "(": "h",
+        ")": "i"
+      },
+      "confidence": 0.85,
+      "enabled": true,
+      "is_subset": true,
+      "has_tounicode": false
+    }
+  },
+  "pattern_corrections": {
+    "whic(": "which",
+    "t(e": "the", 
+    "g)ven": "given",
+    "cons)sts": "consists",
+    "(as": "has",
+    "w)th": "with",
+    "t(at": "that",
+    "t()s": "this",
+    "ex)sting": "existing",
+    "eff)c)ent": "efficient"
+  },
+  "settings": {
+    "enable_font_corrections": true,
+    "enable_pattern_corrections": true,
+    "confidence_threshold": 0.7,
+    "max_corrections_per_word": 3,
+    "enable_diagnostic_logging": true
+  }
+}

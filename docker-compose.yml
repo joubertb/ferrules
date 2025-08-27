@@ -1,4 +1,26 @@
 services:
+  ferrules:
+    build: .
+    container_name: ferrules-api
+    ports:
+      - "3002:3002"
+    volumes:
+      # Mount configuration directory for runtime updates
+      - ./configs:/app/configs:ro
+      # Mount analysis reports directory
+      - ./reports:/app/reports
+    environment:
+      - FERRULES_CONFIG_PATH=/app/configs/font_corrections.json
+      - FERRULES_ENABLE_CORRECTIONS=true
+      - FERRULES_LOG_LEVEL=info
+      - RUST_LOG=info
+    healthcheck:
+      test: ["CMD", "curl", "-f", "http://localhost:3002/health"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+    restart: unless-stopped
+
   jaeger:
     container_name: jaeger
     image: jaegertracing/all-in-one:latest

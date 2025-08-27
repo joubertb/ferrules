@@ -53,6 +53,11 @@ pub(crate) fn parse_text_lines(spans: Vec<CharSpan>) -> Vec<Line> {
         }
     }
 
+    // Finalize all lines to apply comprehensive text processing
+    for line in &mut lines {
+        line.finalize();
+    }
+
     lines
 }
 

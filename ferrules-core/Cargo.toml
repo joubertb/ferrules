@@ -4,7 +4,12 @@ version = "0.1.8"
 edition = "2021"
 repository = "https://github.com/aminediro/ferrules"
 
+[[bin]]
+name = "font-analyzer"
+path = "../tools/font_analyzer.rs"
+
 [dependencies]
+tracing-subscriber = "0.3"
 lazy_static = "1.5.0"
 itertools = "0.14.0"
 futures = "0.3.31"
@@ -16,6 +21,8 @@ tracing = { workspace = true }
 tokio = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
+chrono = { version = "0.4.38", features = ["serde"] }
+clap = { version = "4.5.20", features = ["derive"] }
 # pdf reader
 imageproc = "0.25.0"
 ab_glyph = "0.2.29"
@@ -24,6 +31,7 @@ pdfium-render = { version = "0.8.27", features = [
     "bindings",
     "sync",
 ] }
+lopdf = "0.34.0"
 # Inference
 image = "0.25.5"
 ndarray = "0.16.1"
