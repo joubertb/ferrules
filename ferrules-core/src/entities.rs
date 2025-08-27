@@ -18,7 +18,121 @@ const FERRULES_VERSION: &str = env!("CARGO_PKG_VERSION");
 ///
 /// PDFium sometimes returns UTF-8 bytes as individual Latin-1 characters.
 /// This function detects and reconstructs proper Unicode from corrupted sequences.
-pub fn fix_utf8_corruption(text: &str) -> String {
+/// Fix character encoding corruption where parentheses replace letters
+/// Common corruptions: '(' → 'h', ')' → 'i'
+pub fn fix_character_encoding_corruption(text: &str) -> String {
+    fix_character_encoding_corruption_with_font(text, None)
+}
+
+pub fn fix_character_encoding_corruption_with_font(text: &str, font_name: Option<&str>) -> String {
+    // First apply existing UTF-8 corruption fixes
+    let utf8_fixed = fix_utf8_corruption_internal(text);
+    
+    // Then apply character encoding corruption fixes based on font
+    fix_parentheses_character_corruption_with_font(&utf8_fixed, font_name)
+}
+
+fn fix_parentheses_character_corruption(text: &str) -> String {
+    fix_parentheses_character_corruption_with_font(text, None)
+}
+
+fn fix_parentheses_character_corruption_with_font(text: &str, font_name: Option<&str>) -> String {
+    // Check if this font is known to have encoding issues
+    let has_encoding_corruption = font_name.map_or(true, |name| {
+        // Add specific font names that are known to have corruption
+        name.contains("Times") || 
+        name.contains("Arial") || 
+        name.contains("Helvetica") ||
+        name.contains("CMR") ||     // Computer Modern fonts
+        name.contains("TeX") ||     // TeX fonts
+        name.to_lowercase().contains("math")  // Mathematical fonts
+    });
+    
+    if !has_encoding_corruption {
+        return text.to_string();
+    }
+    
+    let mut result = String::new();
+    let chars: Vec<char> = text.chars().collect();
+    let mut i = 0;
+    
+    while i < chars.len() {
+        let ch = chars[i];
+        
+        match ch {
+            '(' => {
+                // Check if this should be 'h' based on context
+                if should_be_h_character(&chars, i) {
+                    result.push('h');
+                } else {
+                    result.push('(');
+                }
+            }
+            ')' => {
+                // Check if this should be 'i' based on context  
+                if should_be_i_character(&chars, i) {
+                    result.push('i');
+                } else {
+                    result.push(')');
+                }
+            }
+            _ => result.push(ch),
+        }
+        i += 1;
+    }
+    
+    result
+}
+
+fn should_be_h_character(chars: &[char], pos: usize) -> bool {
+    // Context analysis: does replacing '(' with 'h' create valid words?
+    
+    // Pattern: t(e -> the
+    if pos > 0 && pos + 1 < chars.len() && chars[pos-1] == 't' && chars[pos+1] == 'e' {
+        return true;
+    }
+    
+    // Pattern: w(ere -> where, w(ic( -> which, w(ose -> whose
+    if pos > 0 && chars[pos-1] == 'w' && pos + 2 < chars.len() {
+        let next_two: String = chars[pos+1..=pos+2].iter().collect();
+        if next_two == "er" || next_two == "ic" || next_two == "os" {
+            return true;
+        }
+    }
+    
+    false
+}
+
+fn should_be_i_character(chars: &[char], pos: usize) -> bool {
+    // Context analysis: does replacing ')' with 'i' create valid words?
+    
+    // Pattern: w)th -> with  
+    if pos > 0 && pos + 2 < chars.len() && 
+       chars[pos-1] == 'w' && chars[pos+1] == 't' && chars[pos+2] == 'h' {
+        return true;
+    }
+    
+    // Pattern: g)ven -> given
+    if pos > 0 && pos + 3 < chars.len() &&
+       chars[pos-1] == 'g' && 
+       chars[pos+1..pos+4].iter().collect::<String>() == "ven" {
+        return true;
+    }
+    
+    // Pattern: standalone ) as 'i' in common words
+    let after = if pos + 1 < chars.len() { chars[pos+1] } else { ' ' };
+    if after == 's' || after == 'n' || after == 't' {
+        // )s -> is, )n -> in, )ts -> its
+        let before = if pos > 0 { chars[pos-1] } else { ' ' };
+        if before.is_whitespace() || before.is_alphabetic() {
+            return true;
+        }
+    }
+    
+    false
+}
+
+pub fn fix_utf8_corruption_internal(text: &str) -> String {
     if text.is_empty() {
         return text.to_string();
     }
@@ -265,9 +379,9 @@ fn remove_control_characters(text: &str) -> String {
 /// Detect and convert subscripts and superscripts to audio-friendly bracket notation
 ///
 /// Analyzes character positioning and font sizes to identify mathematical subscripts
-/// and superscripts, converting them to bracket notation for better TTS pronunciation:
-/// - Subscripts: "ni" → "n[i]", "LossMSP" → "Loss[MSP]"  
-/// - Superscripts: "x²" → "x^[2]", "a³" → "a^[3]"
+/// and superscripts, converting them to unique bracket notation for better TTS pronunciation:
+/// - Subscripts: "ni" → "n<[i]>", "LossMSP" → "Loss<[MSP]>"  
+/// - Superscripts: "x²" → "x^<[2]>", "a³" → "a^<[3]>"
 ///
 /// Detection criteria:
 /// - Vertical position offset (y-coordinate difference)
@@ -294,7 +408,7 @@ fn detect_script_notation(spans: &[CharSpan]) -> String {
 
         // Also check for common subscript patterns in single spans
         if let Some((base_part, script_part)) = detect_inline_subscript(&base_span.text) {
-            result.push_str(&format!("{}[{}]", base_part, script_part));
+            result.push_str(&format!("{}<[{}]>", base_part, script_part));
             i += 1;
             continue;
         }
@@ -364,14 +478,14 @@ fn detect_script_notation(spans: &[CharSpan]) -> String {
                             detect_inline_subscript(trimmed_script)
                         {
                             result.push_str(&format!(
-                                "{}{}[{}]",
+                                "{}{}<[{}]>",
                                 base_span.text.trim_end(),
                                 inner_base,
                                 inner_script
                             ));
                         } else {
                             result.push_str(&format!(
-                                "{}[{}]",
+                                "{}<[{}]>",
                                 base_span.text.trim_end(),
                                 trimmed_script
                             ));
@@ -383,14 +497,14 @@ fn detect_script_notation(spans: &[CharSpan]) -> String {
                             detect_inline_subscript(trimmed_script)
                         {
                             result.push_str(&format!(
-                                "{}{}^[{}]",
+                                "{}{}^<[{}]>",
                                 base_span.text.trim_end(),
                                 inner_base,
                                 inner_script
                             ));
                         } else {
                             result.push_str(&format!(
-                                "{}^[{}]",
+                                "{}^<[{}]>",
                                 base_span.text.trim_end(),
                                 trimmed_script
                             ));
@@ -467,8 +581,13 @@ fn fix_math_symbol_corruptions(text: &str) -> String {
     result = result.replace("6=", "≠");
     result = result.replace("6[=]", "≠");
 
-    // Fix equals sign corruption: "E[=]" should be "E ="
+    // Fix equals sign corruption patterns
     result = result.replace("[=]", " =");
+    result = result.replace("< =>", " =");
+    
+    // Fix any double spaces around equals
+    result = result.replace("  =", " =");
+    result = result.replace("=  ", "= ");
 
     // Fix bracket corruption around punctuation
     result = result.replace("otherwise[.]", "otherwise.");
@@ -477,19 +596,40 @@ fn fix_math_symbol_corruptions(text: &str) -> String {
     result = result.replace("[;]", ";");
     result = result.replace("[:]", ":");
 
-    // Fix misplaced brackets in subscripts like "[e1,]" to "e[1],"
+    // Fix misplaced brackets in subscripts like "[e1,]" to "e<[1]>,"
     if let Ok(re) = Regex::new(r"\[([a-zA-Z])([0-9]+),\]") {
-        result = re.replace_all(&result, "$1[$2],").to_string();
+        result = re.replace_all(&result, "$1<[$2]>,").to_string();
     }
 
-    // Fix patterns like "[eLE]" to "e[LE]"
+    // Fix patterns like "[eLE]" to "e<[LE]>"
     if let Ok(re2) = Regex::new(r"\[([a-zA-Z])([A-Z]+)\]") {
-        result = re2.replace_all(&result, "$1[$2]").to_string();
+        result = re2.replace_all(&result, "$1<[$2]>").to_string();
     }
 
     // Fix angle bracket corruptions like "hn[i], n[j]i" to "(n[i], n[j])"
     if let Ok(re3) = Regex::new(r"h([^h]+)i") {
         result = re3.replace_all(&result, "($1)").to_string();
+    }
+
+    // Fix systematic parentheses corruption where '(' and ')' replace 'h'
+    // This appears to be a PDF extraction artifact
+    if let Ok(re4) = Regex::new(r"\b([a-zA-Z]+)\(([a-zA-Z]+)\)([a-zA-Z]*)\b") {
+        result = re4.replace_all(&result, |caps: &regex::Captures| {
+            let prefix = &caps[1];
+            let middle = &caps[2];  
+            let suffix = &caps[3];
+            // Reconstruct word by replacing parentheses with 'h'
+            format!("{}h{}{}", prefix, middle, suffix)
+        }).to_string();
+    }
+    
+    // Handle cases with missing closing parenthesis
+    if let Ok(re5) = Regex::new(r"\b([a-zA-Z]+)\(([a-zA-Z]+)\b") {
+        result = re5.replace_all(&result, |caps: &regex::Captures| {
+            let prefix = &caps[1];
+            let suffix = &caps[2];
+            format!("{}h{}", prefix, suffix)
+        }).to_string();
     }
 
     result
@@ -785,14 +925,18 @@ pub struct CharSpan {
 
 impl CharSpan {
     pub fn new_from_char(char: &PdfPageTextChar, page_bbox: &BBox) -> Self {
+        let font_name = char.font_name();
         Self {
             bbox: BBox::from_pdfrect(
                 char.tight_bounds()
                     .expect("Error init span tight bound char"),
                 page_bbox.height(),
             ),
-            text: fix_utf8_corruption(&char.unicode_char().unwrap_or_default().to_string()),
-            font_name: char.font_name(),
+            text: fix_character_encoding_corruption_with_font(
+                &char.unicode_char().unwrap_or_default().to_string(),
+                Some(&font_name)
+            ),
+            font_name,
             font_weight: char.font_weight(),
             font_size: char.unscaled_font_size().value,
             rotation: char.get_rotation_clockwise_degrees(),
@@ -814,8 +958,10 @@ impl CharSpan {
                 page_bbox.height(),
             );
             // Apply full UTF-8 and ligature corruption fix to character before adding
-            let char_text =
-                fix_utf8_corruption(&char.unicode_char().unwrap_or_default().to_string());
+            let char_text = fix_character_encoding_corruption_with_font(
+                &char.unicode_char().unwrap_or_default().to_string(),
+                Some(&char.font_name())
+            );
             self.text.push_str(&char_text);
             self.char_end_idx = char.index();
             self.bbox.merge(&char_bbox);
@@ -872,14 +1018,14 @@ impl Line {
         || span.text.ends_with("\n") || span.text.ends_with("\x02")
         {
             // Apply comprehensive text processing when finalizing the line
-            let utf8_fixed = fix_utf8_corruption(&self.text);
+            let utf8_fixed = fix_character_encoding_corruption(&self.text);
 
             // Apply script notation detection to spans for mathematical subscripts/superscripts
             let script_processed = detect_script_notation(&self.spans);
 
             // Use script-processed text if it differs significantly from original
             // This preserves regular text while converting mathematical notation
-            if !script_processed.is_empty() && script_processed.contains('[') {
+            if !script_processed.is_empty() && script_processed.contains("<[") {
                 self.text = script_processed;
             } else {
                 self.text = utf8_fixed;
@@ -1127,7 +1273,7 @@ mod tests {
         ];
 
         let result = detect_script_notation(&spans);
-        assert_eq!(result, "n[i]");
+        assert_eq!(result, "n<[i]>");
     }
 
     #[test]
@@ -1167,7 +1313,7 @@ mod tests {
         ];
 
         let result = detect_script_notation(&spans);
-        assert_eq!(result, "Loss[total]"); // Should be trimmed, no space before bracket
+        assert_eq!(result, "Loss<[total]>"); // Should be trimmed, no space before bracket
     }
 
     #[test]
@@ -1207,7 +1353,7 @@ mod tests {
         ];
 
         let result = detect_script_notation(&spans);
-        assert_eq!(result, "x^[2]");
+        assert_eq!(result, "x^<[2]>");
     }
 
     #[test]
@@ -1292,7 +1438,7 @@ mod tests {
         ];
 
         let result = detect_script_notation(&spans);
-        assert_eq!(result, "N[mask]");
+        assert_eq!(result, "N<[mask]>");
     }
 
     #[test]
