@@ -4,9 +4,8 @@ debug/
 python/
 
 # Documentation
-README.md
-CHANGELOG.md
 docs/
+*.md
 
 # Test files
 tests/
