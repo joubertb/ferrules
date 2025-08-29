@@ -36,8 +36,6 @@ COPY Cargo.toml Cargo.lock ./
 
 COPY ferrules-core/src/correction/dictionaries/ ./dictionaries/
 
-# Copy configuration files
-COPY  ./
 
 # Copy models directory
 COPY models/ ./models/
