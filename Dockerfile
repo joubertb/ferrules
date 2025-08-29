@@ -19,15 +19,7 @@ COPY --from=planner /app/recipe.json recipe.json
 RUN cargo chef cook --release --recipe-path recipe.json
 
 # Copy source code and essential files
-COPY ferrules-core/ ./ferrules-core/
-COPY ferrules-api/ ./ferrules-api/
-COPY ferrules-cli/ ./ferrules-cli/
-COPY Cargo.toml Cargo.lock ./
-
-COPY ferrules-core/src/correction/dictionaries/ ./dictionaries/
-
-# Copy models directory
-COPY models/ ./models/
+COPY . .
 
 # Build application (dictionary corrections only)
 RUN cargo build --release -p ferrules-api
@@ -44,13 +36,11 @@ RUN apt-get update -y \
     && rm -rf /var/lib/apt/lists/*
 
 # Create app directory structure
-RUN mkdir -p /app/dictionaries /app/models /app/scripts
+RUN mkdir -p /app/models /app/scripts
 
 # Copy the binary and libs from builder
 COPY --from=builder /app/target/release/libonnxruntime*.so /usr/local/lib/
 COPY --from=builder /app/target/release/ferrules-api /app/ferrules-api
-# Copy dictionaries directly from builder (no intermediate compression layer)
-COPY --from=builder /app/dictionaries/ /app/dictionaries/
 
 # Copy models
 COPY --from=builder /app/models/ /app/models/
@@ -60,12 +50,7 @@ COPY scripts/docker-init.sh /app/scripts/
 RUN chmod +x /app/scripts/docker-init.sh
 
 # Verify all required files are present
-RUN echo "Verifying dictionary files..." && \
-    test -f /app/dictionaries/en_US.aff && \
-    test -f /app/dictionaries/en_US.dic && \
-    test -f /app/dictionaries/basic_english.dic && \
-    echo "✓ Dictionary files verified" && \
-    echo "Verifying model files..." && \
+RUN echo "Verifying model files..." && \
     test -f /app/models/yolov8s-doclaynet.onnx && \
     echo "✓ Model files verified" && \
     echo "Verifying binaries..." && \

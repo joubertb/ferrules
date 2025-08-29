@@ -29,15 +29,7 @@ RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --de
 ENV PATH="/root/.cargo/bin:${PATH}"
 
 # Copy source code and essential files
-COPY ferrules-core/ ./ferrules-core/
-COPY ferrules-api/ ./ferrules-api/
-COPY ferrules-cli/ ./ferrules-cli/
-COPY Cargo.toml Cargo.lock ./
-
-COPY ferrules-core/src/correction/dictionaries/ ./dictionaries/
-
-# Copy models directory
-COPY models/ ./models/
+COPY . .
 
 # Build the application
 RUN cargo build --release -p ferrules-api
@@ -53,7 +45,7 @@ RUN apt-get update && apt-get install -y \
     && rm -rf /var/lib/apt/lists/*
 
 # Create app directory structure  
-RUN mkdir -p /app/dictionaries /app/models
+RUN mkdir -p /app/models
 
 # Set CUDA paths
 ENV CUDA_HOME=/usr/local/cuda
@@ -64,20 +56,12 @@ ENV LD_LIBRARY_PATH="${CUDA_HOME}/lib64:${LD_LIBRARY_PATH}"
 COPY --from=builder /app/target/release/ferrules-api /app/ferrules-api
 COPY --from=builder /app/target/release/*onnxruntime*.so* /usr/local/lib/
 
-# Copy dictionaries directly from builder (no intermediate compression layer)
-COPY --from=builder /app/dictionaries/ /app/dictionaries/
 
 # Copy models
 COPY --from=builder /app/models/ /app/models/
 
 # Verify all required files are present
-RUN echo "Verifying dictionary files..." && \
-    test -f /app/dictionaries/en_US.aff && \
-    test -f /app/dictionaries/en_US.dic && \
-    test -f /app/dictionaries/basic_english.dic && \
-    echo "✓ Dictionary files verified" && \
-    echo "Config verification skipped - no config files needed" && \
-    echo "Verifying model files..." && \
+RUN echo "Verifying model files..." && \
     test -f /app/models/yolov8s-doclaynet.onnx && \
     echo "✓ Model files verified" && \
     echo "File verification complete!"

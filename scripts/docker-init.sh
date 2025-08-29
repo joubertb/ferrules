@@ -23,11 +23,7 @@ echo "  - Log level: $RUST_LOG"
 health_check() {
     echo "🏥 Performing container health check..."
     
-    # Check if dictionary files exist
-    if [[ ! -f "/app/dictionaries/en_US.aff" ]] || [[ ! -f "/app/dictionaries/en_US.dic" ]]; then
-        echo "❌ Dictionary files not found"
-        return 1
-    fi
+    # Dictionary files are embedded in binary - no external files needed
     
     # Check if main binary exists
     if [[ ! -x "/app/ferrules-api" ]]; then
