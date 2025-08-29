@@ -18,10 +18,19 @@ COPY --from=planner /app/recipe.json recipe.json
 # Build dependencies - cached if they don't change
 RUN cargo chef cook --release --recipe-path recipe.json
 
-# Build application
-COPY . .
+# Copy source code and essential files
+COPY ferrules-core/ ./ferrules-core/
+COPY ferrules-api/ ./ferrules-api/
+COPY ferrules-cli/ ./ferrules-cli/
+COPY Cargo.toml Cargo.lock ./
+
+COPY ferrules-core/src/correction/dictionaries/ ./dictionaries/
+
+# Copy models directory
+COPY models/ ./models/
+
+# Build application (dictionary corrections only)
 RUN cargo build --release -p ferrules-api
-RUN cargo build --release --bin font-analyzer
 
 # Runtime stage
 FROM debian:${DEBIAN_VERSION}-slim AS runtime
@@ -34,23 +43,38 @@ RUN apt-get update -y \
     && apt-get clean \
     && rm -rf /var/lib/apt/lists/*
 
+# Create app directory structure
+RUN mkdir -p /app/dictionaries /app/models /app/scripts
+
 # Copy the binary and libs from builder
 COPY --from=builder /app/target/release/libonnxruntime*.so /usr/local/lib/
 COPY --from=builder /app/target/release/ferrules-api /app/ferrules-api
-COPY --from=builder /app/target/release/font-analyzer /app/font-analyzer
+# Copy dictionaries directly from builder (no intermediate compression layer)
+COPY --from=builder /app/dictionaries/ /app/dictionaries/
 
-# Copy configuration files (with default configs)
-COPY --from=builder /app/configs /app/configs
-RUN mkdir -p /app/configs
+# Copy models
+COPY --from=builder /app/models/ /app/models/
 
 # Copy scripts for container initialization
 COPY scripts/docker-init.sh /app/scripts/
 RUN chmod +x /app/scripts/docker-init.sh
 
+# Verify all required files are present
+RUN echo "Verifying dictionary files..." && \
+    test -f /app/dictionaries/en_US.aff && \
+    test -f /app/dictionaries/en_US.dic && \
+    test -f /app/dictionaries/basic_english.dic && \
+    echo "✓ Dictionary files verified" && \
+    echo "Verifying model files..." && \
+    test -f /app/models/yolov8s-doclaynet.onnx && \
+    echo "✓ Model files verified" && \
+    echo "Verifying binaries..." && \
+    test -f /app/ferrules-api && \
+    echo "✓ Binary files verified" && \
+    echo "File verification complete!"
+
 RUN ldconfig
 
-# Initialize correction engine on startup
-ENV FERRULES_CONFIG_PATH=/app/configs/font_corrections.json
 ENV FERRULES_ENABLE_CORRECTIONS=true
 ENV FERRULES_LOG_LEVEL=info
 

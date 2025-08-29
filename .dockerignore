@@ -12,3 +12,26 @@ docs/
 tests/
 **/tests/
 **/test/
+
+# Temporary and debug files
+*.tmp
+*.log
+*debug*
+*test-*
+mathbert-results/
+
+# Dictionaries are now included in source tree (ferrules-core/src/correction/dictionaries/)
+
+# IDE files
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Build artifacts
+target/
+**/.cargo/
