@@ -447,6 +447,10 @@ pub(crate) fn merge_elements_into_blocks(
             }
         }
     }
+
+    // Apply text corrections to all blocks after assembly is complete
+    crate::correction::correct_blocks(&mut blocks);
+
     Ok(blocks)
 }
 

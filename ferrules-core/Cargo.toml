@@ -4,9 +4,13 @@ version = "0.1.8"
 edition = "2021"
 repository = "https://github.com/aminediro/ferrules"
 
-[[bin]]
-name = "font-analyzer"
-path = "../tools/font_analyzer.rs"
+[features]
+# Features defined centrally in workspace root Cargo.toml comments
+default = ["correction-engine", "modtext"]
+correction-engine = ["dep:moka", "dep:once_cell", "dep:fuzzy-matcher", "dep:spellbook", "dep:strsim"]
+modtext = []
+
+# Font analyzer removed - universal character corrections work perfectly
 
 [dependencies]
 tracing-subscriber = "0.3"
@@ -43,6 +47,12 @@ kmeans = "1.1.0"
 build_html = "2.6.0"
 regex = "1.11.1"
 html2md = "0.2.15"
+# Smart correction system (optional)
+moka = { version = "0.12", features = ["future"], optional = true }
+once_cell = { version = "1.19", optional = true }
+fuzzy-matcher = { version = "0.3", optional = true }
+spellbook = { version = "0.3.4", optional = true }
+strsim = { version = "0.10", optional = true }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 ort = { version = "=2.0.0-rc.9", features = ["coreml", "fetch-models"] }

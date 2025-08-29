@@ -12,6 +12,7 @@ use axum_tracing_opentelemetry::middleware::OtelAxumLayer;
 use clap::Parser;
 use ferrules_api::init_tracing;
 use ferrules_core::{
+    correction::initialize_for_cli,
     layout::model::{ORTConfig, OrtExecutionProvider},
     render::markdown::to_markdown,
     FerrulesParseConfig, FerrulesParser,
@@ -269,6 +270,14 @@ async fn main() {
         use_sentry,
     )
     .expect("can't setup tracing for API");
+
+    // Initialize correction engine
+    if let Err(e) = initialize_for_cli() {
+        tracing::error!("Failed to initialize text correction engine: {}", e);
+        eprintln!("❌ Failed to initialize text correction engine: {e}");
+        std::process::exit(1);
+    }
+    tracing::info!("📝 Text correction engine initialized successfully");
 
     let ort_config = ORTConfig {
         execution_providers: providers,

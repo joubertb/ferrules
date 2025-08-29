@@ -6,6 +6,12 @@ authors = ["Amine dirhoussi <aminedirhoussi1@gmail.com>"]
 description = "Modern, fast, document parser written in 🦀"
 repository = "https://github.com/aminediro/ferrules"
 
+[features]
+# Features defined centrally in workspace root Cargo.toml comments  
+default = ["correction-engine", "modtext"]
+correction-engine = ["ferrules-core/correction-engine"]
+modtext = ["ferrules-core/modtext"]
+
 [dependencies]
 anyhow = { workspace = true }
 tracing = { workspace = true }
@@ -17,6 +23,6 @@ uuid = { workspace = true }
 memmap2 = { workspace = true }
 
 # CLI specific
-ferrules-core = { path = "../ferrules-core" }
+ferrules-core = { path = "../ferrules-core", default-features = false }
 clap = { workspace = true }
 indicatif = "0.17.9"

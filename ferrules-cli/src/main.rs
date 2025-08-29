@@ -1,5 +1,6 @@
 use clap::Parser;
 
+use ferrules_core::correction::{initialize_for_cli, display_cli_config_info};
 use ferrules_core::{
     layout::model::{ORTConfig, OrtExecutionProvider},
     utils::{create_dirs, get_doc_length, save_parsed_document},
@@ -133,6 +134,15 @@ struct Args {
     )]
     debug: bool,
 
+    /// Enable verbose mode to show configuration details
+    #[arg(
+        long,
+        short = 'v',
+        default_value_t = false,
+        help = "Show loaded configuration file details and last update date"
+    )]
+    verbose: bool,
+
     /// Directory for debug output files
     #[arg(
         long,
@@ -188,6 +198,7 @@ fn setup_progress_bar(
     pb
 }
 
+
 fn parse_ep_args(args: &Args) -> Vec<OrtExecutionProvider> {
     let mut providers = Vec::new();
     if args.trt {
@@ -210,7 +221,25 @@ fn parse_ep_args(args: &Args) -> Vec<OrtExecutionProvider> {
 async fn main() {
     let args = Args::parse();
 
-    // Check providers
+    // Initialize tracing for debug logging
+    if args.debug {
+        tracing_subscriber::fmt()
+            .with_max_level(tracing::Level::DEBUG)
+            .init();
+        println!("🐛 Debug mode enabled");
+    }
+
+    // Initialize correction engine - exit with error if config cannot be loaded
+    if let Err(e) = initialize_for_cli() {
+        eprintln!("❌ Failed to initialize font correction engine: {e}");
+        std::process::exit(1);
+    }
+
+    // Display configuration info if verbose mode is enabled
+    if args.verbose {
+        display_cli_config_info();
+    }
+
     let providers = parse_ep_args(&args);
 
     let ort_config = ORTConfig {
@@ -219,7 +248,7 @@ async fn main() {
         inter_threads: args.inter_threads,
         opt_level: args.graph_opt_level.map(|v| v.try_into().unwrap()),
     };
-    // Global tasks
+
     let parser = FerrulesParser::new(ort_config);
 
     let page_range = args
@@ -236,12 +265,10 @@ async fn main() {
         .and_then(|name| name.split('.').next().map(|s| s.to_owned()))
         .unwrap_or(Uuid::new_v4().to_string());
 
-    // Create all dirs
-    // TODO: refac this
     let save_figs = args.html | args.save_images;
     let (output_dir_path, debug_path) =
         create_dirs(args.output_dir.as_ref(), &doc_name, args.debug, save_figs).unwrap();
-    // TODO : refac memap
+
     let file = File::open(&args.file_path).await.unwrap();
     let mmap = unsafe { Mmap::map(&file).unwrap() };
 
@@ -251,6 +278,7 @@ async fn main() {
         page_range,
         debug_dir: debug_path,
     };
+
     let doc = parser
         .parse_document(
             &mmap,

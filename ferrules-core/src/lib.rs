@@ -84,11 +84,10 @@
 pub(crate) mod draw;
 
 pub mod blocks;
-pub mod correction_engine;
-pub mod diagnostic_logger;
+pub mod correction;
 pub mod entities;
-pub mod font_analysis;
 pub mod layout;
+mod modtext;
 pub mod ocr;
 pub mod render;
 pub mod utils;

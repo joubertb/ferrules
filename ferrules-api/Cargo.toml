@@ -5,6 +5,12 @@ edition = "2021"
 description = "Ferrules API"
 repository = "https://github.com/aminediro/ferrules"
 
+[features]
+# Features defined centrally in workspace root Cargo.toml comments
+default = ["correction-engine", "modtext"]
+correction-engine = ["ferrules-core/correction-engine"]
+modtext = ["ferrules-core/modtext"]
+
 [dependencies]
 anyhow = { workspace = true }
 tracing = { workspace = true }
@@ -18,7 +24,7 @@ clap = { workspace = true }
 
 # API specific
 axum = { version = "0.7.4", features = ["multipart", "json"] }
-ferrules-core = { path = "../ferrules-core" }
+ferrules-core = { path = "../ferrules-core", default-features = false }
 tower-http = { version = "0.6.1", features = ["trace", "limit"] }
 tempfile = "3.16.0"
 
