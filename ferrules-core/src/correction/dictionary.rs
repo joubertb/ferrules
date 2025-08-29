@@ -28,7 +28,6 @@ static LEGITIMATE_PATTERNS: OnceCell<Vec<Regex>> = OnceCell::new();
 /// Configuration for smart correction behavior
 #[derive(Debug, Clone)]
 pub struct SmartCorrectionConfig {
-    pub enable_dictionary_corrections: bool,
     pub confidence_threshold: f64,
     pub cache_size: u64,
     pub cache_ttl_seconds: u64,
@@ -38,7 +37,6 @@ pub struct SmartCorrectionConfig {
 impl Default for SmartCorrectionConfig {
     fn default() -> Self {
         Self {
-            enable_dictionary_corrections: true,
             confidence_threshold: 0.7,
             cache_size: 10_000,
             cache_ttl_seconds: 3600,
@@ -178,7 +176,10 @@ impl SmartCorrector {
     }
 
     /// Check if parenthetical usage is legitimate (not corruption)
-    fn is_legitimate_parenthetical(word: &str) -> bool {
+    pub fn is_legitimate_parenthetical(word: &str) -> bool {
+        // Ensure patterns are initialized
+        let _ = Self::init_legitimate_patterns();
+
         if let Some(patterns) = LEGITIMATE_PATTERNS.get() {
             patterns.iter().any(|pattern| pattern.is_match(word))
         } else {
@@ -241,10 +242,6 @@ impl SmartCorrector {
 
     /// Correct a single word using the smart correction pipeline
     pub async fn correct_word(&self, word: &str) -> Option<Cow<'_, str>> {
-        if !self.config.enable_dictionary_corrections {
-            return None;
-        }
-
         // Ensure thread-local dictionary is initialized
         if let Err(_e) = Self::init_thread_dictionary() {
             return None;

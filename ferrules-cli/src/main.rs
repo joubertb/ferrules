@@ -1,6 +1,6 @@
 use clap::Parser;
 
-use ferrules_core::correction::{initialize_for_cli, display_cli_config_info};
+use ferrules_core::correction::{display_cli_config_info, initialize_for_cli};
 use ferrules_core::{
     layout::model::{ORTConfig, OrtExecutionProvider},
     utils::{create_dirs, get_doc_length, save_parsed_document},
@@ -197,7 +197,6 @@ fn setup_progress_bar(
     );
     pb
 }
-
 
 fn parse_ep_args(args: &Args) -> Vec<OrtExecutionProvider> {
     let mut providers = Vec::new();

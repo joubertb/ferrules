@@ -10,16 +10,17 @@
 //! - Handles inline subscript patterns within single text spans
 //! - Processes mathematical symbols and spacing
 
+use crate::entities::CharSpan;
 use lazy_static::lazy_static;
 use regex::Regex;
-use crate::entities::CharSpan;
 
 /// Detect and convert subscripts and superscripts to bracket notation
 ///
 /// Analyzes character positioning and font sizes to identify mathematical subscripts
-/// and superscripts, converting them to standardized bracket notation for better readability:
-/// - Subscripts: "ni" → "n<[i]>", "LossMSP" → "Loss<[MSP]>"  
-/// - Superscripts: "x²" → "x^<[2]>", "a³" → "a^<[3]>"
+/// and superscripts, converting them to HTML tags for better readability:
+/// - Subscripts: "ni" → "n<sub>i</sub>", "LossMSP" → "Loss<sub>MSP</sub>"  
+/// - Superscripts: "x²" → "x<sup>2</sup>", "a³" → "a<sup>3</sup>"
+/// - Bold text: "MathBERT" → "<b>MathBERT</b>"
 ///
 /// Detection criteria:
 /// - Vertical position offset (y-coordinate difference)
@@ -30,11 +31,11 @@ pub(crate) fn detect_script_notation(spans: &[CharSpan]) -> String {
         return String::new();
     }
 
-    // Configuration thresholds - made more lenient
-    const SUBSCRIPT_Y_THRESHOLD: f32 = 1.0; // Reduced from 2.0 - more sensitive to small position changes
-    const SUPERSCRIPT_Y_THRESHOLD: f32 = 1.0; // Reduced from 2.0
-    const FONT_SIZE_RATIO_THRESHOLD: f32 = 0.9; // Increased from 0.85 - less strict font size requirement
-    const HORIZONTAL_PROXIMITY: f32 = 20.0; // Increased from 10.0 - allow wider gaps
+    // Configuration thresholds - relative to base font size for better scalability
+    const SUBSCRIPT_Y_THRESHOLD_RATIO: f32 = 0.25; // Y offset as fraction of base font size
+    const SUPERSCRIPT_Y_THRESHOLD_RATIO: f32 = 0.25; // Y offset as fraction of base font size
+    const FONT_SIZE_RATIO_THRESHOLD: f32 = 0.85; // Require significant font size difference
+    const HORIZONTAL_PROXIMITY_RATIO: f32 = 1.2; // Horizontal gap as multiple of base font size
 
     let mut result = String::new();
     let mut i = 0;
@@ -44,10 +45,26 @@ pub(crate) fn detect_script_notation(spans: &[CharSpan]) -> String {
         let mut script_chars = Vec::new();
         let mut script_type = None; // None, Some("sub"), Some("sup")
 
-        // Also check for common subscript patterns in single spans
-        if let Some((base_part, script_part)) = detect_inline_subscript(&base_span.text) {
-            result.push_str(&format!("{base_part}<[{script_part}]>"));
+        // Check if this span contains bold text that should be wrapped in <b></b> tags
+        if is_bold_text(&base_span) {
+            result.push_str(&format!("<b>{}</b>", base_span.text));
             i += 1;
+            continue;
+        }
+
+        // Only check for inline subscript patterns if we're in a mathematical context
+        if is_mathematical_context(&spans, i) {
+            if let Some((base_part, script_part)) = detect_inline_subscript(&base_span.text) {
+                result.push_str(&format!("{base_part}<sub>{script_part}</sub>"));
+                i += 1;
+                continue;
+            }
+        }
+
+        // Check for compound bold words like "VideoBERT", "CodeBERT" where spans might be split
+        if let Some(compound_text) = detect_compound_bold_word(&spans, i) {
+            result.push_str(&compound_text.0);
+            i += compound_text.1; // Skip the processed spans
             continue;
         }
 
@@ -58,7 +75,8 @@ pub(crate) fn detect_script_notation(spans: &[CharSpan]) -> String {
 
             // Check horizontal proximity - use previous span for proximity, not base
             let prev_span = if j > i + 1 { &spans[j - 1] } else { base_span };
-            if next_span.bbox.x0 - prev_span.bbox.x1 > HORIZONTAL_PROXIMITY {
+            let horizontal_proximity_threshold = base_span.font_size * HORIZONTAL_PROXIMITY_RATIO;
+            if next_span.bbox.x0 - prev_span.bbox.x1 > horizontal_proximity_threshold {
                 break;
             }
 
@@ -69,16 +87,17 @@ pub(crate) fn detect_script_notation(spans: &[CharSpan]) -> String {
             // Check if the character is just whitespace or empty - skip these for script detection
             let is_whitespace_only = next_span.text.trim().is_empty();
 
-            // More lenient detection for subscripts, but stricter for superscripts
+            // Calculate relative thresholds based on base font size
+            let subscript_y_threshold = base_span.font_size * SUBSCRIPT_Y_THRESHOLD_RATIO;
+            let superscript_y_threshold = base_span.font_size * SUPERSCRIPT_Y_THRESHOLD_RATIO;
+
+            // Conservative subscript detection - require both position AND font size differences
             let is_subscript = !is_whitespace_only
-                && (
-                    (y_diff > SUBSCRIPT_Y_THRESHOLD && font_ratio <= FONT_SIZE_RATIO_THRESHOLD)
-                        || (y_diff > 0.5 && font_ratio <= 1.0)
-                    // Even more lenient for slight position changes
-                );
+                && y_diff > subscript_y_threshold
+                && font_ratio <= FONT_SIZE_RATIO_THRESHOLD;
             // Be much more conservative with superscript detection to avoid false positives
             let is_superscript = !is_whitespace_only
-                && y_diff < -SUPERSCRIPT_Y_THRESHOLD
+                && y_diff < -superscript_y_threshold
                 && font_ratio <= FONT_SIZE_RATIO_THRESHOLD
                 && font_ratio < 0.8; // Require significant font size difference for superscripts
 
@@ -116,7 +135,7 @@ pub(crate) fn detect_script_notation(spans: &[CharSpan]) -> String {
                             detect_inline_subscript(trimmed_script)
                         {
                             let formatted = format!(
-                                "{}{}<[{}]>",
+                                "{}{}<sub>{}</sub>",
                                 base_span.text.trim_end(),
                                 inner_base,
                                 inner_script
@@ -124,8 +143,11 @@ pub(crate) fn detect_script_notation(spans: &[CharSpan]) -> String {
 
                             result.push_str(&formatted);
                         } else {
-                            let formatted =
-                                format!("{}<[{}]>", base_span.text.trim_end(), trimmed_script);
+                            let formatted = format!(
+                                "{}<sub>{}</sub>",
+                                base_span.text.trim_end(),
+                                trimmed_script
+                            );
 
                             result.push_str(&formatted);
                         }
@@ -136,14 +158,14 @@ pub(crate) fn detect_script_notation(spans: &[CharSpan]) -> String {
                             detect_inline_subscript(trimmed_script)
                         {
                             result.push_str(&format!(
-                                "{}{}^<[{}]>",
+                                "{}{}<sup>{}</sup>",
                                 base_span.text.trim_end(),
                                 inner_base,
                                 inner_script
                             ));
                         } else {
                             result.push_str(&format!(
-                                "{}^<[{}]>",
+                                "{}<sup>{}</sup>",
                                 base_span.text.trim_end(),
                                 trimmed_script
                             ));
@@ -171,7 +193,7 @@ pub(crate) fn detect_script_notation(spans: &[CharSpan]) -> String {
 }
 
 /// Detect common subscript patterns within a single text span
-/// 
+///
 /// This function identifies mathematical subscript patterns that appear within
 /// a single character span, such as "xi", "n0", "tLT", etc.
 pub(crate) fn detect_inline_subscript(text: &str) -> Option<(String, String)> {
@@ -188,8 +210,12 @@ pub(crate) fn detect_inline_subscript(text: &str) -> Option<(String, String)> {
             Regex::new(r"^([a-z])([ij],[ij]|[ij],[0-9]|[0-9],[ij]|[0-9],[0-9])$").unwrap();
         static ref LETTER_SUBSCRIPT_RE: Regex = Regex::new(r"^([nxyzehtr])([ij])$").unwrap();
         static ref DIGIT_SUBSCRIPT_RE: Regex = Regex::new(r"^([nxyzehtr])([0-9])$").unwrap();
-        // Add pattern for multi-character subscripts like tLT, tLM, etc.
-        static ref MULTI_CHAR_SUBSCRIPT_RE: Regex = Regex::new(r"^([a-z])([A-Z]{2,})$").unwrap();
+        // Add pattern for specific multi-character subscripts like tLT, cLC, etc.
+        // Only match single lowercase letter + 2-3 uppercase letters for mathematical notation
+        static ref MULTI_CHAR_SUBSCRIPT_RE: Regex = Regex::new(r"^([tcnpkfghdrsv])([A-Z]{2,3})$").unwrap();
+        // Add pattern ONLY for specific mathematical terms like LossMSP, LossCCP, LossMLM, etc.
+        // Do NOT match compound model names like VideoBERT, LayoutLM, CodeBERT
+        static ref WORD_SUBSCRIPT_RE: Regex = Regex::new(r"^(Loss)([A-Z]{2,})$").unwrap();
     }
 
     // Handle comma-separated subscripts like "ei,j", "xi,j", etc.
@@ -208,11 +234,241 @@ pub(crate) fn detect_inline_subscript(text: &str) -> Option<(String, String)> {
     }
 
     // Handle multi-character subscripts like "tLT", "cLC", etc.
-    if let Some(caps) = MULTI_CHAR_SUBSCRIPT_RE.captures(clean_text) {
-        return Some((caps[1].to_string(), caps[2].to_string()));
+    // But first check if this might be a compound word that should NOT be a subscript
+    if !is_likely_compound_word(clean_text) {
+        if let Some(caps) = MULTI_CHAR_SUBSCRIPT_RE.captures(clean_text) {
+            return Some((caps[1].to_string(), caps[2].to_string()));
+        }
+    }
+
+    // Handle word subscripts like "LossMSP", etc.
+    // But first check if this might be a compound word that should NOT be a subscript
+    if !is_likely_compound_word(clean_text) {
+        if let Some(caps) = WORD_SUBSCRIPT_RE.captures(clean_text) {
+            return Some((caps[1].to_string(), caps[2].to_string()));
+        }
     }
 
     None
+}
+
+/// Check if a text string is likely a compound word rather than a mathematical subscript
+fn is_likely_compound_word(text: &str) -> bool {
+    let len = text.len();
+
+    // Too short to be a compound word
+    if len < 4 {
+        return false;
+    }
+
+    // Too long to be a typical mathematical subscript
+    if len > 15 {
+        return true;
+    }
+
+    // Count transitions from lowercase to uppercase (CamelCase indicator)
+    let chars: Vec<char> = text.chars().collect();
+    let mut case_transitions = 0;
+
+    for i in 1..chars.len() {
+        if chars[i - 1].is_ascii_lowercase() && chars[i].is_ascii_uppercase() {
+            case_transitions += 1;
+        }
+    }
+
+    // Multiple case transitions suggest compound word (e.g., VideoBERT, LayoutLM)
+    if case_transitions >= 1 {
+        return true;
+    }
+
+    // Removed hardcoded tech acronym patterns - these are PDF-specific and not generic
+
+    // If it has reasonable word structure (starts with capital, contains lowercase)
+    let first_char = chars.first().unwrap_or(&'a');
+    let has_lowercase = chars.iter().any(|c| c.is_ascii_lowercase());
+    let has_uppercase = chars.iter().any(|c| c.is_ascii_uppercase());
+
+    if first_char.is_ascii_uppercase() && has_lowercase && has_uppercase && len > 6 {
+        return true;
+    }
+
+    false
+}
+
+/// Detect if a character span represents bold text
+///
+/// This function checks the font weight and font name to determine if text should be formatted as bold
+/// rather than treated as a subscript or superscript.
+pub(crate) fn is_bold_text(span: &CharSpan) -> bool {
+    // Check font name for bold indicators (common pattern in PDFs)
+    let font_name = span.font_name.to_lowercase();
+    if font_name.contains("bold") || font_name.contains("black") || font_name.contains("heavy") {
+        return true;
+    }
+
+    // Check for font weight indicators
+    if let Some(font_weight) = span.font_weight.as_ref() {
+        // Use string representation to handle different weight variants
+        let weight_str = format!("{:?}", font_weight).to_lowercase();
+        if weight_str.contains("bold")
+            || weight_str.contains("700")
+            || weight_str.contains("800")
+            || weight_str.contains("900")
+        {
+            return true;
+        }
+    }
+
+    false
+}
+
+/// Check if text contains mathematical symbols
+fn contains_math_symbol(text: &str) -> bool {
+    text.chars().any(|c| {
+        matches!(
+            c,
+            '=' | '+'
+                | '−'
+                | '×'
+                | '÷'
+                | '∑'
+                | '∫'
+                | '∂'
+                | '∇'
+                | '√'
+                | '≤'
+                | '≥'
+                | '≠'
+                | '∞'
+                | 'π'
+                | 'α'
+                | 'β'
+                | 'γ'
+                | 'δ'
+                | 'λ'
+                | 'μ'
+                | 'σ'
+                | 'θ'
+                | 'φ'
+                | '['
+                | ']'
+                | '('
+                | ')'
+                | '{'
+                | '}'
+        )
+    })
+}
+
+/// Detect if we're in a mathematical context where subscript patterns should be applied
+fn is_mathematical_context(spans: &[CharSpan], current_idx: usize) -> bool {
+    // Look for mathematical indicators in nearby spans
+    let window_start = current_idx.saturating_sub(3);
+    let window_end = (current_idx + 4).min(spans.len());
+
+    for i in window_start..window_end {
+        let span = &spans[i];
+        let text = &span.text;
+
+        // Check for mathematical symbols or notation
+        if contains_math_symbol(text) {
+            return true;
+        }
+
+        // Check for formula-like patterns (single letters with spaces)
+        if text.len() == 1 && text.chars().next().unwrap().is_ascii_alphabetic() {
+            // This might be part of a mathematical formula
+            return true;
+        }
+    }
+
+    false
+}
+
+/// Detect compound bold words like "VideoBERT", "CodeBERT" where spans might be split
+///
+/// This function checks if consecutive spans form a compound word where part of it is bold,
+/// and returns the formatted result with the number of spans consumed.
+pub(crate) fn detect_compound_bold_word(
+    spans: &[CharSpan],
+    start_idx: usize,
+) -> Option<(String, usize)> {
+    if start_idx + 1 >= spans.len() {
+        return None;
+    }
+
+    let base_span = &spans[start_idx];
+    let next_span = &spans[start_idx + 1];
+
+    // Check if this looks like a compound word (close proximity, same line)
+    let horizontal_gap = next_span.bbox.x0 - base_span.bbox.x1;
+    let vertical_diff = (next_span.bbox.y0 - base_span.bbox.y0).abs();
+
+    // Must be on same line and close together
+    if horizontal_gap > 5.0 || vertical_diff > 2.0 {
+        return None;
+    }
+
+    // Check for common compound word patterns where the second part is bold
+    let base_text = base_span.text.trim();
+    let next_text = next_span.text.trim();
+
+    // Look for patterns like "Video" + "BERT", "Code" + "BERT", "Layout" + "LM", etc.
+    if is_compound_word_pattern(base_text, next_text) && is_bold_text(next_span) {
+        let compound_word = format!("{base_text}{next_text}");
+        return Some((format!("<b>{compound_word}</b>"), 2));
+    }
+
+    // Check if both parts are bold and form a compound word
+    if is_bold_text(base_span)
+        && is_bold_text(next_span)
+        && is_compound_word_pattern(base_text, next_text)
+    {
+        let compound_word = format!("{base_text}{next_text}");
+        return Some((format!("<b>{compound_word}</b>"), 2));
+    }
+
+    None
+}
+
+/// Check if two text parts form a recognizable compound word pattern
+fn is_compound_word_pattern(first: &str, second: &str) -> bool {
+    // Generic rules for compound words:
+    // 1. Both parts must be reasonable word lengths (not single chars like mathematical variables)
+    // 2. First part should be a normal word (mixed case or initial cap)
+    // 3. Second part should be all caps (like acronyms) or PascalCase
+    // 4. Total length should be reasonable for a compound word
+
+    let first_len = first.len();
+    let second_len = second.len();
+    let total_len = first_len + second_len;
+
+    // Must be reasonable lengths for compound words
+    if first_len < 2 || second_len < 2 || total_len > 20 {
+        return false;
+    }
+
+    // First part: should be a normal word (letters only, not mathematical symbols)
+    if !first.chars().all(|c| c.is_ascii_alphabetic()) {
+        return false;
+    }
+
+    // Second part: should be all uppercase (acronym) or PascalCase
+    let second_is_acronym = second.chars().all(|c| c.is_ascii_uppercase());
+    let second_is_pascal = second.chars().next().unwrap_or('a').is_ascii_uppercase()
+        && second.chars().all(|c| c.is_ascii_alphabetic());
+
+    if !second_is_acronym && !second_is_pascal {
+        return false;
+    }
+
+    // Exclude obvious mathematical subscripts (single letter + single/double caps)
+    if first_len == 1 && second_len <= 3 {
+        return false;
+    }
+
+    // This looks like a compound word
+    true
 }
 
 #[cfg(test)]
@@ -222,7 +478,7 @@ mod tests {
 
     #[test]
     fn test_detect_script_notation_subscript() {
-        // Test subscript detection: "ni" → "n<[i]>"
+        // Test subscript detection: "ni" → "n<↓i↓>"
         let spans = vec![
             CharSpan {
                 bbox: BBox {
@@ -261,17 +517,43 @@ mod tests {
         ];
 
         let result = detect_script_notation(&spans);
-        assert_eq!(result, "n<[i]>");
+        assert_eq!(result, "n<sub>i</sub>");
     }
 
     #[test]
     fn test_detect_inline_subscript() {
         // Test common inline subscript patterns
-        assert_eq!(detect_inline_subscript("xi"), Some(("x".to_string(), "i".to_string())));
-        assert_eq!(detect_inline_subscript("n0"), Some(("n".to_string(), "0".to_string())));
-        assert_eq!(detect_inline_subscript("tLT"), Some(("t".to_string(), "LT".to_string())));
-        assert_eq!(detect_inline_subscript("ei,j"), Some(("e".to_string(), "i,j".to_string())));
-        
+        assert_eq!(
+            detect_inline_subscript("xi"),
+            Some(("x".to_string(), "i".to_string()))
+        );
+        assert_eq!(
+            detect_inline_subscript("n0"),
+            Some(("n".to_string(), "0".to_string()))
+        );
+        assert_eq!(
+            detect_inline_subscript("tLT"),
+            Some(("t".to_string(), "LT".to_string()))
+        );
+        assert_eq!(
+            detect_inline_subscript("ei,j"),
+            Some(("e".to_string(), "i,j".to_string()))
+        );
+
+        // Test word subscripts like LossMSP, LossMLM, etc.
+        assert_eq!(
+            detect_inline_subscript("LossMSP"),
+            Some(("Loss".to_string(), "MSP".to_string()))
+        );
+        assert_eq!(
+            detect_inline_subscript("LossMLM"),
+            Some(("Loss".to_string(), "MLM".to_string()))
+        );
+        assert_eq!(
+            detect_inline_subscript("LossCCP"),
+            Some(("Loss".to_string(), "CCP".to_string()))
+        );
+
         // Should not match regular words
         assert_eq!(detect_inline_subscript("normal"), None);
         assert_eq!(detect_inline_subscript("text"), None);

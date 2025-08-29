@@ -6,14 +6,15 @@ use std::{path::PathBuf, time::Duration};
 
 use pdfium_render::prelude::{PdfFontWeight, PdfPageTextChar, PdfRect};
 
+use crate::correction::{
+    fix_character_encoding_corruption, fix_character_encoding_corruption_with_font,
+};
 use crate::{blocks::Block, layout::model::LayoutBBox};
-use crate::correction::{fix_character_encoding_corruption, fix_character_encoding_corruption_with_font};
 
 pub type PageID = usize;
 pub type ElementID = usize;
 
 const FERRULES_VERSION: &str = env!("CARGO_PKG_VERSION");
-
 
 #[derive(Debug, Default, Clone, Deserialize, Serialize)]
 pub struct BBox {
@@ -257,7 +258,7 @@ pub struct ParsedDocument {
     pub metadata: DocumentMetadata,
 }
 
-#[derive(Debug)]
+#[derive(Debug, Clone)]
 pub struct CharSpan {
     pub bbox: BBox,
     pub text: String,
@@ -391,7 +392,11 @@ impl Line {
 
             // Use script-processed text if it differs significantly from original
             // This preserves regular text while converting mathematical notation
-            if !script_processed.is_empty() && script_processed.contains("<[") {
+            if !script_processed.is_empty()
+                && (script_processed.contains("<sub>")
+                    || script_processed.contains("<sup>")
+                    || script_processed.contains("<b>"))
+            {
                 self.text = script_processed;
             } else {
                 self.text = utf8_fixed;
@@ -422,7 +427,11 @@ impl Line {
 
         // Use script-processed text if it differs significantly from original
         // This preserves regular text while converting mathematical notation
-        if !script_processed.is_empty() && script_processed.contains("<[") {
+        if !script_processed.is_empty()
+            && (script_processed.contains("<sub>")
+                || script_processed.contains("<sup>")
+                || script_processed.contains("<b>"))
+        {
             // Apply corruption fixes to the script-processed text as well
             self.text = fix_character_encoding_corruption(&script_processed);
         } else {
@@ -619,8 +628,6 @@ mod tests {
         let distance = bbox1.distance(&bbox2, x_weight, y_weight);
         assert_eq!(distance, 45.0); // (3-1)^2 * 2 + (4-1)^2 * 3
     }
-
-
 
     #[test]
     fn test_character_corruption_detection() {

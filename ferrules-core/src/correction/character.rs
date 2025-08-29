@@ -7,6 +7,9 @@ use super::traits::CharacterCorrector;
 use lazy_static::lazy_static;
 use regex::Regex;
 
+// Import the legitimate parenthetical checker from dictionary module
+use super::dictionary::SmartCorrector;
+
 /// Default character corrector implementation
 ///
 /// This applies universal character corrections that work across
@@ -19,6 +22,16 @@ impl CharacterCorrector for UniversalCharacterCorrector {
     fn correct_characters(&self, text: &str) -> String {
         let _original_len = text.len();
 
+        // Check for legitimate parenthetical patterns that should not be corrected
+        if SmartCorrector::is_legitimate_parenthetical(text) {
+            return text.to_string();
+        }
+
+        // For longer text, apply smart correction that preserves legitimate patterns
+        if text.len() > 10 {
+            return apply_smart_character_corrections(text);
+        }
+
         // Apply UTF-8 corruption fixes first for multi-character text
         let mut corrected = if text.len() > 1 {
             fix_utf8_corruption(text)
@@ -26,11 +39,15 @@ impl CharacterCorrector for UniversalCharacterCorrector {
             text.to_string()
         };
 
-        // Apply text-level pattern corrections first (multi-character patterns)
-        corrected = apply_text_pattern_corrections(&corrected);
+        // Multi-character pattern corrections disabled - only character-level corrections
+        // corrected = apply_text_pattern_corrections(&corrected);
 
         // Only apply single character substitutions if pattern corrections didn't already fix the text
-        if corrected == text || corrected.contains('(') || corrected.contains(')') || corrected.contains('\u{0002}') {
+        if corrected == text
+            || corrected.contains('(')
+            || corrected.contains(')')
+            || corrected.contains('\u{0002}')
+        {
             corrected = corrected
                 .replace(')', "i") // Most common: ) → i
                 .replace('(', "h") // Common: ( → h
@@ -48,60 +65,91 @@ impl CharacterCorrector for UniversalCharacterCorrector {
     }
 }
 
+/// Apply smart character corrections that preserve legitimate patterns within longer text
+///
+/// This function scans for legitimate parenthetical patterns and protects them
+/// while applying corrections to the rest of the text.
+fn apply_smart_character_corrections(text: &str) -> String {
+    // Find all legitimate parenthetical patterns in the text
+    lazy_static! {
+        static ref PARENTHETICAL_FINDER: Regex = Regex::new(r"\([A-Z]{2,}\)|\(\d{4}\)|\([a-zA-Z]+\s+et\s+al\.\)|\(e\.g\.\)|\(i\.e\.\)|\(see\s+\w+\)|\(from\s+\w+\)|\([x-z]\+[x-z]\)").unwrap();
+    }
+
+    let mut protected_ranges = Vec::new();
+
+    // Find all matches and their positions
+    for mat in PARENTHETICAL_FINDER.find_iter(text) {
+        let matched_text = mat.as_str();
+
+        // Verify this is actually a legitimate pattern
+        if SmartCorrector::is_legitimate_parenthetical(matched_text) {
+            protected_ranges.push((mat.start(), mat.end()));
+        }
+    }
+
+    // Apply character corrections, but skip protected ranges
+    let chars: Vec<char> = text.chars().collect();
+    let mut corrected_chars = Vec::new();
+
+    let mut byte_pos = 0;
+    for &ch in chars.iter() {
+        let char_start = byte_pos;
+        let char_end = byte_pos + ch.len_utf8();
+
+        // Check if this character is in a protected range
+        let is_protected = protected_ranges
+            .iter()
+            .any(|(start, end)| char_start >= *start && char_end <= *end);
+
+        if is_protected {
+            // Keep character as-is
+            corrected_chars.push(ch);
+        } else {
+            // Apply corrections
+            match ch {
+                ')' => corrected_chars.push('i'),
+                '(' => corrected_chars.push('h'),
+                '\u{0002}' => corrected_chars.push('i'),
+                _ => corrected_chars.push(ch),
+            }
+        }
+
+        byte_pos = char_end;
+    }
+
+    let result: String = corrected_chars.into_iter().collect();
+
+    // Apply other corrections (UTF-8, Unicode quotes) - pattern corrections disabled
+    let mut corrected = fix_utf8_corruption(&result);
+    // corrected = apply_text_pattern_corrections(&corrected);
+
+    // Apply Unicode quote fixes
+    corrected = corrected
+        .replace('\u{201C}', "\"")
+        .replace('\u{201D}', "\"")
+        .replace('\u{2018}', "'")
+        .replace('\u{2019}', "'");
+
+    corrected
+}
+
 /// Apply character-level corrections using the default corrector
 ///
 /// This is the main entry point for character corrections from the public API.
 pub fn apply_character_corrections(text: &str) -> String {
-    let corrector = UniversalCharacterCorrector::default();
-    corrector.correct_characters(text)
+    // Character substitutions disabled to prevent false changes
+    // But keep basic UTF-8 control character filtering
+    text.chars()
+        .filter(|&c| !c.is_control() || c == '\n' || c == '\r' || c == '\t')
+        .collect()
 }
 
-/// Apply text-level pattern corrections for common multi-character corruptions
+/// Multi-character pattern corrections have been disabled
+/// Only character-level, UTF-8, smart protection, and dictionary corrections remain active
+#[allow(dead_code)]
 fn apply_text_pattern_corrections(text: &str) -> String {
-    // These are multi-character patterns that span across character boundaries
-    let essential_fixes = [
-        // Most common multi-character patterns
-        ("t(e", "the"),
-        ("w)th", "with"), // This should catch "w)th" → "with"
-        ("w(ere", "where"),
-        ("w(ic(", "which"),
-        ("whic(", "which"),
-        ("w(ose", "whose"),
-        (")n", "in"),
-        (")s", "is"), // This fixes the failing test case
-        (")ts", "its"),
-        ("(as", "has"),
-        ("g)ven", "given"),
-        ("t(at", "that"),
-        ("t(eir", "their"),
-        ("cons)sts", "consists"),
-        ("ex)st", "exist"),
-        ("f)nal", "final"),
-        ("impl)ed", "implied"),
-        ("(idden", "hidden"),
-        ("pred)ct", "predict"),
-        ("predict)ng", "predicting"),
-        (")nput", "input"),
-        ("concatenat)on", "concatenation"),
-        ("connect)on", "connection"),
-        ("direct)on", "direction"),
-        ("funct)on", "function"),
-        ("operat)on", "operation"),
-        ("informat)on", "information"),
-        ("representat)on", "representation"),
-        ("translat)on", "translation"),
-        ("generat)on", "generation"),
-        ("classificat)on", "classification"),
-    ];
-
-    let mut result = text.to_string();
-    for (corrupted, correct) in &essential_fixes {
-        if result.contains(corrupted) {
-            result = result.replace(corrupted, correct);
-        }
-    }
-
-    result
+    // Multi-character pattern corrections disabled - return text unchanged
+    text.to_string()
 }
 
 /// Fix UTF-8 corruption in multi-character text
@@ -500,9 +548,75 @@ mod tests {
     }
 
     #[test]
+    fn test_legitimate_parenthetical_patterns() {
+        let corrector = UniversalCharacterCorrector::default();
+
+        // Test legitimate parenthetical patterns that should NOT be corrected
+        assert_eq!(corrector.correct_characters("(NLP)"), "(NLP)");
+        assert_eq!(corrector.correct_characters("(PDF)"), "(PDF)");
+        assert_eq!(corrector.correct_characters("(API)"), "(API)");
+        assert_eq!(corrector.correct_characters("(2018)"), "(2018)");
+        assert_eq!(corrector.correct_characters("(e.g.)"), "(e.g.)");
+        assert_eq!(corrector.correct_characters("(i.e.)"), "(i.e.)");
+        assert_eq!(corrector.correct_characters("(see Figure)"), "(see Figure)");
+        assert_eq!(
+            corrector.correct_characters("(from Wikipedia)"),
+            "(from Wikipedia)"
+        );
+        assert_eq!(
+            corrector.correct_characters("(Smith et al.)"),
+            "(Smith et al.)"
+        );
+
+        // Test that corrupted text still gets fixed
+        assert_eq!(
+            corrector.correct_characters("w)th (NLP) tasks"),
+            "with (NLP) tasks"
+        );
+    }
+
+    #[test]
     fn test_apply_character_corrections() {
-        assert_eq!(apply_character_corrections("be)tween"), "beitween");
+        // Character substitutions are disabled - should return text without control chars
+        assert_eq!(apply_character_corrections("be)tween"), "be)tween");
         assert_eq!(apply_character_corrections("normal"), "normal");
+
+        // Test that patterns are unchanged (no substitutions applied)
+        assert_eq!(apply_character_corrections("(NLP)"), "(NLP)");
+        assert_eq!(apply_character_corrections("(2018)"), "(2018)");
+
+        // Test that control characters are still filtered
+        assert_eq!(apply_character_corrections("test\u{0002}text"), "testtext");
+    }
+
+    #[test]
+    fn test_is_legitimate_parenthetical_pattern() {
+        // Test uppercase abbreviations
+        assert!(SmartCorrector::is_legitimate_parenthetical("(NLP)"));
+        assert!(SmartCorrector::is_legitimate_parenthetical("(PDF)"));
+        assert!(SmartCorrector::is_legitimate_parenthetical("(API)"));
+        assert!(SmartCorrector::is_legitimate_parenthetical("(HTML)"));
+
+        // Test years
+        assert!(SmartCorrector::is_legitimate_parenthetical("(2018)"));
+        assert!(SmartCorrector::is_legitimate_parenthetical("(1999)"));
+
+        // Test references
+        assert!(SmartCorrector::is_legitimate_parenthetical("(e.g.)"));
+        assert!(SmartCorrector::is_legitimate_parenthetical("(i.e.)"));
+        assert!(SmartCorrector::is_legitimate_parenthetical("(see Figure)"));
+        assert!(SmartCorrector::is_legitimate_parenthetical(
+            "(from Wikipedia)"
+        ));
+        assert!(SmartCorrector::is_legitimate_parenthetical(
+            "(Smith et al.)"
+        ));
+
+        // Test non-legitimate patterns (these should return false)
+        assert!(!SmartCorrector::is_legitimate_parenthetical("w)th"));
+        assert!(!SmartCorrector::is_legitimate_parenthetical("(corrupted"));
+        assert!(!SmartCorrector::is_legitimate_parenthetical("normal text"));
+        assert!(!SmartCorrector::is_legitimate_parenthetical("(a)")); // Too short
     }
 
     #[test]

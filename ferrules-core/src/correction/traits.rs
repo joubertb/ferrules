@@ -61,7 +61,4 @@ pub trait CorrectionConfiguration {
 
     /// Get confidence threshold for corrections
     fn confidence_threshold(&self) -> f64;
-
-    /// Check if dictionary corrections are enabled
-    fn dictionary_corrections_enabled(&self) -> bool;
 }

@@ -3,7 +3,6 @@
 //! This module provides the primary implementation of text correction
 //! combining character-level fixes and dictionary-based corrections.
 
-use super::character::UniversalCharacterCorrector;
 use super::config::CorrectionConfig;
 use super::traits::{CharacterCorrector, DictionaryCorrector, TextCorrector};
 use crate::blocks::{Block, BlockType};
@@ -17,49 +16,37 @@ static GLOBAL_CORRECTOR: OnceCell<Option<FerrulesCorrectionEngine>> = OnceCell::
 
 /// Main text correction engine that combines all correction strategies
 pub struct FerrulesCorrectionEngine {
-    character_corrector: UniversalCharacterCorrector,
     dictionary_corrector: Option<SmartCorrector>,
-    config: CorrectionConfig,
 }
 
 impl FerrulesCorrectionEngine {
     /// Create a new correction engine with the given configuration
     pub fn new(config: CorrectionConfig) -> Result<Self> {
-        let character_corrector = UniversalCharacterCorrector::default();
+        let smart_config = SmartCorrectionConfig {
+            confidence_threshold: config.confidence_threshold,
+            cache_size: config.cache_size,
+            cache_ttl_seconds: config.cache_ttl_seconds,
+            fuzzy_match_threshold: config.fuzzy_match_threshold,
+        };
 
-        let dictionary_corrector = if config.enable_dictionary_corrections {
-            let smart_config = SmartCorrectionConfig {
-                enable_dictionary_corrections: true,
-                confidence_threshold: config.confidence_threshold,
-                cache_size: config.cache_size,
-                cache_ttl_seconds: config.cache_ttl_seconds,
-                fuzzy_match_threshold: config.fuzzy_match_threshold,
-            };
-
-            match SmartCorrector::new(smart_config) {
-                Ok(corrector) => {
-                    info!("✅ Dictionary corrector initialized");
-                    Some(corrector)
-                }
-                Err(e) => {
-                    warn!("⚠️ Failed to initialize dictionary corrector: {}", e);
-                    None
-                }
+        let dictionary_corrector = match SmartCorrector::new(smart_config) {
+            Ok(corrector) => {
+                info!("✅ Dictionary corrector initialized");
+                Some(corrector)
             }
-        } else {
-            info!("📝 Dictionary corrections disabled");
-            None
+            Err(e) => {
+                warn!("⚠️ Failed to initialize dictionary corrector: {}", e);
+                None
+            }
         };
 
         info!(
-            "🔧 Correction engine initialized (cache: {}, ttl: {}s, dict: {})",
-            config.cache_size, config.cache_ttl_seconds, config.enable_dictionary_corrections
+            "🔧 Correction engine initialized (cache: {}, ttl: {}s, dict: enabled)",
+            config.cache_size, config.cache_ttl_seconds
         );
 
         Ok(Self {
-            character_corrector,
             dictionary_corrector,
-            config,
         })
     }
 
@@ -83,7 +70,11 @@ impl FerrulesCorrectionEngine {
 
 impl CharacterCorrector for FerrulesCorrectionEngine {
     fn correct_characters(&self, text: &str) -> String {
-        self.character_corrector.correct_characters(text)
+        // Character substitutions disabled to prevent false changes
+        // But keep basic UTF-8 control character filtering
+        text.chars()
+            .filter(|&c| !c.is_control() || c == '\n' || c == '\r' || c == '\t')
+            .collect()
     }
 }
 
@@ -120,19 +111,12 @@ impl TextCorrector for FerrulesCorrectionEngine {
             return text.to_string();
         }
 
-        // Apply character corrections first
-        let character_corrected = self.correct_characters(text);
+        // Character corrections disabled - only apply dictionary corrections
+        let final_corrected = self.correct_words(text);
 
-        // Then apply dictionary corrections if available and enabled
-        if self.config.enable_dictionary_corrections {
-            let final_corrected = self.correct_words(&character_corrected);
+        if final_corrected != text {}
 
-            if final_corrected != text {}
-
-            final_corrected
-        } else {
-            character_corrected
-        }
+        final_corrected
     }
 
     fn correct_block(&self, block: &mut Block) {
@@ -215,7 +199,6 @@ mod tests {
             cache_size: 100,
             cache_ttl_seconds: 60,
             confidence_threshold: 0.7,
-            enable_dictionary_corrections: true,
             fuzzy_match_threshold: 50,
         };
         FerrulesCorrectionEngine::new(config).unwrap()
@@ -225,11 +208,16 @@ mod tests {
     async fn test_character_corrections() {
         let engine = create_test_engine();
 
+        // Character substitutions are disabled - should return text without control chars
         let result = engine.correct_characters("w)th");
-        assert_eq!(result, "with");
+        assert_eq!(result, "w)th");
 
         let result = engine.correct_characters("whic(");
-        assert_eq!(result, "which");
+        assert_eq!(result, "whic(");
+
+        // Test that control characters are still filtered
+        let result = engine.correct_characters("test\u{0002}text");
+        assert_eq!(result, "testtext");
     }
 
     #[test]
@@ -239,8 +227,9 @@ mod tests {
             let engine = create_test_engine();
 
             let result = engine.correct_text("w)th");
-            // Should apply character corrections (and potentially dictionary corrections)
-            assert!(result.contains("with") || result == "with");
+            // Character corrections are disabled, only dictionary corrections apply
+            // Dictionary should try to correct "w)th" to "with" if it's a known corruption
+            assert!(result == "with" || result == "w)th");
         });
     }
 

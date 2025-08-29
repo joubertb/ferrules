@@ -178,7 +178,6 @@ PDF Text → Font Corrections → Dictionary Corrections → Clean Output
   },
   "settings": {
     "enable_font_corrections": true,
-    "enable_dictionary_corrections": true,
     "confidence_threshold": 0.70,
     "max_corrections_per_word": 3
   }

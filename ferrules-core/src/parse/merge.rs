@@ -236,7 +236,7 @@ pub(crate) fn merge_elements_into_blocks(
                 let formula_block = Block {
                     id: block_id,
                     kind: crate::blocks::BlockType::TextBlock(TextBlock {
-                        text: format!("FORMULA({})", curr_el.text_block.text),
+                        text: crate::modtext::format_formula_text(&curr_el.text_block.text),
                     }),
                     pages_id: vec![curr_el.page_id],
                     bbox: curr_el.bbox,

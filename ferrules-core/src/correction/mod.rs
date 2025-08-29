@@ -99,7 +99,7 @@ pub fn correct_blocks(blocks: &mut [Block]) {
     }
 
     tracing::debug!("🔤 Applying text corrections to {} blocks", blocks.len());
-    
+
     #[cfg(feature = "correction-engine")]
     {
         ensure_initialized();
@@ -132,12 +132,18 @@ pub fn correct_blocks(blocks: &mut [Block]) {
 pub fn correct_characters(text: &str) -> String {
     #[cfg(feature = "correction-engine")]
     {
-        character::apply_character_corrections(text)
+        // Character substitutions disabled to prevent false changes
+        // But keep basic UTF-8 control character filtering
+        text.chars()
+            .filter(|&c| !c.is_control() || c == '\n' || c == '\r' || c == '\t')
+            .collect()
     }
 
     #[cfg(not(feature = "correction-engine"))]
     {
-        text.to_string()
+        text.chars()
+            .filter(|&c| !c.is_control() || c == '\n' || c == '\r' || c == '\t')
+            .collect()
     }
 }
 
@@ -156,7 +162,11 @@ pub fn correct_characters(text: &str) -> String {
 pub fn fix_character_encoding_corruption(text: &str) -> String {
     #[cfg(feature = "correction-engine")]
     {
-        character::apply_character_corrections(text)
+        // Character substitutions disabled to prevent false changes
+        // But keep basic UTF-8 control character filtering
+        text.chars()
+            .filter(|&c| !c.is_control() || c == '\n' || c == '\r' || c == '\t')
+            .collect()
     }
 
     #[cfg(not(feature = "correction-engine"))]
@@ -194,8 +204,8 @@ pub fn correct_text(text: &str) -> String {
         if let Some(corrector) = get_text_corrector() {
             corrector.correct_text(text)
         } else {
-            // Fallback to character corrections only
-            character::apply_character_corrections(text)
+            // No fallback - return original text if corrector unavailable
+            text.to_string()
         }
     }
 
