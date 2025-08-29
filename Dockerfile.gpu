@@ -32,7 +32,6 @@ ENV PATH="/root/.cargo/bin:${PATH}"
 COPY ferrules-core/ ./ferrules-core/
 COPY ferrules-api/ ./ferrules-api/
 COPY ferrules-cli/ ./ferrules-cli/
-COPY tools/ ./tools/
 COPY Cargo.toml Cargo.lock ./
 
 COPY ferrules-core/src/correction/dictionaries/ ./dictionaries/
