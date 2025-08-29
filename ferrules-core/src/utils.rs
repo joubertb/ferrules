@@ -7,7 +7,6 @@ use crate::{
 const IMAGE_PADDING: u32 = 5;
 use anyhow::Context;
 use colored::*;
-use pdfium_render::prelude::Pdfium;
 use std::{
     fs::{create_dir, File},
     io::{BufWriter, Write},
@@ -18,25 +17,27 @@ use std::{
 
 pub fn get_doc_length<P: AsRef<Path>>(
     path: P,
-    password: Option<&str>,
+    _password: Option<&str>,
     page_range: Option<Range<usize>>,
 ) -> anyhow::Result<usize> {
-    // TODO : This panic ! should be handlered
-    let pdfium = Pdfium::new(Pdfium::bind_to_statically_linked_library().unwrap());
-    let document = pdfium.load_pdf_from_file(&path, password).unwrap();
-    let pages: Vec<_> = document.pages().iter().enumerate().collect();
+    // Use lopdf instead of pdfium for simple page counting to avoid macOS hanging issue
+    use lopdf::Document;
+
+    let doc = Document::load(path).context("Failed to load PDF with lopdf")?;
+    let page_count = doc.get_pages().len();
+
     match page_range {
         Some(range) => {
-            if range.end > pages.len() {
+            if range.end > page_count {
                 anyhow::bail!(
                     "Page range end ({}) exceeds document length ({})",
                     range.end,
-                    pages.len()
+                    page_count
                 );
             }
             Ok(range.len())
         }
-        None => Ok(pages.len()),
+        None => Ok(page_count),
     }
 }
 
@@ -161,7 +162,7 @@ pub fn save_parsed_document(
                 .context("can't save the doc images")?;
         }
         let html_content = to_html(doc, &doc.doc_name, Some(fig_path.clone())).unwrap();
-        let html_file_out = res_dir_path.join(format!("{}.html", sanitized_doc_name));
+        let html_file_out = res_dir_path.join(format!("{sanitized_doc_name}.html"));
         let file = File::create(&html_file_out)?;
         let mut writer = BufWriter::new(file);
         writer.write_all(html_content.as_bytes())?;
@@ -169,7 +170,7 @@ pub fn save_parsed_document(
 
     if save_markdown {
         let md_content = to_markdown(doc, &doc.doc_name, Some(fig_path.clone())).unwrap();
-        let html_file_out = res_dir_path.join(format!("{}.md", sanitized_doc_name));
+        let html_file_out = res_dir_path.join(format!("{sanitized_doc_name}.md"));
         let file = File::create(&html_file_out)?;
         let mut writer = BufWriter::new(file);
         writer.write_all(md_content.as_bytes())?;
