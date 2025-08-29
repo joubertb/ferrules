@@ -104,7 +104,16 @@ pub fn create_dirs<P: AsRef<Path>>(
     let result_dir_name = format!("{}-results", sanitize_doc_name(doc_name));
     let res_dir_path = match output_dir {
         Some(p) => {
-            let result_dir_path = p.as_ref().to_owned().join(&result_dir_name);
+            let parent_dir = p.as_ref();
+            // Create parent directory if it doesn't exist
+            std::fs::create_dir_all(parent_dir).with_context(|| {
+                format!(
+                    "Failed to create output directory: {}",
+                    parent_dir.display()
+                )
+            })?;
+
+            let result_dir_path = parent_dir.join(&result_dir_name);
             recreate_result_dir(&result_dir_path)?
         }
         None => {
@@ -139,7 +148,7 @@ pub fn save_parsed_document(
     let file_out = res_dir_path.join(format!("{}.json", &sanitized_doc_name));
     let file = File::create(&file_out)?;
     let mut writer = BufWriter::new(file);
-    let doc_json = serde_json::to_string(&doc)?;
+    let doc_json = serde_json::to_string_pretty(&doc)?;
     writer.write_all(doc_json.as_bytes())?;
     // TODO: this is shit, refac
     let fig_path = PathBuf::from_str("figures").unwrap();
