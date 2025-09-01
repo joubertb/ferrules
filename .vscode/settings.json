@@ -1,0 +1,20 @@
+{
+    "workbench.colorCustomizations": {
+        "editorInlayHint.foreground": "#737272aa",
+        "editorInlayHint.background": "#00000000",
+        "titleBar.activeBackground": "#4e0196",
+        "titleBar.activeForeground": "#FFFFFF",
+        "titleBar.inactiveBackground": "#4e0196",
+        "titleBar.inactiveForeground": "#FFFFFF",
+        "titleBar.border": "#4e0196",
+        "activityBar.background": "#4e0196",
+        "activityBar.foreground": "#FFFFFF",
+        "statusBar.background": "#4e0196",
+        "statusBar.foreground": "#FFFFFF",
+        "statusBar.debuggingBackground": "#4e0196",
+        "statusBar.debuggingForeground": "#FFFFFF",
+        "tab.activeBorder": "#4e0196",
+        "iLoveWorkSpaceColors": true,
+        "iLoveWorkSpaceRandom": false
+    }
+}

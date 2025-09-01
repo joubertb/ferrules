@@ -229,7 +229,7 @@ impl JobManager {
             tracing::info!("Cancelled job {}", job_id);
             Ok(())
         } else {
-            Err(format!("Job {} not found or already completed", job_id))
+            Err(format!("Job {job_id} not found or already completed"))
         }
     }
 
@@ -336,7 +336,7 @@ async fn parse_document_handler(
             Json(ApiResponse {
                 success: false,
                 data: None,
-                error: Some(format!("Failed to create temp file: {}", e)),
+                error: Some(format!("Failed to create temp file: {e}")),
             }),
         )
     })?;
@@ -349,7 +349,7 @@ async fn parse_document_handler(
             Json(ApiResponse {
                 success: false,
                 data: None,
-                error: Some(format!("Failed to get next field: {}", e)),
+                error: Some(format!("Failed to get next field: {e}")),
             }),
         )
     })? {
@@ -365,7 +365,7 @@ async fn parse_document_handler(
                         Json(ApiResponse {
                             success: false,
                             data: None,
-                            error: Some(format!("Failed to read chunk: {}", e)),
+                            error: Some(format!("Failed to read chunk: {e}")),
                         }),
                     )
                 })? {
@@ -375,7 +375,7 @@ async fn parse_document_handler(
                             Json(ApiResponse {
                                 success: false,
                                 data: None,
-                                error: Some(format!("Failed to write to temp file: {}", e)),
+                                error: Some(format!("Failed to write to temp file: {e}")),
                             }),
                         )
                     })?;
@@ -386,7 +386,7 @@ async fn parse_document_handler(
                         Json(ApiResponse {
                             success: false,
                             data: None,
-                            error: Some(format!("Failed to flush temp file: {}", e)),
+                            error: Some(format!("Failed to flush temp file: {e}")),
                         }),
                     )
                 })?;
@@ -396,7 +396,7 @@ async fn parse_document_handler(
                         Json(ApiResponse {
                             success: false,
                             data: None,
-                            error: Some(format!("Failed to seek temp file: {}", e)),
+                            error: Some(format!("Failed to seek temp file: {e}")),
                         }),
                     )
                 })?;
@@ -408,7 +408,7 @@ async fn parse_document_handler(
                         Json(ApiResponse {
                             success: false,
                             data: None,
-                            error: Some(format!("Failed to read options: {}", e)),
+                            error: Some(format!("Failed to read options: {e}")),
                         }),
                     )
                 })?;
@@ -419,7 +419,7 @@ async fn parse_document_handler(
                             Json(ApiResponse {
                                 success: false,
                                 data: None,
-                                error: Some(format!("Failed to parse options: {}", e)),
+                                error: Some(format!("Failed to parse options: {e}")),
                             }),
                         )
                     },
@@ -435,7 +435,7 @@ async fn parse_document_handler(
             Json(ApiResponse {
                 success: false,
                 data: None,
-                error: Some(format!("Failed to open temp file: {}", e)),
+                error: Some(format!("Failed to open temp file: {e}")),
             }),
         )
     })?;
@@ -447,7 +447,7 @@ async fn parse_document_handler(
                 Json(ApiResponse {
                     success: false,
                     data: None,
-                    error: Some(format!("Failed to memory map file: {}", e)),
+                    error: Some(format!("Failed to memory map file: {e}")),
                 }),
             )
         })?
@@ -508,7 +508,7 @@ async fn parse_document_handler(
                     Json(ApiResponse {
                         success: false,
                         data: None,
-                        error: Some(format!("Failed to convert to markdown: {}", e)),
+                        error: Some(format!("Failed to convert to markdown: {e}")),
                     }),
                 )
             })?;
@@ -587,7 +587,7 @@ async fn parse_document_sse_handler(
             Json(ApiResponse {
                 success: false,
                 data: None,
-                error: Some(format!("Failed to create temp file: {}", e)),
+                error: Some(format!("Failed to create temp file: {e}")),
             }),
         )
     })?;
@@ -600,7 +600,7 @@ async fn parse_document_sse_handler(
             Json(ApiResponse {
                 success: false,
                 data: None,
-                error: Some(format!("Failed to get next field: {}", e)),
+                error: Some(format!("Failed to get next field: {e}")),
             }),
         )
     })? {
@@ -615,7 +615,7 @@ async fn parse_document_sse_handler(
                         Json(ApiResponse {
                             success: false,
                             data: None,
-                            error: Some(format!("Failed to read chunk: {}", e)),
+                            error: Some(format!("Failed to read chunk: {e}")),
                         }),
                     )
                 })? {
@@ -625,7 +625,7 @@ async fn parse_document_sse_handler(
                             Json(ApiResponse {
                                 success: false,
                                 data: None,
-                                error: Some(format!("Failed to write to temp file: {}", e)),
+                                error: Some(format!("Failed to write to temp file: {e}")),
                             }),
                         )
                     })?;
@@ -636,7 +636,7 @@ async fn parse_document_sse_handler(
                         Json(ApiResponse {
                             success: false,
                             data: None,
-                            error: Some(format!("Failed to flush temp file: {}", e)),
+                            error: Some(format!("Failed to flush temp file: {e}")),
                         }),
                     )
                 })?;
@@ -646,7 +646,7 @@ async fn parse_document_sse_handler(
                         Json(ApiResponse {
                             success: false,
                             data: None,
-                            error: Some(format!("Failed to seek temp file: {}", e)),
+                            error: Some(format!("Failed to seek temp file: {e}")),
                         }),
                     )
                 })?;
@@ -658,7 +658,7 @@ async fn parse_document_sse_handler(
                         Json(ApiResponse {
                             success: false,
                             data: None,
-                            error: Some(format!("Failed to read options: {}", e)),
+                            error: Some(format!("Failed to read options: {e}")),
                         }),
                     )
                 })?;
@@ -669,7 +669,7 @@ async fn parse_document_sse_handler(
                             Json(ApiResponse {
                                 success: false,
                                 data: None,
-                                error: Some(format!("Failed to parse options: {}", e)),
+                                error: Some(format!("Failed to parse options: {e}")),
                             }),
                         )
                     },
@@ -706,7 +706,7 @@ async fn parse_document_sse_handler(
             Json(ApiResponse {
                 success: false,
                 data: None,
-                error: Some(format!("Failed to open temp file: {}", e)),
+                error: Some(format!("Failed to open temp file: {e}")),
             }),
         )
     })?;
@@ -718,7 +718,7 @@ async fn parse_document_sse_handler(
                 Json(ApiResponse {
                     success: false,
                     data: None,
-                    error: Some(format!("Failed to memory map file: {}", e)),
+                    error: Some(format!("Failed to memory map file: {e}")),
                 }),
             )
         })?
@@ -756,7 +756,7 @@ async fn parse_document_sse_handler(
             Err(e) => {
                 let _ = tx_clone
                     .send(ParseEvent::Error {
-                        message: format!("Failed to get page count: {}", e),
+                        message: format!("Failed to get page count: {e}"),
                     })
                     .await;
                 job_manager.complete_job(job_id).await;

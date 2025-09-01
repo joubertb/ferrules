@@ -205,11 +205,11 @@ where
 
     span.record(
         "layout_queue_time_ms",
-        format!("{:?}", layout_queue_time_ms),
+        format!("{layout_queue_time_ms:?}"),
     );
     span.record(
         "layout_parse_duration_ms",
-        format!("{:?}", layout_parse_duration_ms),
+        format!("{layout_parse_duration_ms:?}"),
     );
 
     span.record(
@@ -230,8 +230,8 @@ fn debug_page(
     page_layout: &[LayoutBBox],
     elements: &[Element],
 ) -> anyhow::Result<()> {
-    let output_file = tmp_dir.join(format!("page_{}.png", page_idx));
-    let final_output_file = tmp_dir.join(format!("page_blocks_{}.png", page_idx));
+    let output_file = tmp_dir.join(format!("page_{page_idx}.png"));
+    let final_output_file = tmp_dir.join(format!("page_blocks_{page_idx}.png"));
     let out_img = draw_text_lines(text_lines, page_image, need_ocr)?;
     let out_img = draw_layout_bboxes(page_layout, &out_img.into())?;
     // Draw the final prediction -

@@ -114,7 +114,7 @@ impl TextCorrector for FerrulesCorrectionEngine {
         // Character corrections disabled - only apply dictionary corrections
         let final_corrected = self.correct_words(text);
 
-        if final_corrected != text {}
+        let _ = final_corrected != text;
 
         final_corrected
     }

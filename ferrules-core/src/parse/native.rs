@@ -234,7 +234,16 @@ fn handle_parse_native_req(
         sender_tx,
         count_only,
     } = req;
-    let mut document = pdfium.load_pdf_from_byte_slice(&doc_data, password.as_deref())?;
+
+    // Set document context for font corruption analysis
+    #[cfg(feature = "correction-engine")]
+    crate::correction::font_analysis::set_document_context(doc_data.clone());
+
+    // Use original PDF data directly - corrections are applied at character level during text extraction
+    let processed_pdf_data = doc_data.to_vec();
+    eprintln!("🔧 DEBUG: Using original PDF without preprocessing - corrections applied at text level");
+
+    let mut document = pdfium.load_pdf_from_byte_slice(&processed_pdf_data, password.as_deref())?;
     let mut pages: Vec<_> = document.pages_mut().iter().enumerate().collect();
 
     // If only counting pages, send the count and return early
@@ -277,6 +286,7 @@ fn handle_parse_native_req(
     } else {
         pages
     };
+    tracing::debug!("Starting to process pages");
     for (page_id, mut page) in pages {
         let parsing_result = parse_page_native(
             page_id,
@@ -287,6 +297,12 @@ fn handle_parse_native_req(
         );
         sender_tx.blocking_send(parsing_result)?
     }
+    tracing::debug!("Finished processing pages");
+
+    // Clear document context after parsing is complete
+    #[cfg(feature = "correction-engine")]
+    crate::correction::font_analysis::clear_document_context();
+
     Ok(())
 }
 
@@ -297,7 +313,7 @@ pub fn start_native_parser(mut input_rx: Receiver<(ParseNativeRequest, Span)>) {
     while let Some((req, parent_span)) = input_rx.blocking_recv() {
         match handle_parse_native_req(&pdfium, req, parent_span) {
             Ok(_) => {}
-            Err(e) => eprintln!("error parsing request natively : {:?}", e),
+            Err(e) => eprintln!("error parsing request natively : {e:?}"),
         }
     }
 }

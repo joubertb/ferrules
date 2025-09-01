@@ -66,14 +66,40 @@ pub fn detect_inline_subscript_pattern(_text: &str) -> Option<(String, String)> 
 ///
 /// When the `modtext` feature is enabled, wraps formula text in XML-style tags.
 /// When disabled, returns the text unchanged.
+/// Font corrections are applied before formatting.
 pub fn format_formula_text(text: &str) -> String {
+    // Debug: Log what text is being processed at formula level
+    if text.contains("n") && text.contains("i") {
+        eprintln!("📋 FORMULA DEBUG: format_formula_text processing: {}", text.chars().take(200).collect::<String>());
+    }
+    
+    // Apply font corrections before formatting
+    let corrected_text = crate::correction::correct_assembled_text(text);
+    
+    // Debug: Check if font corrections changed anything
+    if corrected_text != text {
+        eprintln!("🔧 FORMULA DEBUG: Font corrections applied, text changed");
+    }
+    
+    // Apply span-level corrections for mathematical context patterns after font corrections
+    // Debug: Check what text is being passed to span corrections
+    if corrected_text.contains("n<sub>j</sub> i") || corrected_text.contains("</sub> i") {
+        eprintln!("🎯 FORMULA TARGET: Found target pattern before span corrections: {}", corrected_text.chars().take(200).collect::<String>());
+    }
+    
+    let (final_corrected, span_corrections_applied) = crate::entities::apply_span_level_corrections(&corrected_text);
+    if span_corrections_applied {
+        eprintln!("🔧 FORMULA CORRECTION: Applied span-level corrections in format_formula_text");
+        eprintln!("🔧 FORMULA RESULT: {}", final_corrected.chars().take(200).collect::<String>());
+    }
+    
     #[cfg(feature = "modtext")]
     {
-        format!("<formula>{}</formula>", text)
+        format!("<formula>{final_corrected}</formula>")
     }
 
     #[cfg(not(feature = "modtext"))]
     {
-        text.to_string()
+        final_corrected
     }
 }

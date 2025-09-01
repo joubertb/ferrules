@@ -37,6 +37,14 @@ pub mod dictionary;
 pub mod engine;
 #[cfg(feature = "correction-engine")]
 pub mod traits;
+#[cfg(feature = "correction-engine")]
+pub mod font_analysis;
+#[cfg(feature = "correction-engine")]
+pub mod unicode_validator;
+#[cfg(feature = "correction-engine")]
+pub mod glyph_mapping;
+#[cfg(feature = "correction-engine")]
+pub mod font_debug;
 
 // Re-export public API when correction engine is enabled
 #[cfg(feature = "correction-engine")]
@@ -45,6 +53,11 @@ pub use config::CorrectionConfig;
 pub use engine::{get_global_correction_engine, initialize_from_environment};
 #[cfg(feature = "correction-engine")]
 pub use traits::*;
+#[cfg(feature = "correction-engine")]
+pub use font_analysis::*;
+#[cfg(feature = "correction-engine")]
+pub use glyph_mapping::*;
+
 
 use crate::blocks::Block;
 use anyhow::Result;
@@ -67,8 +80,7 @@ pub fn correct_block(block: &mut Block) {
         ensure_initialized();
         if let Some(corrector) = get_text_corrector() {
             corrector.correct_block(block);
-        } else {
-        }
+        } 
     }
 
     #[cfg(not(feature = "correction-engine"))]
@@ -207,6 +219,33 @@ pub fn correct_text(text: &str) -> String {
             // No fallback - return original text if corrector unavailable
             text.to_string()
         }
+    }
+
+    #[cfg(not(feature = "correction-engine"))]
+    {
+        text.to_string()
+    }
+}
+
+/// Apply word-level corrections to assembled text
+///
+/// This corrects corruption patterns that appear in assembled words after
+/// individual characters have been extracted from the PDF. It handles both
+/// plain text and text within HTML-like tags (such as formula elements).
+///
+/// This is the main entry point for word-level corrections from merge.rs and blocks.rs.
+///
+/// # Example
+/// ```rust
+/// use ferrules_core::correction;
+///
+/// let corrected = correction::correct_assembled_text("ot(erw)se");
+/// assert_eq!(corrected, "otherwise");
+/// ```
+pub fn correct_assembled_text(text: &str) -> String {
+    #[cfg(feature = "correction-engine")]
+    {
+        font_analysis::correct_assembled_text(text)
     }
 
     #[cfg(not(feature = "correction-engine"))]

@@ -148,7 +148,15 @@ pub fn save_parsed_document(
     let file_out = res_dir_path.join(format!("{}.json", &sanitized_doc_name));
     let file = File::create(&file_out)?;
     let mut writer = BufWriter::new(file);
-    let doc_json = serde_json::to_string_pretty(&doc)?;
+    let mut doc_json = serde_json::to_string_pretty(&doc)?;
+    
+    // Apply final span-level corrections to JSON output as a safety net
+    // This catches any remaining NimbusRomNo9L font corruption patterns
+    let corrections_applied = apply_final_json_corrections(&mut doc_json);
+    if corrections_applied > 0 {
+        eprintln!("🔧 FINAL CORRECTION: Applied {corrections_applied} span-level corrections to final JSON output");
+    }
+    
     writer.write_all(doc_json.as_bytes())?;
     // TODO: this is shit, refac
     let fig_path = PathBuf::from_str("figures").unwrap();
@@ -191,4 +199,51 @@ pub fn save_parsed_document(
     );
 
     Ok(())
+}
+
+/// Apply final corrections to JSON output to fix any remaining font corruption patterns
+/// 
+/// This is a safety net that catches NimbusRomNo9L font corruption patterns that weren't
+/// corrected during earlier processing stages. Specifically targets mathematical notation
+/// where ')' characters appear as 'i' in subscript contexts.
+fn apply_final_json_corrections(json_content: &mut String) -> usize {
+    let mut corrections_count = 0;
+    
+    // Fix mathematical subscript patterns like "n<sub>j</sub> i" → "n<sub>j</sub>)"
+    if json_content.contains("n<sub>j</sub> i") {
+        let original_count = json_content.matches("n<sub>j</sub> i").count();
+        *json_content = json_content.replace("n<sub>j</sub> i", "n<sub>j</sub>)");
+        corrections_count += original_count;
+        eprintln!("🔧 JSON CORRECTION: Fixed {original_count} instances of 'n<sub>j</sub> i' → 'n<sub>j</sub>)'");
+    }
+    
+    // Fix other subscript patterns like "n<sub>i</sub> i" → "n<sub>i</sub>)"
+    if json_content.contains("n<sub>i</sub> i") {
+        let original_count = json_content.matches("n<sub>i</sub> i").count();
+        *json_content = json_content.replace("n<sub>i</sub> i", "n<sub>i</sub>)");
+        corrections_count += original_count;
+        eprintln!("🔧 JSON CORRECTION: Fixed {original_count} instances of 'n<sub>i</sub> i' → 'n<sub>i</sub>)'");
+    }
+    
+    // Fix general subscript patterns like "</sub> i" → "</sub>)" in mathematical contexts
+    // Be more specific to avoid false positives
+    if json_content.contains("</sub> i ∈") || json_content.contains("</sub> i denotes") || json_content.contains("</sub> i −") {
+        // Only replace when followed by mathematical symbols
+        let patterns = [
+            ("</sub> i ∈", "</sub>) ∈"),
+            ("</sub> i denotes", "</sub>) denotes"), 
+            ("</sub> i −", "</sub>) −"),
+        ];
+        
+        for (pattern, replacement) in patterns {
+            if json_content.contains(pattern) {
+                let count = json_content.matches(pattern).count();
+                *json_content = json_content.replace(pattern, replacement);
+                corrections_count += count;
+                eprintln!("🔧 JSON CORRECTION: Fixed {count} instances of '{pattern}' → '{replacement}'");
+            }
+        }
+    }
+    
+    corrections_count
 }

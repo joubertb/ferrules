@@ -6,7 +6,22 @@ use crate::{
     blocks::{Block, BlockType, ImageBlock, List, TextBlock, Title, TitleLevel},
     entities::{Element, ElementID, ElementType, Line, PageID},
     layout::model::LayoutBBox,
+    correction,
 };
+
+/// Apply word-level font corrections to text
+fn apply_corrections_to_text(text: String) -> String {
+    // Apply font corrections first
+    let corrected_text = correction::correct_assembled_text(&text);
+    
+    // Apply span-level corrections for mathematical context patterns
+    let (final_corrected, span_corrections_applied) = crate::entities::apply_span_level_corrections(&corrected_text);
+    if span_corrections_applied {
+        eprintln!("🔧 TEXT BLOCK CORRECTION: Applied span-level corrections in regular text block");
+    }
+    
+    final_corrected
+}
 
 /// This constant defines the minimum required intersection ratio between the bounding box of an
 /// OCR-detected text line and a text block detected through layout analysis.
@@ -211,7 +226,7 @@ pub(crate) fn merge_elements_into_blocks(
                 let text_block = Block {
                     id: block_id,
                     kind: crate::blocks::BlockType::TextBlock(TextBlock {
-                        text: curr_el.text_block.text,
+                        text: apply_corrections_to_text(curr_el.text_block.text),
                     }),
                     pages_id: vec![curr_el.page_id],
                     bbox: curr_el.bbox,
@@ -275,7 +290,7 @@ pub(crate) fn merge_elements_into_blocks(
                             let text_block = Block {
                                 id: block_id,
                                 kind: crate::blocks::BlockType::TextBlock(TextBlock {
-                                    text: curr_el.text_block.text,
+                                    text: apply_corrections_to_text(curr_el.text_block.text),
                                 }),
                                 pages_id: vec![curr_el.page_id],
                                 bbox: curr_el.bbox,
@@ -315,7 +330,7 @@ pub(crate) fn merge_elements_into_blocks(
                                     let text_block = Block {
                                         id: block_id,
                                         kind: crate::blocks::BlockType::TextBlock(TextBlock {
-                                            text: curr_el.text_block.text,
+                                            text: apply_corrections_to_text(curr_el.text_block.text),
                                         }),
                                         pages_id: vec![curr_el.page_id],
                                         bbox: curr_el.bbox,
@@ -388,7 +403,7 @@ pub(crate) fn merge_elements_into_blocks(
                 let mut header_block = Block {
                     id: block_id,
                     kind: BlockType::Header(TextBlock {
-                        text: curr_el.text_block.text,
+                        text: apply_corrections_to_text(curr_el.text_block.text),
                     }),
                     pages_id: vec![curr_el.page_id],
                     bbox: curr_el.bbox,
@@ -409,7 +424,7 @@ pub(crate) fn merge_elements_into_blocks(
                 let mut footer_block = Block {
                     id: block_id,
                     kind: BlockType::Footer(TextBlock {
-                        text: curr_el.text_block.text,
+                        text: apply_corrections_to_text(curr_el.text_block.text),
                     }),
                     pages_id: vec![curr_el.page_id],
                     bbox: curr_el.bbox,
@@ -434,7 +449,7 @@ pub(crate) fn merge_elements_into_blocks(
                     id: block_id,
                     kind: BlockType::Title(Title {
                         level: *lvl,
-                        text: curr_el.text_block.text,
+                        text: apply_corrections_to_text(curr_el.text_block.text),
                     }),
                     pages_id: vec![curr_el.page_id],
                     bbox: curr_el.bbox,

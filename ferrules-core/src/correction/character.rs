@@ -56,10 +56,8 @@ impl CharacterCorrector for UniversalCharacterCorrector {
 
         // Apply Unicode quote fixes AFTER all other processing
         corrected = corrected
-            .replace('\u{201C}', "\"") // Left double quotation mark
-            .replace('\u{201D}', "\"") // Right double quotation mark
-            .replace('\u{2018}', "'") // Left single quotation mark
-            .replace('\u{2019}', "'"); // Right single quotation mark
+            .replace(['\u{201C}', '\u{201D}'], "\"") // Right double quotation mark
+            .replace(['\u{2018}', '\u{2019}'], "'"); // Right single quotation mark
 
         corrected
     }
@@ -125,10 +123,8 @@ fn apply_smart_character_corrections(text: &str) -> String {
 
     // Apply Unicode quote fixes
     corrected = corrected
-        .replace('\u{201C}', "\"")
-        .replace('\u{201D}', "\"")
-        .replace('\u{2018}', "'")
-        .replace('\u{2019}', "'");
+        .replace(['\u{201C}', '\u{201D}'], "\"")
+        .replace(['\u{2018}', '\u{2019}'], "'");
 
     corrected
 }

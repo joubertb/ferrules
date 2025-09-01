@@ -12,7 +12,7 @@ use tracing::info;
 
 // Thread-local spell checker - each thread gets its own Dictionary instance
 thread_local! {
-    static SPELL_CHECKER: RefCell<Option<Dictionary>> = RefCell::new(None);
+    static SPELL_CHECKER: RefCell<Option<Dictionary>> = const { RefCell::new(None) };
     static FUZZY_MATCHER: RefCell<SkimMatcherV2> = RefCell::new(SkimMatcherV2::default());
 }
 

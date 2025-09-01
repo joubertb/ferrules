@@ -7,7 +7,7 @@ repository = "https://github.com/aminediro/ferrules"
 [features]
 # Features defined centrally in workspace root Cargo.toml comments
 default = ["correction-engine", "modtext"]
-correction-engine = ["dep:moka", "dep:once_cell", "dep:fuzzy-matcher", "dep:spellbook", "dep:strsim"]
+correction-engine = ["dep:moka", "dep:once_cell", "dep:fuzzy-matcher", "dep:spellbook", "dep:strsim", "dep:ucd"]
 modtext = []
 
 # Font analyzer removed - universal character corrections work perfectly
@@ -36,6 +36,8 @@ pdfium-render = { version = "0.8.27", features = [
     "sync",
 ] }
 lopdf = "0.34.0"
+adobe-cmap-parser = "0.4.1"
+flate2 = "1.0"
 # Inference
 image = "0.25.5"
 ndarray = "0.16.1"
@@ -53,6 +55,7 @@ once_cell = { version = "1.19", optional = true }
 fuzzy-matcher = { version = "0.3", optional = true }
 spellbook = { version = "0.3.4", optional = true }
 strsim = { version = "0.10", optional = true }
+ucd = { version = "0.1.1", optional = true }
 
 [target.'cfg(target_os = "macos")'.dependencies]
 ort = { version = "=2.0.0-rc.9", features = ["coreml", "fetch-models"] }
