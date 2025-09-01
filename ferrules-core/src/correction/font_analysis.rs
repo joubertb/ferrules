@@ -341,31 +341,41 @@ fn extract_font_objects(doc: &Document, target_font_name: &str, corruptions: &mu
                                     font_objects.push(object.clone());
                                 }
                                 
-                                // SPECIAL HANDLING: Check for CMSY fonts that likely have corruption
-                                if base_font_name.contains("CMSY") {
-                                    eprintln!("🎯 CMSY FONT DETECTED: {base_font_name} - checking for parentheses corruption");
-                                    
-                                    // Check if it has ToUnicode CMap
-                                    if let Ok(tounicode_obj) = dict.get(b"ToUnicode") {
-                                        eprintln!("🎯 DEBUG: CMSY font {base_font_name} has ToUnicode CMap!");
-                                        if let Err(e) = dump_tounicode_cmap(doc, tounicode_obj, base_font_name) {
-                                            eprintln!("⚠️  DEBUG: Failed to dump ToUnicode CMap for {base_font_name}: {e}");
-                                        }
-                                    } else {
-                                        eprintln!("🚨 CRITICAL: CMSY font {base_font_name} has NO ToUnicode CMap - likely source of corruption!");
-                                        
-                                        // This is a Type 1 Builtin font - analyze it for corruption
-                                        analyze_type1_builtin_font_corruption(doc, dict, base_font_name, corruptions);
-                                        
-                                        // Always include CMSY fonts for processing
-                                        font_objects.push(object.clone());
-                                    }
-                                } else if let Ok(tounicode_obj) = dict.get(b"ToUnicode") {
+                                // GENERALIZED HANDLING: Check all fonts for ToUnicode CMap and potential corruption
+                                if let Ok(tounicode_obj) = dict.get(b"ToUnicode") {
                                     eprintln!("🎯 DEBUG: Font {base_font_name} has ToUnicode CMap!");
                                     
                                     // Extract and dump the CMap regardless of name match for debugging
                                     if let Err(e) = dump_tounicode_cmap(doc, tounicode_obj, base_font_name) {
                                         eprintln!("⚠️  DEBUG: Failed to dump ToUnicode CMap for {base_font_name}: {e}");
+                                    }
+                                } else {
+                                    eprintln!("🚨 POTENTIAL CORRUPTION: Font {base_font_name} has NO ToUnicode CMap - checking for Type 1 builtin corruption");
+                                    
+                                    // Check if this is a Type 1 font that might use StandardEncoding
+                                    if let Ok(subtype) = dict.get(b"Subtype") {
+                                        if let Ok(subtype_name) = subtype.as_name_str() {
+                                            if subtype_name == "Type1" {
+                                                eprintln!("🔍 TYPE1 FONT: {base_font_name} is Type 1 - analyzing for builtin encoding corruption");
+                                                analyze_type1_builtin_font_corruption(doc, dict, base_font_name, corruptions);
+                                                font_objects.push(object.clone());
+                                            } else {
+                                                eprintln!("📄 NON-TYPE1: Font {base_font_name} is {subtype_name} without ToUnicode - checking encoding");
+                                                // Still try to analyze encoding for other font types
+                                                if let Ok(encoding_ref) = dict.get(b"Encoding") {
+                                                    analyze_encoding_for_corruption(doc, encoding_ref, base_font_name, corruptions);
+                                                    font_objects.push(object.clone());
+                                                }
+                                            }
+                                        }
+                                    } else {
+                                        // No subtype specified - could still be Type 1, try both approaches
+                                        eprintln!("🔍 UNKNOWN TYPE: Font {base_font_name} has no subtype - trying both Type 1 and encoding analysis");
+                                        analyze_type1_builtin_font_corruption(doc, dict, base_font_name, corruptions);
+                                        if let Ok(encoding_ref) = dict.get(b"Encoding") {
+                                            analyze_encoding_for_corruption(doc, encoding_ref, base_font_name, corruptions);
+                                        }
+                                        font_objects.push(object.clone());
                                     }
                                 }
                             }
@@ -1390,7 +1400,7 @@ mod tests {
 }
 
 /// Analyze font Encoding for corruption patterns (for fonts without ToUnicode CMaps)
-/// Analyzes Type 1 Builtin fonts (like CMSY) for corruption patterns
+/// Analyzes Type 1 Builtin fonts for StandardEncoding corruption patterns
 /// These fonts don't have Differences arrays but use StandardEncoding or similar builtin encodings
 fn analyze_type1_builtin_font_corruption(doc: &Document, font_dict: &lopdf::Dictionary, font_name: &str, corruptions: &mut HashMap<u32, char>) {
     eprintln!("🔍 TYPE1 BUILTIN ANALYSIS: Analyzing {font_name} for StandardEncoding corruption");
@@ -1421,7 +1431,7 @@ fn analyze_type1_builtin_font_corruption(doc: &Document, font_dict: &lopdf::Dict
         eprintln!("📋 TYPE1 DEFAULT: {font_name} uses default StandardEncoding");
         eprintln!("🚨 CORRUPTION DETECTED: {font_name} should use StandardEncoding but produces 'h'/'i' corruption");
         
-        // Add corrections for the known CMSY corruption pattern
+        // Add corrections for the known Type 1 StandardEncoding corruption pattern
         corruptions.insert(0x28, '(');  // Fix 0x28 -> '(' (not 'h')
         corruptions.insert(0x29, ')');  // Fix 0x29 -> ')' (not 'i')
         
