@@ -4,23 +4,15 @@ use tracing::instrument;
 
 use crate::{
     blocks::{Block, BlockType, ImageBlock, List, TextBlock, Title, TitleLevel},
+    correction,
     entities::{Element, ElementID, ElementType, Line, PageID},
     layout::model::LayoutBBox,
-    correction,
 };
 
 /// Apply word-level font corrections to text
 fn apply_corrections_to_text(text: String) -> String {
     // Apply font corrections first
-    let corrected_text = correction::correct_assembled_text(&text);
-    
-    // Apply span-level corrections for mathematical context patterns
-    let (final_corrected, span_corrections_applied) = crate::entities::apply_span_level_corrections(&corrected_text);
-    if span_corrections_applied {
-        eprintln!("🔧 TEXT BLOCK CORRECTION: Applied span-level corrections in regular text block");
-    }
-    
-    final_corrected
+    correction::correct_assembled_text(&text)
 }
 
 /// This constant defines the minimum required intersection ratio between the bounding box of an
@@ -215,6 +207,10 @@ pub(crate) fn merge_elements_into_blocks(
     elements: Vec<Element>,
     title_level: HashMap<(PageID, ElementID), TitleLevel>,
 ) -> anyhow::Result<Vec<Block>> {
+    eprintln!(
+        "🔧 merge_elements_into_blocks CALLED with {} elements",
+        elements.len()
+    );
     let mut element_it = elements.into_iter().peekable();
 
     let mut blocks = Vec::new();
@@ -223,6 +219,24 @@ pub(crate) fn merge_elements_into_blocks(
     while let Some(mut curr_el) = element_it.next() {
         match &mut curr_el.kind {
             ElementType::Text => {
+                eprintln!(
+                    "📄 TEXT ELEMENT: {}",
+                    curr_el.text_block.text.chars().take(50).collect::<String>()
+                );
+                if curr_el.text_block.text.contains("ei,j")
+                    || curr_el.text_block.text.contains("ej,i")
+                    || curr_el.text_block.text.contains("δ")
+                {
+                    eprintln!(
+                        "📄 *** FOUND ei,j/δ in TEXT: {}",
+                        curr_el
+                            .text_block
+                            .text
+                            .chars()
+                            .take(100)
+                            .collect::<String>()
+                    );
+                }
                 let text_block = Block {
                     id: block_id,
                     kind: crate::blocks::BlockType::TextBlock(TextBlock {
@@ -248,6 +262,15 @@ pub(crate) fn merge_elements_into_blocks(
                 blocks.push(text_block);
             }
             ElementType::Formula => {
+                eprintln!(
+                    "🧮 FORMULA ELEMENT: Processing formula text: {}",
+                    curr_el
+                        .text_block
+                        .text
+                        .chars()
+                        .take(100)
+                        .collect::<String>()
+                );
                 let formula_block = Block {
                     id: block_id,
                     kind: crate::blocks::BlockType::TextBlock(TextBlock {
@@ -330,7 +353,9 @@ pub(crate) fn merge_elements_into_blocks(
                                     let text_block = Block {
                                         id: block_id,
                                         kind: crate::blocks::BlockType::TextBlock(TextBlock {
-                                            text: apply_corrections_to_text(curr_el.text_block.text),
+                                            text: apply_corrections_to_text(
+                                                curr_el.text_block.text,
+                                            ),
                                         }),
                                         pages_id: vec![curr_el.page_id],
                                         bbox: curr_el.bbox,

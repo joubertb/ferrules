@@ -203,10 +203,7 @@ where
         need_ocr,
     };
 
-    span.record(
-        "layout_queue_time_ms",
-        format!("{layout_queue_time_ms:?}"),
-    );
+    span.record("layout_queue_time_ms", format!("{layout_queue_time_ms:?}"));
     span.record(
         "layout_parse_duration_ms",
         format!("{layout_parse_duration_ms:?}"),

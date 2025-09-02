@@ -36,15 +36,15 @@ pub mod dictionary;
 #[cfg(feature = "correction-engine")]
 pub mod engine;
 #[cfg(feature = "correction-engine")]
-pub mod traits;
-#[cfg(feature = "correction-engine")]
 pub mod font_analysis;
 #[cfg(feature = "correction-engine")]
-pub mod unicode_validator;
+pub mod font_debug;
 #[cfg(feature = "correction-engine")]
 pub mod glyph_mapping;
 #[cfg(feature = "correction-engine")]
-pub mod font_debug;
+pub mod traits;
+#[cfg(feature = "correction-engine")]
+pub mod unicode_validator;
 
 // Re-export public API when correction engine is enabled
 #[cfg(feature = "correction-engine")]
@@ -52,12 +52,11 @@ pub use config::CorrectionConfig;
 #[cfg(feature = "correction-engine")]
 pub use engine::{get_global_correction_engine, initialize_from_environment};
 #[cfg(feature = "correction-engine")]
-pub use traits::*;
-#[cfg(feature = "correction-engine")]
 pub use font_analysis::*;
 #[cfg(feature = "correction-engine")]
 pub use glyph_mapping::*;
-
+#[cfg(feature = "correction-engine")]
+pub use traits::*;
 
 use crate::blocks::Block;
 use anyhow::Result;
@@ -80,7 +79,7 @@ pub fn correct_block(block: &mut Block) {
         ensure_initialized();
         if let Some(corrector) = get_text_corrector() {
             corrector.correct_block(block);
-        } 
+        }
     }
 
     #[cfg(not(feature = "correction-engine"))]
@@ -144,9 +143,12 @@ pub fn correct_blocks(blocks: &mut [Block]) {
 pub fn correct_characters(text: &str) -> String {
     #[cfg(feature = "correction-engine")]
     {
-        // Character substitutions disabled to prevent false changes
-        // But keep basic UTF-8 control character filtering
-        text.chars()
+        // Apply mathematical symbol corrections first
+        let math_corrected = character::fix_math_symbol_corruptions(text);
+
+        // Then filter control characters
+        math_corrected
+            .chars()
             .filter(|&c| !c.is_control() || c == '\n' || c == '\r' || c == '\t')
             .collect()
     }

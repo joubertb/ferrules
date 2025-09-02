@@ -1,7 +1,7 @@
+use crate::correction;
 use crate::entities::{BBox, Element, ElementType, PageID};
 use anyhow::bail;
 use serde::{Deserialize, Serialize};
-use crate::correction;
 
 pub type TitleLevel = u8;
 
@@ -10,19 +10,15 @@ fn apply_word_corrections(text: &mut String) {
     // Debug: Log what text we're working with at the block level
     if text.contains("n<sub>j</sub> i") || text.contains("<formula>") {
         eprintln!("🔍 BLOCK DEBUG: apply_word_corrections called with text length {} containing target patterns", text.len());
-        eprintln!("🔍 BLOCK DEBUG: Text preview: {}", text.chars().take(200).collect::<String>());
+        eprintln!(
+            "🔍 BLOCK DEBUG: Text preview: {}",
+            text.chars().take(200).collect::<String>()
+        );
     }
-    
+
     let corrected = correction::correct_assembled_text(text);
     if corrected != *text {
         *text = corrected;
-    }
-    
-    // Apply span-level corrections for mathematical contexts
-    let (span_corrected, span_corrections_applied) = crate::entities::apply_span_level_corrections(text);
-    if span_corrections_applied {
-        *text = span_corrected;
-        eprintln!("🔧 BLOCK DEBUG: Span-level corrections applied successfully");
     }
 }
 
@@ -122,10 +118,10 @@ impl Block {
                 if let ElementType::ListItem = &element.kind {
                     self.bbox.merge(&element.bbox);
                     let mut txt = element.text_block.text.trim().to_string();
-                    
+
                     // Apply word-level corrections to list item text
                     apply_word_corrections(&mut txt);
-                    
+
                     list.items.push(txt);
                     Ok(())
                 } else {
@@ -136,10 +132,10 @@ impl Block {
                 if let ElementType::Header = &element.kind {
                     self.bbox.merge(&element.bbox);
                     header.text.push_str(&element.text_block.text);
-                    
+
                     // Apply word-level corrections to header text
                     apply_word_corrections(&mut header.text);
-                    
+
                     Ok(())
                 } else {
                     bail!("can't merge element in Header")
@@ -149,10 +145,10 @@ impl Block {
                 if let ElementType::Footer = &element.kind {
                     self.bbox.merge(&element.bbox);
                     footer.text.push_str(&element.text_block.text);
-                    
+
                     // Apply word-level corrections to footer text
                     apply_word_corrections(&mut footer.text);
-                    
+
                     Ok(())
                 } else {
                     bail!("can't merge element in Footer")

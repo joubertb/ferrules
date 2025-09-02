@@ -141,7 +141,7 @@ async fn handle_request(
         layout_queue_time_ms,
     });
     // Handle the case where the receiver is dropped (due to cancellation)
-    if let Err(_) = metadata.response_tx.send(layout_result) {
+    if metadata.response_tx.send(layout_result).is_err() {
         tracing::debug!(
             "Layout parsing result receiver dropped (likely due to cancellation) for page {}",
             page_id

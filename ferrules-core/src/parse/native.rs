@@ -241,7 +241,9 @@ fn handle_parse_native_req(
 
     // Use original PDF data directly - corrections are applied at character level during text extraction
     let processed_pdf_data = doc_data.to_vec();
-    eprintln!("🔧 DEBUG: Using original PDF without preprocessing - corrections applied at text level");
+    eprintln!(
+        "🔧 DEBUG: Using original PDF without preprocessing - corrections applied at text level"
+    );
 
     let mut document = pdfium.load_pdf_from_byte_slice(&processed_pdf_data, password.as_deref())?;
     let mut pages: Vec<_> = document.pages_mut().iter().enumerate().collect();

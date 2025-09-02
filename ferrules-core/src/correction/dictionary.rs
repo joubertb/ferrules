@@ -2,7 +2,6 @@ use anyhow::Result;
 use fuzzy_matcher::skim::SkimMatcherV2;
 use moka::future::Cache;
 use once_cell::sync::OnceCell;
-use regex::Regex;
 use spellbook::Dictionary;
 use std::borrow::Cow;
 use std::cell::RefCell;
@@ -21,9 +20,6 @@ static COMMON_WORDS: OnceCell<HashSet<String>> = OnceCell::new();
 
 /// Global correction cache for thread-safe concurrent access
 static CORRECTION_CACHE: OnceCell<Cache<String, String>> = OnceCell::new();
-
-/// Pre-compiled regex patterns for legitimate parenthetical usage
-static LEGITIMATE_PATTERNS: OnceCell<Vec<Regex>> = OnceCell::new();
 
 /// Configuration for smart correction behavior
 #[derive(Debug, Clone)]
@@ -58,7 +54,6 @@ impl SmartCorrector {
         // Initialize global resources if not already done
         Self::init_common_words()?;
         Self::init_cache(&config)?;
-        Self::init_legitimate_patterns()?;
 
         info!("✅ SmartCorrector initialized");
 
@@ -123,24 +118,6 @@ impl SmartCorrector {
         Ok(())
     }
 
-    /// Initialize legitimate parenthetical patterns (called once)
-    fn init_legitimate_patterns() -> Result<()> {
-        LEGITIMATE_PATTERNS.get_or_try_init(|| -> Result<Vec<Regex>, anyhow::Error> {
-            let patterns = vec![
-                Regex::new(r"^\([A-Z]{2,}\)$")?,             // (NLP), (PDF), (API)
-                Regex::new(r"^\(\d{4}\)$")?,                 // (2018)
-                Regex::new(r"^\([a-zA-Z]+\s+et\s+al\.\)$")?, // (Smith et al.)
-                Regex::new(r"^\([x-z]\+[x-z]\)$")?,          // (x+y), (a+b)
-                Regex::new(r"^\(see\s+\w+\)$")?,             // (see Figure)
-                Regex::new(r"^\(from\s+\w+\)$")?,            // (from Wikipedia)
-                Regex::new(r"^\(e\.g\.\)$")?,                // (e.g.)
-                Regex::new(r"^\(i\.e\.\)$")?,                // (i.e.)
-            ];
-            Ok(patterns)
-        })?;
-        Ok(())
-    }
-
     /// Check if a word is in the dictionary (checks both main and common dictionaries)
     fn is_valid_word(word: &str) -> bool {
         // First check thread-local Hunspell dictionary
@@ -176,15 +153,8 @@ impl SmartCorrector {
     }
 
     /// Check if parenthetical usage is legitimate (not corruption)
-    pub fn is_legitimate_parenthetical(word: &str) -> bool {
-        // Ensure patterns are initialized
-        let _ = Self::init_legitimate_patterns();
-
-        if let Some(patterns) = LEGITIMATE_PATTERNS.get() {
-            patterns.iter().any(|pattern| pattern.is_match(word))
-        } else {
-            false
-        }
+    pub fn is_legitimate_parenthetical(_word: &str) -> bool {
+        false // No longer needed since we don't do blind character replacements
     }
 
     /// Determine if a word should be processed for correction
@@ -209,9 +179,7 @@ impl SmartCorrector {
 
         // Known character corruptions from font analysis
         let substitutions = [
-            (')', 'i'),
-            ('(', 'h'),
-            ('\u{0002}', 'i'), // Control character to 'i'
+            ('\u{0002}', 'i'), // Control character conversion
         ];
 
         for (corrupt_char, correct_char) in &substitutions {

@@ -39,21 +39,6 @@ impl CharacterCorrector for UniversalCharacterCorrector {
             text.to_string()
         };
 
-        // Multi-character pattern corrections disabled - only character-level corrections
-        // corrected = apply_text_pattern_corrections(&corrected);
-
-        // Only apply single character substitutions if pattern corrections didn't already fix the text
-        if corrected == text
-            || corrected.contains('(')
-            || corrected.contains(')')
-            || corrected.contains('\u{0002}')
-        {
-            corrected = corrected
-                .replace(')', "i") // Most common: ) → i
-                .replace('(', "h") // Common: ( → h
-                .replace('\u{0002}', "i"); // Control character → i
-        }
-
         // Apply Unicode quote fixes AFTER all other processing
         corrected = corrected
             .replace(['\u{201C}', '\u{201D}'], "\"") // Right double quotation mark
@@ -105,9 +90,7 @@ fn apply_smart_character_corrections(text: &str) -> String {
         } else {
             // Apply corrections
             match ch {
-                ')' => corrected_chars.push('i'),
-                '(' => corrected_chars.push('h'),
-                '\u{0002}' => corrected_chars.push('i'),
+                '\u{0002}' => corrected_chars.push('i'), // Control character
                 _ => corrected_chars.push(ch),
             }
         }
@@ -117,9 +100,8 @@ fn apply_smart_character_corrections(text: &str) -> String {
 
     let result: String = corrected_chars.into_iter().collect();
 
-    // Apply other corrections (UTF-8, Unicode quotes) - pattern corrections disabled
+    // Apply other corrections (UTF-8, Unicode quotes)
     let mut corrected = fix_utf8_corruption(&result);
-    // corrected = apply_text_pattern_corrections(&corrected);
 
     // Apply Unicode quote fixes
     corrected = corrected
@@ -133,19 +115,10 @@ fn apply_smart_character_corrections(text: &str) -> String {
 ///
 /// This is the main entry point for character corrections from the public API.
 pub fn apply_character_corrections(text: &str) -> String {
-    // Character substitutions disabled to prevent false changes
-    // But keep basic UTF-8 control character filtering
+    // Basic UTF-8 control character filtering
     text.chars()
         .filter(|&c| !c.is_control() || c == '\n' || c == '\r' || c == '\t')
         .collect()
-}
-
-/// Multi-character pattern corrections have been disabled
-/// Only character-level, UTF-8, smart protection, and dictionary corrections remain active
-#[allow(dead_code)]
-fn apply_text_pattern_corrections(text: &str) -> String {
-    // Multi-character pattern corrections disabled - return text unchanged
-    text.to_string()
 }
 
 /// Fix UTF-8 corruption in multi-character text
@@ -411,7 +384,7 @@ pub fn add_math_symbol_spacing(text: &str) -> String {
 ///
 /// This handles specific mathematical symbol corruption patterns observed
 /// in PDF text extraction, particularly bracket and punctuation corruptions.
-fn fix_math_symbol_corruptions(text: &str) -> String {
+pub fn fix_math_symbol_corruptions(text: &str) -> String {
     let mut result = text.to_string();
 
     // Fix "∈ /" or "∈/" to "∉" (not element of)
@@ -430,87 +403,6 @@ fn fix_math_symbol_corruptions(text: &str) -> String {
     result = result.replace("  =", " =");
     result = result.replace("=  ", "= ");
 
-    // Fix bracket corruption around punctuation
-    result = result.replace("otherwise[.]", "otherwise.");
-    result = result.replace("[.]", ".");
-    result = result.replace("[,]", ",");
-    result = result.replace("[;]", ";");
-    result = result.replace("[:]", ":");
-
-    // PERFORMANCE FIX: Use lazy_static regexes instead of compiling them every time
-    lazy_static! {
-        static ref BRACKET_SUBSCRIPT_RE: Regex = Regex::new(r"\[([a-zA-Z])([0-9]+),\]").unwrap();
-        static ref BRACKET_UPPER_RE: Regex = Regex::new(r"\[([a-zA-Z])([A-Z]+)\]").unwrap();
-        static ref ANGLE_BRACKET_RE: Regex = Regex::new(r"h([^h]+)i").unwrap();
-        static ref PARENS_WORD_RE: Regex =
-            Regex::new(r"\b([a-zA-Z]+)\(([a-zA-Z]+)\)([a-zA-Z]*)\b").unwrap();
-        static ref PARENS_PARTIAL_RE: Regex = Regex::new(r"\b([a-zA-Z]+)\(([a-zA-Z]+)\b").unwrap();
-    }
-
-    // Fix misplaced brackets in subscripts like "[e1,]" to "e<[1]>," but skip if already in angle brackets
-    // Use custom logic to avoid matching patterns that are already inside <...>
-
-    // Collect match information first to avoid borrowing issues
-    let bracket_replacements: Vec<_> = BRACKET_SUBSCRIPT_RE
-        .find_iter(&result)
-        .map(|m| {
-            let start = m.start();
-            let should_skip = start > 0 && result.chars().nth(start - 1) == Some('<');
-            (start, m.end(), should_skip, m.as_str().to_string())
-        })
-        .collect();
-
-    // Apply replacements in reverse order to maintain offsets
-    for (start, end, should_skip, original) in bracket_replacements.into_iter().rev() {
-        if should_skip {
-            continue;
-        }
-        let replacement = BRACKET_SUBSCRIPT_RE.replace(&original, "$1<[$2]>,");
-        result.replace_range(start..end, &replacement);
-    }
-
-    // Same approach for upper case patterns
-    let upper_replacements: Vec<_> = BRACKET_UPPER_RE
-        .find_iter(&result)
-        .map(|m| {
-            let start = m.start();
-            let should_skip = start > 0 && result.chars().nth(start - 1) == Some('<');
-            (start, m.end(), should_skip, m.as_str().to_string())
-        })
-        .collect();
-
-    for (start, end, should_skip, original) in upper_replacements.into_iter().rev() {
-        if should_skip {
-            continue;
-        }
-        let replacement = BRACKET_UPPER_RE.replace(&original, "$1<[$2]>");
-        result.replace_range(start..end, &replacement);
-    }
-
-    // Fix angle bracket corruptions like "hn[i], n[j]i" to "(n[i], n[j])"
-    result = ANGLE_BRACKET_RE.replace_all(&result, "($1)").to_string();
-
-    // Fix systematic parentheses corruption where '(' and ')' replace 'h'
-    // This appears to be a PDF extraction artifact
-    result = PARENS_WORD_RE
-        .replace_all(&result, |caps: &regex::Captures| {
-            let prefix = &caps[1];
-            let middle = &caps[2];
-            let suffix = &caps[3];
-            // Reconstruct word by replacing parentheses with 'h'
-            format!("{prefix}h{middle}{suffix}")
-        })
-        .to_string();
-
-    // Handle cases with missing closing parenthesis
-    result = PARENS_PARTIAL_RE
-        .replace_all(&result, |caps: &regex::Captures| {
-            let prefix = &caps[1];
-            let suffix = &caps[2];
-            format!("{prefix}h{suffix}")
-        })
-        .to_string();
-
     result
 }
 
@@ -521,7 +413,7 @@ fn fix_math_symbol_corruptions(text: &str) -> String {
 /// - '(' → 'h': Common in subset fonts  
 /// - '\u{0002}' → 'i': Control character corruption
 /// - UTF-8 issues: Malformed sequences and control characters
-pub const CORRUPTION_MAPPINGS: &[(&str, &str)] = &[(")", "i"), ("(", "h"), ("\u{0002}", "i")];
+//pub const CORRUPTION_MAPPINGS: &[(&str, &str)] = &[(")", "i"), ("(", "h"), ("\u{0002}", "i")];
 
 #[cfg(test)]
 mod tests {
