@@ -90,7 +90,11 @@ fn apply_smart_character_corrections(text: &str) -> String {
         } else {
             // Apply corrections
             match ch {
-                '\u{0002}' => corrected_chars.push('i'), // Control character
+                '\u{0002}' => {} // STX control character → remove (line-break hyphenation)
+                '\u{0012}' => corrected_chars.push('('), // DC2 control character → opening parenthesis
+                '\u{0013}' => corrected_chars.push(')'), // DC3 control character → closing parenthesis
+                '\u{0000}' => corrected_chars.push('('), // NULL character → opening parenthesis
+                '\u{0001}' => corrected_chars.push(')'), // SOH control character → closing parenthesis
                 _ => corrected_chars.push(ch),
             }
         }
@@ -115,9 +119,17 @@ fn apply_smart_character_corrections(text: &str) -> String {
 ///
 /// This is the main entry point for character corrections from the public API.
 pub fn apply_character_corrections(text: &str) -> String {
-    // Basic UTF-8 control character filtering
+    // Apply control character corrections first, then filter remaining control characters
     text.chars()
-        .filter(|&c| !c.is_control() || c == '\n' || c == '\r' || c == '\t')
+        .filter_map(|c| match c {
+            '\u{0002}' => None, // STX control character → remove (line-break hyphenation)
+            '\u{0012}' => Some('('), // DC2 control character → opening parenthesis
+            '\u{0013}' => Some(')'), // DC3 control character → closing parenthesis
+            '\u{0000}' => Some('('), // NULL character → opening parenthesis
+            '\u{0001}' => Some(')'), // SOH control character → closing parenthesis
+            _ if c.is_control() && c != '\n' && c != '\r' && c != '\t' => None, // Filter other control chars
+            _ => Some(c),
+        })
         .collect()
 }
 
@@ -183,8 +195,16 @@ fn fix_utf8_corruption(text: &str) -> String {
         }
 
         // No UTF-8 sequence detected, add character as-is (but filter control characters)
-        // Exception: preserve \u{0002} for character correction processing
-        if !ch.is_control() || ch == '\n' || ch == '\r' || ch == '\t' || ch == '\u{0002}' {
+        // Exception: preserve specific control characters for character correction processing
+        if !ch.is_control()
+            || ch == '\n'
+            || ch == '\r'
+            || ch == '\t'
+            || ch == '\u{0012}'
+            || ch == '\u{0013}'
+            || ch == '\u{0000}'
+            || ch == '\u{0001}'
+        {
             result.push(ch);
         }
         i += 1;

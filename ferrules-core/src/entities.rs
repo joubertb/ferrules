@@ -480,9 +480,74 @@ impl CharSpan {
             );
         }
 
-        // Apply character-level font corrections
-        let (final_text, has_corruption) =
+        // Debug for u0002 characters specifically to find their source
+        if unicode_value == 0x0002 || original_text.contains('\u{0002}') {
+            eprintln!(
+                "🎯 U0002 SOURCE: Font '{}' - Unicode 0x{:04X} '{}' → Text '{}'",
+                font_name,
+                unicode_value,
+                original_unicode.unwrap_or('\0'),
+                original_text
+                    .chars()
+                    .map(|c| if c.is_control() {
+                        format!("\\u{{{:04X}}}", c as u32)
+                    } else {
+                        c.to_string()
+                    })
+                    .collect::<String>()
+            );
+        }
+
+        // Apply character-level font corrections (glyph name resolution)
+        let (glyph_corrected_text, has_corruption) =
             apply_character_corrections(&original_text, unicode_value, &font_name);
+
+        // Apply control character corrections (handles \u0012, \u0013, \u0000, \u0001, \u0002)
+        #[cfg(feature = "correction-engine")]
+        let final_text = {
+            use crate::correction::character::apply_character_corrections;
+            let corrected = apply_character_corrections(&glyph_corrected_text);
+
+            // Debug control character corrections at CharSpan level
+            if glyph_corrected_text != corrected {
+                eprintln!(
+                    "🔧 CHARSPAN CONTROL FIX: '{}' → '{}' (Font: {})",
+                    glyph_corrected_text
+                        .chars()
+                        .map(|c| if c.is_control() {
+                            format!("\\u{{{:04X}}}", c as u32)
+                        } else {
+                            c.to_string()
+                        })
+                        .collect::<String>(),
+                    corrected
+                        .chars()
+                        .map(|c| if c.is_control() {
+                            format!("\\u{{{:04X}}}", c as u32)
+                        } else {
+                            c.to_string()
+                        })
+                        .collect::<String>(),
+                    font_name
+                );
+            }
+
+            // Check for specific control characters
+            for ch in glyph_corrected_text.chars() {
+                if matches!(
+                    ch,
+                    '\u{0002}' | '\u{0012}' | '\u{0013}' | '\u{0000}' | '\u{0001}'
+                ) {
+                    eprintln!("🎯 FOUND CONTROL CHAR at CharSpan: '\\u{{{:04X}}}' in Font '{}' - Original: '{}'", 
+                        ch as u32, font_name, glyph_corrected_text);
+                }
+            }
+
+            corrected
+        };
+
+        #[cfg(not(feature = "correction-engine"))]
+        let final_text = glyph_corrected_text;
 
         // Debug after corrections for mathematical fonts
         if font_name.contains("CMMI") && (unicode_value == 0x0068 || unicode_value == 0x0069) {
@@ -531,9 +596,62 @@ impl CharSpan {
             let unicode_value = char.unicode_value();
             let font_name = char.font_name();
 
-            // Apply character-level font corrections
-            let (char_text, char_has_corruption) =
+            // Debug for u0002 characters in append method
+            if unicode_value == 0x0002 || original_text.contains('\u{0002}') {
+                eprintln!(
+                    "🎯 U0002 APPEND: Font '{}' - Unicode 0x{:04X} → Text '{}'",
+                    font_name,
+                    unicode_value,
+                    original_text
+                        .chars()
+                        .map(|c| if c.is_control() {
+                            format!("\\u{{{:04X}}}", c as u32)
+                        } else {
+                            c.to_string()
+                        })
+                        .collect::<String>()
+                );
+            }
+
+            // Apply character-level font corrections (glyph name resolution)
+            let (glyph_corrected_text, char_has_corruption) =
                 apply_character_corrections(&original_text, unicode_value, &font_name);
+
+            // Apply control character corrections (handles \u0012, \u0013, \u0000, \u0001, \u0002)
+            #[cfg(feature = "correction-engine")]
+            let char_text = {
+                use crate::correction::character::apply_character_corrections;
+                let corrected = apply_character_corrections(&glyph_corrected_text);
+
+                // Debug control character corrections in append method
+                if glyph_corrected_text != corrected {
+                    eprintln!(
+                        "🔧 APPEND CONTROL FIX: '{}' → '{}' (Font: {})",
+                        glyph_corrected_text
+                            .chars()
+                            .map(|c| if c.is_control() {
+                                format!("\\u{{{:04X}}}", c as u32)
+                            } else {
+                                c.to_string()
+                            })
+                            .collect::<String>(),
+                        corrected
+                            .chars()
+                            .map(|c| if c.is_control() {
+                                format!("\\u{{{:04X}}}", c as u32)
+                            } else {
+                                c.to_string()
+                            })
+                            .collect::<String>(),
+                        font_name
+                    );
+                }
+
+                corrected
+            };
+
+            #[cfg(not(feature = "correction-engine"))]
+            let char_text = glyph_corrected_text;
 
             self.text.push_str(&char_text);
             self.char_end_idx = char.index();
@@ -600,8 +718,7 @@ impl Line {
         || span.bbox.y0 > self.bbox.y1
         || span.text.ends_with("\n") || span.text.ends_with("\x02")
         {
-            // Apply comprehensive text processing when finalizing the line
-            // Character-level corrections disabled - PDF preprocessing handles font fixes
+            // Character corrections are now applied at CharSpan level, no need to re-apply here
             let utf8_fixed = self.text.clone();
 
             // Apply comprehensive tag processing to spans (bold, subscript, superscript, formula)

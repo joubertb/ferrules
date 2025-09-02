@@ -104,6 +104,7 @@ pub fn format_formula_text(text: &str) -> String {
     );
 
     // Apply mathematical symbol corrections to fix patterns like "6=" → "≠", "∈/" → "∉"
+    // Control character corrections are now applied at CharSpan level
     #[cfg(feature = "correction-engine")]
     let corrected_text = {
         use crate::correction::character::fix_math_symbol_corruptions;
