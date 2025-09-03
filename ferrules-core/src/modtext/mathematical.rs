@@ -303,15 +303,17 @@ fn is_real_subscript(
 ) -> bool {
     // Real subscripts should have:
     // 1. Significant font size reduction (typically 70% or smaller of base text)
-    // 2. SIGNIFICANT baseline shift (either upward or downward)
+    // 2. DOWNWARD baseline shift (positive baseline_diff) - NOT upward!
     // 3. Baseline shift that's proportional to font size
 
-    // UPDATED: Accept both upward and downward shifts that are significant
-    // The absolute baseline difference is what matters for subscript detection
-    // Some PDF layouts have different baseline references causing upward shifts
+    // Subscripts must have positive baseline shift (downward movement)
+    // Upward movements should be handled by is_real_superscript
+    if baseline_diff <= 0.0 {
+        return false;
+    }
 
     let font_size_ratio = current_span.font_size / base_font_size;
-    let relative_baseline_shift = baseline_diff.abs() / base_font_size;
+    let relative_baseline_shift = baseline_diff / base_font_size; // Use signed value for downward
 
     // Skip empty or whitespace-only text
     let text_trimmed = current_span.text.trim();
@@ -319,9 +321,9 @@ fn is_real_subscript(
         return false;
     }
 
-    // Real subscripts have smaller font AND significant baseline shift
+    // Real subscripts have smaller font AND significant DOWNWARD baseline shift
     let has_smaller_font = font_size_ratio < 0.85;
-    let has_significant_shift = relative_baseline_shift > 0.25; // Shift is 25% of base font size
+    let has_significant_shift = relative_baseline_shift > 0.25; // Downward shift is 25% of base font size
 
     let is_likely_subscript = has_smaller_font && has_significant_shift;
 
@@ -332,8 +334,11 @@ fn is_real_subscript(
     }
     if !has_significant_shift {
         rejection_reasons.push(format!(
-            "shift_too_small({relative_baseline_shift:.3}<0.30)"
+            "shift_too_small({relative_baseline_shift:.3}<0.25)"
         ));
+    }
+    if baseline_diff <= 0.0 {
+        rejection_reasons.push(format!("upward_movement({baseline_diff:.1}<=0.0)"));
     }
 
     let decision_detail = if is_likely_subscript {
@@ -345,10 +350,10 @@ fn is_real_subscript(
     };
 
     eprintln!(
-        "🔍 SUBSCRIPT DETAILED: '{}' font={:.1}/{:.1}({:.3}) baseline={:.1}({:.3}) thresholds=font<0.85&shift>0.25 → {}",
+        "🔍 SUBSCRIPT DETAILED: '{}' font={:.1}/{:.1}({:.3}) baseline={:.1}({:.3}) thresholds=font<0.85&shift>0.25&downward → {}",
         text_trimmed,
         current_span.font_size, base_font_size, font_size_ratio,
-        relative_baseline_shift * base_font_size, relative_baseline_shift,
+        baseline_diff, relative_baseline_shift,
         decision_detail
     );
 
