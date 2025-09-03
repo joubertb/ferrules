@@ -150,8 +150,54 @@ pub fn format_formula_with_spans(
         text.chars().take(100).collect::<String>()
     );
 
-    // Flatten all spans from all lines into a single vector
-    let all_spans: Vec<crate::entities::CharSpan> = line_spans.iter().flatten().cloned().collect();
+    // Process spans while detecting significant y-coordinate jumps (line breaks)
+    // and insert semicolon separators for multi-line formulas
+    let mut all_spans = Vec::new();
+    let mut prev_y: Option<f32> = None;
+    let mut prev_significant_y: Option<f32> = None; // Track y-position of last significant span
+    const LINE_BREAK_THRESHOLD: f32 = 10.0; // Significant y-coordinate jump indicates new line
+    const SMALL_SPAN_THRESHOLD: f32 = 5.0; // Small y-jumps that might be punctuation
+
+    for line in line_spans {
+        for span in line {
+            let current_y = span.bbox.y0;
+
+            // Check for significant downward y-coordinate jump indicating a new line
+            // (In PDF coordinates, larger y values are typically lower on the page)
+            if let Some(py) = prev_y {
+                let y_diff = current_y - py;
+
+                // For small jumps, also check against the last significant position
+                let should_insert_semicolon = if y_diff > LINE_BREAK_THRESHOLD {
+                    true
+                } else if let Some(sig_y) = prev_significant_y {
+                    let total_diff = current_y - sig_y;
+                    y_diff > SMALL_SPAN_THRESHOLD && total_diff > LINE_BREAK_THRESHOLD
+                } else {
+                    false
+                };
+
+                if should_insert_semicolon {
+                    // Only add semicolon for downward jumps (to next line)
+                    let mut separator_span = span.clone();
+                    separator_span.text = "; ".to_string();
+                    all_spans.push(separator_span);
+                    let ref_y = prev_significant_y.unwrap_or(py);
+                    let total_diff = current_y - ref_y;
+                    eprintln!("➕ LINE BREAK: Added semicolon separator for y-jump {ref_y:.1} -> {current_y:.1} (diff: +{total_diff:.1})");
+                    prev_significant_y = Some(current_y);
+                }
+            }
+
+            all_spans.push(span.clone());
+            prev_y = Some(current_y);
+
+            // Update significant y-position for non-punctuation spans
+            if !span.text.trim().is_empty() && span.text.trim() != "." && span.text.trim() != "," {
+                prev_significant_y = Some(current_y);
+            }
+        }
+    }
 
     eprintln!(
         "📋 FORMULA WITH SPANS: Flattened to {} total spans",
@@ -218,6 +264,7 @@ pub fn format_formula_with_spans(
 ///
 /// This function ensures proper readability by adding spaces before and after mathematical
 /// symbols like ∈, ∪, ∩, etc. when they are immediately preceded or followed by text.
+/// Also handles mathematical summation X operators.
 fn add_spacing_after_math_symbols(text: &str) -> String {
     let math_symbols = [
         '∈', '∉', '∪', '∩', '∅', '⊂', '⊃', '⊆', '⊇', '∀', '∃', '∄', '∧', '∨', '¬', '→', '←', '↔',
@@ -226,8 +273,11 @@ fn add_spacing_after_math_symbols(text: &str) -> String {
         '≽', '⊑', '⊒', '⊥', '⊤',
     ];
 
+    // First pass: handle mathematical X summation operators
+    let temp_result = handle_mathematical_x_operators(text);
+
     let mut result = String::new();
-    let chars: Vec<char> = text.chars().collect();
+    let chars: Vec<char> = temp_result.chars().collect();
 
     for i in 0..chars.len() {
         let current_char = chars[i];
@@ -267,6 +317,50 @@ fn add_spacing_after_math_symbols(text: &str) -> String {
         } else {
             result.push(current_char);
         }
+    }
+
+    result
+}
+
+/// Handle mathematical X operators (summation/product) by adding proper spacing
+/// This function specifically looks for patterns like "Xn" or "X<sub>" where X represents summation
+fn handle_mathematical_x_operators(text: &str) -> String {
+    let mut result = String::new();
+    let chars: Vec<char> = text.chars().collect();
+    let mut i = 0;
+
+    while i < chars.len() {
+        let current_char = chars[i];
+
+        // Check for mathematical X summation pattern
+        if current_char == 'X' && i + 1 < chars.len() {
+            let next_char = chars[i + 1];
+
+            // Check if this looks like a mathematical summation:
+            // - X followed by lowercase letter (variable like 'n', 'm', etc.)
+            // - X followed by '<' (subscripted variable like 'X<sub>')
+            let is_math_summation = next_char.is_lowercase() || next_char == '<';
+
+            // Additional context check: look for mathematical context indicators
+            let has_math_context = text.contains("∈")
+                || text.contains("∉")
+                || text.contains("<sub>")
+                || text.contains("<sup>")
+                || text.contains("Loss")
+                || text.contains("=");
+
+            if is_math_summation && has_math_context {
+                result.push('X');
+                result.push(' '); // Add space after X
+                eprintln!("➕ MATH X SPACING: Added space after summation X before '{next_char}'");
+            } else {
+                result.push(current_char);
+            }
+        } else {
+            result.push(current_char);
+        }
+
+        i += 1;
     }
 
     result

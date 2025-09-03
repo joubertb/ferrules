@@ -145,19 +145,6 @@ fn analyze_potential_subscripts(spans: &[CharSpan], base_font_size: f32, baselin
         let font_size_ratio = span.font_size / base_font_size;
         let relative_baseline_shift = baseline_diff.abs() / base_font_size;
 
-        // Determine context (what comes before/after)
-        let prev_context = if i > 0 { spans[i - 1].text.trim() } else { "" };
-
-        let next_context = if i + 1 < spans.len() {
-            spans[i + 1].text.trim()
-        } else {
-            ""
-        };
-
-        // Identify if this looks like it should be a subscript based on context
-        let should_be_subscript =
-            is_likely_subscript_by_context(text_trimmed, prev_context, next_context);
-
         // Current detection result
         let current_detection = if baseline_diff.abs() > 3.0 {
             let has_smaller_font = font_size_ratio < 0.85;
@@ -167,9 +154,7 @@ fn analyze_potential_subscripts(spans: &[CharSpan], base_font_size: f32, baselin
             false
         };
 
-        eprintln!(
-            "SPAN[{i}]: '{text_trimmed}' (context: '{prev_context}' → '{text_trimmed}' → '{next_context}')"
-        );
+        eprintln!("SPAN[{i}]: '{text_trimmed}'");
         eprintln!(
             "  Position: y={:.1}, baseline_diff={:.1} ({})",
             span.bbox.y0,
@@ -193,13 +178,12 @@ fn analyze_potential_subscripts(spans: &[CharSpan], base_font_size: f32, baselin
             relative_baseline_shift * 100.0
         );
         eprintln!(
-            "  Detection: current={}, should_be={}, font_ok={}, baseline_ok={}",
+            "  Detection: current={}, font_ok={}, baseline_ok={}",
             if current_detection {
                 "SUBSCRIPT"
             } else {
                 "NORMAL"
             },
-            if should_be_subscript { "YES" } else { "NO" },
             if font_size_ratio < 0.85 { "YES" } else { "NO" },
             if relative_baseline_shift > 0.3 {
                 "YES"
@@ -208,7 +192,7 @@ fn analyze_potential_subscripts(spans: &[CharSpan], base_font_size: f32, baselin
             }
         );
 
-        if should_be_subscript || current_detection {
+        if current_detection {
             potential_subscripts.push((
                 i,
                 text_trimmed,
@@ -216,7 +200,6 @@ fn analyze_potential_subscripts(spans: &[CharSpan], base_font_size: f32, baselin
                 font_size_ratio,
                 relative_baseline_shift,
                 current_detection,
-                should_be_subscript,
             ));
         }
 
@@ -224,138 +207,90 @@ fn analyze_potential_subscripts(spans: &[CharSpan], base_font_size: f32, baselin
     }
 
     if !potential_subscripts.is_empty() {
-        eprintln!("\n=== SUBSCRIPT CANDIDATES SUMMARY ===");
-        eprintln!("| Idx | Char | Context     | Abs Shift | Rel Shift | Font Ratio | Detected | Should Be | Status    |");
-        eprintln!("|-----|------|-------------|-----------|-----------|------------|----------|-----------|-----------|");
+        eprintln!("\n=== DETECTED SUBSCRIPTS SUMMARY ===");
+        eprintln!("| Idx | Char | Abs Shift | Rel Shift | Font Ratio | Detected |");
+        eprintln!("|-----|------|-----------|-----------|------------|----------|");
 
-        for (idx, text, baseline_diff, font_ratio, rel_shift, detected, should_be) in
-            &potential_subscripts
-        {
-            let context = if *idx > 0 {
-                format!("after '{}'", spans[*idx - 1].text.trim())
-            } else {
-                "start".to_string()
-            };
-
-            let status = match (*detected, *should_be) {
-                (true, true) => "✓ CORRECT",
-                (false, false) => "✓ CORRECT",
-                (true, false) => "⚠ FALSE_POS",
-                (false, true) => "✗ MISSED",
-            };
-
+        for (idx, text, baseline_diff, font_ratio, rel_shift, detected) in &potential_subscripts {
             eprintln!(
-                "| {:3} | {:4} | {:11} | {:9.1} | {:8.1}% | {:10.3} | {:8} | {:9} | {:9} |",
+                "| {:3} | {:4} | {:9.1} | {:8.1}% | {:10.3} | {:8} |",
                 idx,
                 text,
-                context,
                 baseline_diff.abs(),
                 rel_shift * 100.0,
                 font_ratio,
-                if *detected { "YES" } else { "NO" },
-                if *should_be { "YES" } else { "NO" },
-                status
+                if *detected { "YES" } else { "NO" }
             );
         }
-
-        // Generate threshold recommendations
-        let missed_subscripts: Vec<_> = potential_subscripts
-            .iter()
-            .filter(|(_, _, _, _, _, detected, should_be)| !detected && *should_be)
-            .collect();
-
-        if !missed_subscripts.is_empty() {
-            eprintln!("\n=== THRESHOLD RECOMMENDATIONS ===");
-            let min_font_ratio = missed_subscripts
-                .iter()
-                .map(|(_, _, _, font_ratio, _, _, _)| *font_ratio)
-                .fold(f32::INFINITY, f32::min);
-            let max_font_ratio = missed_subscripts
-                .iter()
-                .map(|(_, _, _, font_ratio, _, _, _)| *font_ratio)
-                .fold(0.0, f32::max);
-            let min_rel_shift = missed_subscripts
-                .iter()
-                .map(|(_, _, _, _, rel_shift, _, _)| *rel_shift)
-                .fold(f32::INFINITY, f32::min);
-            let max_rel_shift = missed_subscripts
-                .iter()
-                .map(|(_, _, _, _, rel_shift, _, _)| *rel_shift)
-                .fold(0.0, f32::max);
-
-            eprintln!("Missed subscripts have:");
-            eprintln!("  Font ratios: {min_font_ratio:.3} - {max_font_ratio:.3} (current threshold: 0.85)");
-            eprintln!("  Relative baseline shifts: {min_rel_shift:.3} - {max_rel_shift:.3} (current threshold: 0.30)");
-
-            if max_font_ratio > 0.85 {
-                eprintln!(
-                    "  → Suggest increasing font_size_ratio_threshold to {:.2}",
-                    (max_font_ratio + 0.05).min(0.95)
-                );
-            }
-            if min_rel_shift < 0.3 {
-                eprintln!(
-                    "  → Suggest decreasing relative_baseline_threshold to {:.2}",
-                    (min_rel_shift - 0.05).max(0.1)
-                );
-            }
-        }
+        eprintln!("Total detected subscripts: {}", potential_subscripts.len());
     }
 
     eprintln!("=== END ANALYSIS ===\n");
 }
 
-/// Helper function to determine if a character should be a subscript based on context
-fn is_likely_subscript_by_context(text: &str, prev: &str, _next: &str) -> bool {
-    // Single character subscripts after common base characters
-    if text.len() == 1 {
-        let char = text.chars().next().unwrap();
-
-        // Common mathematical subscript patterns
-        if char.is_ascii_alphanumeric()
-            && (
-                prev.ends_with('n') ||    // ni, nj
-            prev.ends_with('M') ||    // Mi, Mj  
-            prev.ends_with('A') ||    // Ai, Aj
-            prev.ends_with('x') ||    // xi, xj
-            prev.ends_with('y') ||    // yi, yj
-            prev == "(" ||            // (i,j) after M
-            (prev.ends_with(',') && text != ",")
-                // second part of (i,j)
-            )
-        {
-            return true;
-        }
-
-        // Opening parenthesis after a capital letter (like M( in M(i,j))
-        if text == "("
-            && (prev.ends_with('M')
-                || prev.ends_with('A')
-                || prev.ends_with('H')
-                || prev.ends_with('X')
-                || prev.ends_with('Y')
-                || prev.ends_with('Z'))
-        {
-            return true;
-        }
-
-        // Closing parenthesis - should match opening
-        if text == ")" && prev.chars().any(|c| c.is_ascii_alphanumeric()) {
-            return true;
-        }
+/// Local baseline-aware subscript detection for mathematical expressions with large baseline shifts
+/// This function looks at local font sizes rather than global baseline for subscript detection
+fn is_local_baseline_subscript(
+    current_span: &CharSpan,
+    baseline_diff: f32,
+    base_font_size: f32,
+    spans: &[CharSpan],
+    current_index: usize,
+) -> bool {
+    let text_trimmed = current_span.text.trim();
+    if text_trimmed.is_empty() {
+        return false;
     }
 
-    // Multi-character content inside parentheses (like "i,j" in M(i,j))
-    if text.len() > 1 && prev == "(" {
-        return true;
+    // Find nearby spans to establish local font context - use smaller window for more precise context
+    let window_size = 2; // Look at 2 spans before and after for tighter context
+    let start_idx = current_index.saturating_sub(window_size);
+    let end_idx = (current_index + window_size + 1).min(spans.len());
+    let context_spans = &spans[start_idx..end_idx];
+
+    // Find font sizes in the local context and establish what should be "normal" vs "subscript"
+    let mut font_sizes: Vec<f32> = context_spans
+        .iter()
+        .filter(|s| !s.text.trim().is_empty() && s.font_size > 1.0)
+        .map(|s| s.font_size)
+        .collect();
+
+    if font_sizes.is_empty() {
+        return false;
     }
 
-    // Inside parentheses that follow a capital letter (like M(i,j))
-    if text.len() == 1 && prev.contains('(') {
-        return true;
-    }
+    font_sizes.sort_by(|a, b| b.partial_cmp(a).unwrap()); // Sort descending
 
-    false
+    // Use the second-largest font size as local baseline if available, otherwise largest
+    // This handles cases where we have: 10pt(global) > 7pt(local baseline) > 5pt(subscript)
+    let local_baseline_font_size = if font_sizes.len() >= 2 && font_sizes[0] >= base_font_size * 0.9
+    {
+        // If largest font is close to global baseline, use second largest as local baseline
+        font_sizes[1]
+    } else {
+        // Otherwise use largest as local baseline
+        font_sizes[0]
+    };
+
+    // Compare current font size to LOCAL baseline font size
+    let local_font_ratio = current_span.font_size / local_baseline_font_size;
+    let has_smaller_font_locally = local_font_ratio < 0.85;
+
+    // Still require some baseline shift, but be more lenient with font size requirements
+    let relative_baseline_shift = baseline_diff.abs() / base_font_size;
+    let has_significant_shift = relative_baseline_shift > 0.25;
+
+    let is_contextual_subscript = has_smaller_font_locally && has_significant_shift;
+
+    eprintln!(
+        "🎯 LOCAL BASELINE: '{}' font={:.1} local_baseline={:.1}({:.3}) global_baseline={:.1} shift={:.1}({:.3}) → {}",
+        text_trimmed,
+        current_span.font_size, local_baseline_font_size, local_font_ratio,
+        base_font_size, baseline_diff.abs(), relative_baseline_shift,
+        if is_contextual_subscript { "✓ LOCAL_SUBSCRIPT" } else { "✗ NOT_SUBSCRIPT" }
+    );
+
+    is_contextual_subscript
 }
 
 /// Check if this baseline/font change represents a real subscript based on positioning and font metrics
@@ -368,13 +303,12 @@ fn is_real_subscript(
 ) -> bool {
     // Real subscripts should have:
     // 1. Significant font size reduction (typically 70% or smaller of base text)
-    // 2. DOWNWARD baseline shift (positive baseline_diff)
+    // 2. SIGNIFICANT baseline shift (either upward or downward)
     // 3. Baseline shift that's proportional to font size
 
-    // Subscripts must have positive baseline shift (downward movement)
-    if baseline_diff <= 0.0 {
-        return false;
-    }
+    // UPDATED: Accept both upward and downward shifts that are significant
+    // The absolute baseline difference is what matters for subscript detection
+    // Some PDF layouts have different baseline references causing upward shifts
 
     let font_size_ratio = current_span.font_size / base_font_size;
     let relative_baseline_shift = baseline_diff.abs() / base_font_size;
@@ -386,8 +320,8 @@ fn is_real_subscript(
     }
 
     // Real subscripts have smaller font AND significant baseline shift
-    let has_smaller_font = font_size_ratio < 0.85; // Font is 85% or smaller
-    let has_significant_shift = relative_baseline_shift > 0.3; // Shift is 30% of base font size
+    let has_smaller_font = font_size_ratio < 0.85;
+    let has_significant_shift = relative_baseline_shift > 0.25; // Shift is 25% of base font size
 
     let is_likely_subscript = has_smaller_font && has_significant_shift;
 
@@ -411,7 +345,7 @@ fn is_real_subscript(
     };
 
     eprintln!(
-        "🔍 SUBSCRIPT DETAILED: '{}' font={:.1}/{:.1}({:.3}) baseline={:.1}({:.3}) thresholds=font<0.85&shift>0.30 → {}",
+        "🔍 SUBSCRIPT DETAILED: '{}' font={:.1}/{:.1}({:.3}) baseline={:.1}({:.3}) thresholds=font<0.85&shift>0.25 → {}",
         text_trimmed,
         current_span.font_size, base_font_size, font_size_ratio,
         relative_baseline_shift * base_font_size, relative_baseline_shift,
@@ -519,6 +453,15 @@ pub(crate) fn detect_bold(spans: &[CharSpan]) -> Vec<TagRange> {
 /// - Bold font ends → pop and close bold tag
 ///
 /// This approach is content-independent and purely based on positioning/font changes.
+/// Helper function to close a subscript or superscript tag, trimming trailing whitespace first
+fn close_script_tag(result: &mut String, tag: &str) {
+    if tag == "</sub>" || tag == "</sup>" {
+        // Trim trailing whitespace before closing script tags
+        *result = result.trim_end().to_string();
+    }
+    result.push_str(tag);
+}
+
 pub(crate) fn detect_script_notation(spans: &[CharSpan]) -> String {
     eprintln!("⚡ STACK-BASED detection called with {} spans", spans.len());
 
@@ -538,17 +481,20 @@ pub(crate) fn detect_script_notation(spans: &[CharSpan]) -> String {
 
     let mut result = String::new();
     let mut tag_stack: Vec<&'static str> = Vec::new();
-    let mut baseline: f32 = 0.0;
+    let mut baseline: f32;
     let mut original_baseline: f32 = 0.0; // Store the original baseline reference
     let mut baseline_initialized = false;
     let mut current_bold = false;
     let mut in_subscript = false;
     let mut in_superscript = false;
     let mut base_font_size: f32 = 0.0;
+    let mut subscript_baseline: f32 = 0.0; // Track baseline of current subscript region
 
-    // Define thresholds for baseline changes - now more conservative since we use font analysis
-    const SCRIPT_THRESHOLD: f32 = 3.0; // Minimum threshold to consider script changes
-    const RETURN_THRESHOLD: f32 = 2.0; // Threshold for returning to baseline
+    // REDUCED thresholds to catch smaller baseline shifts like ni/nj subscripts
+    // Previous SCRIPT_THRESHOLD=3.0 was missing subscripts with baseline_diff=2.8
+    const SCRIPT_THRESHOLD: f32 = 2.0; // Reduced from 3.0 to catch more subtle shifts
+    const RETURN_THRESHOLD: f32 = 1.5; // Reduced proportionally
+    const SUBSCRIPT_CONTINUITY_THRESHOLD: f32 = 3.0; // Allow ±3 points variation within subscript
 
     // Process each span
     for (i, span) in spans.iter().enumerate() {
@@ -560,6 +506,19 @@ pub(crate) fn detect_script_notation(spans: &[CharSpan]) -> String {
             span.font_size,
             span.font_name
         );
+
+        // Debug specific characters to understand mask splitting
+        let text_trimmed = span.text.trim();
+        if text_trimmed.contains('m')
+            || text_trimmed.contains('a')
+            || text_trimmed.contains('s')
+            || text_trimmed.contains('k')
+        {
+            eprintln!(
+                "🎯 MASK DEBUG: Found '{}' at y={:.1}, in_subscript={}",
+                text_trimmed, span.bbox.y0, in_subscript
+            );
+        }
 
         // Initialize baseline and base font size on first span
         if !baseline_initialized {
@@ -598,11 +557,81 @@ pub(crate) fn detect_script_notation(spans: &[CharSpan]) -> String {
                 current_bold = is_bold_now;
             }
 
+            // POSITIONING-BASED SUBSCRIPT CONTINUITY LOGIC
+            // When we're already in subscript mode, check for continuity based purely on positioning
+            if in_subscript {
+                let _subscript_diff = (span.bbox.y0 - subscript_baseline).abs();
+                let text_trimmed = span.text.trim();
+
+                // Check if current character is also a subscript based on positioning
+                let should_be_subscript = if baseline_diff.abs() > 10.0 {
+                    // Large baseline shift: use local baseline-aware detection
+                    is_local_baseline_subscript(span, baseline_diff, base_font_size, spans, i)
+                } else {
+                    // Normal case: use standard detection
+                    is_real_subscript(span, baseline_diff, base_font_size, spans, i)
+                };
+
+                // Continue subscript only if:
+                // 1. Within baseline continuity threshold AND
+                // 2. Current character would also be detected as subscript OR
+                // 3. Text is empty (whitespace spans)
+                //
+                // For positioning-based subscript continuity, we need to be stricter:
+                // Only continue if the character is within the subscript baseline range AND
+                // has a similar positioning profile to existing subscripts
+                let baseline_diff_from_subscript = (span.bbox.y0 - subscript_baseline).abs();
+                let has_very_small_font = span.font_size <= base_font_size * 0.65; // Much stricter font requirement
+                let is_close_to_subscript_baseline =
+                    baseline_diff_from_subscript <= SUBSCRIPT_CONTINUITY_THRESHOLD;
+
+                let should_continue = (is_close_to_subscript_baseline
+                    && (should_be_subscript || has_very_small_font))
+                    || text_trimmed.is_empty();
+
+                // Debug mask continuity decision
+                if text_trimmed.contains('m')
+                    || text_trimmed.contains('a')
+                    || text_trimmed.contains('s')
+                    || text_trimmed.contains('k')
+                    || text_trimmed.contains('∈')
+                    || text_trimmed.contains('N')
+                {
+                    eprintln!("🎯 CONTINUITY: '{text_trimmed}' baseline_diff_from_subscript={baseline_diff_from_subscript:.1}, should_be_subscript={should_be_subscript}, has_very_small_font={has_very_small_font}, should_continue={should_continue}");
+                    eprintln!("🎯 POSITIONING: subscript_baseline={:.1}, span.y0={:.1}, global_baseline_diff={:.1}", 
+                        subscript_baseline, span.bbox.y0, baseline_diff);
+                }
+
+                if should_continue {
+                    // Continue subscript based on positioning
+                    eprintln!("⬇️ SUBSCRIPT CONTINUE: Within continuity threshold ({baseline_diff_from_subscript:.1} <= {SUBSCRIPT_CONTINUITY_THRESHOLD})");
+                    // Skip baseline change detection and just continue
+                    let cleaned_text = span.text.replace('\u{001a}', ""); // Remove SUB (substitute) character
+                    result.push_str(&cleaned_text);
+                    continue;
+                } else {
+                    // Position indicates we should end subscript
+                    if let Some(pos) = tag_stack.iter().rposition(|&tag| tag == "</sub>") {
+                        let closing_tag = tag_stack.remove(pos);
+                        close_script_tag(&mut result, closing_tag);
+                        eprintln!("🔄 SUB CLOSE: Applied {closing_tag} - position indicates end of subscript");
+                        in_subscript = false;
+                    }
+                }
+            }
+
             // Check for baseline changes that might indicate scripts
             if baseline_diff.abs() > SCRIPT_THRESHOLD {
-                // Check what the current character should be
-                let should_be_subscript =
-                    is_real_subscript(span, baseline_diff, base_font_size, spans, i);
+                // ENHANCED CONTEXT-AWARE SUBSCRIPT DETECTION
+                // For mathematical contexts with large baseline shifts, use local font context
+                let should_be_subscript = if baseline_diff.abs() > 10.0 {
+                    // Large baseline shift: use local baseline-aware detection
+                    is_local_baseline_subscript(span, baseline_diff, base_font_size, spans, i)
+                } else {
+                    // Normal case: use standard detection
+                    is_real_subscript(span, baseline_diff, base_font_size, spans, i)
+                };
+
                 let should_be_superscript =
                     is_real_superscript(span, baseline_diff, base_font_size);
 
@@ -612,7 +641,7 @@ pub(crate) fn detect_script_notation(spans: &[CharSpan]) -> String {
                     if in_superscript {
                         if let Some(pos) = tag_stack.iter().rposition(|&tag| tag == "</sup>") {
                             let closing_tag = tag_stack.remove(pos);
-                            result.push_str(closing_tag);
+                            close_script_tag(&mut result, closing_tag);
                             eprintln!("🔄 SUP CLOSE: Applied {closing_tag}");
                             in_superscript = false;
                         }
@@ -620,13 +649,14 @@ pub(crate) fn detect_script_notation(spans: &[CharSpan]) -> String {
                     result.push_str("<sub>");
                     tag_stack.push("</sub>");
                     in_subscript = true;
+                    subscript_baseline = span.bbox.y0; // Set subscript baseline for continuity checks
                     eprintln!("⬇️ SUBSCRIPT START: Real subscript detected");
                 } else if should_be_superscript && !in_superscript {
                     // Close subscript if open, then start superscript
                     if in_subscript {
                         if let Some(pos) = tag_stack.iter().rposition(|&tag| tag == "</sub>") {
                             let closing_tag = tag_stack.remove(pos);
-                            result.push_str(closing_tag);
+                            close_script_tag(&mut result, closing_tag);
                             eprintln!("🔄 SUB CLOSE: Applied {closing_tag}");
                             in_subscript = false;
                         }
@@ -640,7 +670,7 @@ pub(crate) fn detect_script_notation(spans: &[CharSpan]) -> String {
                     if in_subscript {
                         if let Some(pos) = tag_stack.iter().rposition(|&tag| tag == "</sub>") {
                             let closing_tag = tag_stack.remove(pos);
-                            result.push_str(closing_tag);
+                            close_script_tag(&mut result, closing_tag);
                             eprintln!("🔄 SUB CLOSE: Applied {closing_tag}");
                             in_subscript = false;
                         }
@@ -648,7 +678,7 @@ pub(crate) fn detect_script_notation(spans: &[CharSpan]) -> String {
                     if in_superscript {
                         if let Some(pos) = tag_stack.iter().rposition(|&tag| tag == "</sup>") {
                             let closing_tag = tag_stack.remove(pos);
-                            result.push_str(closing_tag);
+                            close_script_tag(&mut result, closing_tag);
                             eprintln!("🔄 SUP CLOSE: Applied {closing_tag}");
                             in_superscript = false;
                         }
@@ -658,7 +688,6 @@ pub(crate) fn detect_script_notation(spans: &[CharSpan]) -> String {
                 } else if should_be_superscript && in_superscript {
                     eprintln!("⬆️ SUPERSCRIPT CONTINUE: Already in superscript mode");
                 }
-                baseline = span.bbox.y0;
             } else if baseline_diff.abs() < RETURN_THRESHOLD && (in_subscript || in_superscript) {
                 // Close script tags when returning close to baseline
                 // But only if we're not just processing whitespace/punctuation
@@ -672,7 +701,7 @@ pub(crate) fn detect_script_notation(spans: &[CharSpan]) -> String {
                 if !text_trimmed.is_empty()
                     && !text_trimmed
                         .chars()
-                        .all(|c| c.is_whitespace() || "=+−-()[]{}.,;:".contains(c))
+                        .all(|c| c.is_whitespace() || "=+−-()[]{}".contains(c))  // REMOVED: comma and semicolon - they should not inherit script mode
                     && !is_current_subscript  // Don't close if current char is subscript
                     && !is_current_superscript
                 // Don't close if current char is superscript
@@ -680,7 +709,7 @@ pub(crate) fn detect_script_notation(spans: &[CharSpan]) -> String {
                     if in_subscript {
                         if let Some(pos) = tag_stack.iter().rposition(|&tag| tag == "</sub>") {
                             let closing_tag = tag_stack.remove(pos);
-                            result.push_str(closing_tag);
+                            close_script_tag(&mut result, closing_tag);
                             eprintln!(
                                 "🔄 BASELINE RETURN: Applied {closing_tag} for '{text_trimmed}'"
                             );
@@ -690,14 +719,13 @@ pub(crate) fn detect_script_notation(spans: &[CharSpan]) -> String {
                     if in_superscript {
                         if let Some(pos) = tag_stack.iter().rposition(|&tag| tag == "</sup>") {
                             let closing_tag = tag_stack.remove(pos);
-                            result.push_str(closing_tag);
+                            close_script_tag(&mut result, closing_tag);
                             eprintln!(
                                 "🔄 BASELINE RETURN: Applied {closing_tag} for '{text_trimmed}'"
                             );
                             in_superscript = false;
                         }
                     }
-                    baseline = span.bbox.y0;
                 } else {
                     eprintln!("⏭️ KEEPING script mode for whitespace/punct: '{text_trimmed}'");
                 }
@@ -709,9 +737,9 @@ pub(crate) fn detect_script_notation(spans: &[CharSpan]) -> String {
         result.push_str(&cleaned_text);
     }
 
-    // Close any remaining open tags
+    // Close any remaining open tags, trimming trailing spaces before closing subscript/superscript tags
     while let Some(closing_tag) = tag_stack.pop() {
-        result.push_str(closing_tag);
+        close_script_tag(&mut result, closing_tag);
         eprintln!("🔚 CLEANUP: Applied remaining {closing_tag}");
     }
 
