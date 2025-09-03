@@ -12,12 +12,83 @@
 
 use crate::entities::CharSpan;
 
+/// Configuration for subscript detection thresholds
+///
+/// This structure allows for easy tuning of the detection algorithm based on
+/// different PDF sources and requirements. Values can be adjusted based on
+/// debug analysis results.
+#[derive(Debug, Clone)]
+#[allow(dead_code)]
+pub(crate) struct SubscriptDetectionConfig {
+    /// Minimum absolute baseline shift (in points) to consider subscript detection
+    pub absolute_baseline_threshold: f32,
+
+    /// Maximum font size ratio (current/base) for text to be considered subscript
+    /// Default: 0.85 means font must be 85% or smaller than base font
+    pub font_size_ratio_threshold: f32,
+
+    /// Minimum relative baseline shift (as fraction of base font size)
+    /// Default: 0.3 means shift must be 30% or more of base font size
+    pub relative_baseline_threshold: f32,
+
+    /// Whether both font size AND baseline shift conditions must be met
+    /// true = AND logic (both conditions required)
+    /// false = OR logic (either condition sufficient)
+    pub use_and_logic: bool,
+
+    /// Threshold for returning to baseline to close subscript tags
+    pub return_threshold: f32,
+}
+
+impl Default for SubscriptDetectionConfig {
+    fn default() -> Self {
+        Self {
+            absolute_baseline_threshold: 3.0,
+            font_size_ratio_threshold: 0.85,
+            relative_baseline_threshold: 0.3,
+            use_and_logic: true,
+            return_threshold: 2.0,
+        }
+    }
+}
+
+impl SubscriptDetectionConfig {
+    /// Create a more permissive configuration for PDFs with subtle subscripts
+    #[allow(dead_code)]
+    pub fn permissive() -> Self {
+        Self {
+            absolute_baseline_threshold: 2.0,
+            font_size_ratio_threshold: 0.95,
+            relative_baseline_threshold: 0.15,
+            use_and_logic: false, // OR logic - either condition works
+            return_threshold: 1.5,
+        }
+    }
+
+    /// Create a strict configuration for PDFs with clear subscript formatting
+    #[allow(dead_code)]
+    pub fn strict() -> Self {
+        Self {
+            absolute_baseline_threshold: 4.0,
+            font_size_ratio_threshold: 0.75,
+            relative_baseline_threshold: 0.4,
+            use_and_logic: true, // AND logic - both conditions required
+            return_threshold: 3.0,
+        }
+    }
+}
+
 /// Check if this baseline/font change represents a real superscript based on positioning and font metrics
 fn is_real_superscript(current_span: &CharSpan, baseline_diff: f32, base_font_size: f32) -> bool {
     // Real superscripts should have:
     // 1. Significant font size reduction (typically 70% or smaller of base text)
-    // 2. Baseline shift that's proportional to font size
-    // 3. Not just small positioning variations
+    // 2. UPWARD baseline shift (negative baseline_diff)
+    // 3. Baseline shift that's proportional to font size
+
+    // Superscripts must have negative baseline shift (upward movement)
+    if baseline_diff >= 0.0 {
+        return false;
+    }
 
     let font_size_ratio = current_span.font_size / base_font_size;
     let relative_baseline_shift = baseline_diff.abs() / base_font_size;
@@ -51,14 +122,260 @@ fn is_real_superscript(current_span: &CharSpan, baseline_diff: f32, base_font_si
     is_likely_superscript
 }
 
+/// Analyze all spans for potential subscripts and generate comprehensive debug report
+fn analyze_potential_subscripts(spans: &[CharSpan], base_font_size: f32, baseline: f32) {
+    eprintln!("\n=== COMPREHENSIVE SUBSCRIPT ANALYSIS ===");
+    eprintln!("Base Font Size: {base_font_size:.1}, Base Baseline: {baseline:.1}");
+    eprintln!("Total Spans: {}", spans.len());
+
+    let mut potential_subscripts = Vec::new();
+    let full_text: String = spans.iter().map(|s| s.text.as_str()).collect();
+
+    eprintln!("\nFull Text: '{full_text}'");
+    eprintln!("\n--- DETAILED SPAN ANALYSIS ---");
+
+    for (i, span) in spans.iter().enumerate() {
+        let text_trimmed = span.text.trim();
+        if text_trimmed.is_empty() {
+            continue;
+        }
+
+        // Calculate metrics
+        let baseline_diff = span.bbox.y0 - baseline;
+        let font_size_ratio = span.font_size / base_font_size;
+        let relative_baseline_shift = baseline_diff.abs() / base_font_size;
+
+        // Determine context (what comes before/after)
+        let prev_context = if i > 0 { spans[i - 1].text.trim() } else { "" };
+
+        let next_context = if i + 1 < spans.len() {
+            spans[i + 1].text.trim()
+        } else {
+            ""
+        };
+
+        // Identify if this looks like it should be a subscript based on context
+        let should_be_subscript =
+            is_likely_subscript_by_context(text_trimmed, prev_context, next_context);
+
+        // Current detection result
+        let current_detection = if baseline_diff.abs() > 3.0 {
+            let has_smaller_font = font_size_ratio < 0.85;
+            let has_significant_shift = relative_baseline_shift > 0.3;
+            has_smaller_font && has_significant_shift
+        } else {
+            false
+        };
+
+        eprintln!(
+            "SPAN[{i}]: '{text_trimmed}' (context: '{prev_context}' → '{text_trimmed}' → '{next_context}')"
+        );
+        eprintln!(
+            "  Position: y={:.1}, baseline_diff={:.1} ({})",
+            span.bbox.y0,
+            baseline_diff,
+            if baseline_diff > 0.0 {
+                "DOWN"
+            } else if baseline_diff < 0.0 {
+                "UP"
+            } else {
+                "SAME"
+            }
+        );
+        eprintln!(
+            "  Font: size={:.1}, base={:.1}, ratio={:.3}",
+            span.font_size, base_font_size, font_size_ratio
+        );
+        eprintln!(
+            "  Metrics: abs_shift={:.1}, rel_shift={:.3} ({:.1}%)",
+            baseline_diff.abs(),
+            relative_baseline_shift,
+            relative_baseline_shift * 100.0
+        );
+        eprintln!(
+            "  Detection: current={}, should_be={}, font_ok={}, baseline_ok={}",
+            if current_detection {
+                "SUBSCRIPT"
+            } else {
+                "NORMAL"
+            },
+            if should_be_subscript { "YES" } else { "NO" },
+            if font_size_ratio < 0.85 { "YES" } else { "NO" },
+            if relative_baseline_shift > 0.3 {
+                "YES"
+            } else {
+                "NO"
+            }
+        );
+
+        if should_be_subscript || current_detection {
+            potential_subscripts.push((
+                i,
+                text_trimmed,
+                baseline_diff,
+                font_size_ratio,
+                relative_baseline_shift,
+                current_detection,
+                should_be_subscript,
+            ));
+        }
+
+        eprintln!();
+    }
+
+    if !potential_subscripts.is_empty() {
+        eprintln!("\n=== SUBSCRIPT CANDIDATES SUMMARY ===");
+        eprintln!("| Idx | Char | Context     | Abs Shift | Rel Shift | Font Ratio | Detected | Should Be | Status    |");
+        eprintln!("|-----|------|-------------|-----------|-----------|------------|----------|-----------|-----------|");
+
+        for (idx, text, baseline_diff, font_ratio, rel_shift, detected, should_be) in
+            &potential_subscripts
+        {
+            let context = if *idx > 0 {
+                format!("after '{}'", spans[*idx - 1].text.trim())
+            } else {
+                "start".to_string()
+            };
+
+            let status = match (*detected, *should_be) {
+                (true, true) => "✓ CORRECT",
+                (false, false) => "✓ CORRECT",
+                (true, false) => "⚠ FALSE_POS",
+                (false, true) => "✗ MISSED",
+            };
+
+            eprintln!(
+                "| {:3} | {:4} | {:11} | {:9.1} | {:8.1}% | {:10.3} | {:8} | {:9} | {:9} |",
+                idx,
+                text,
+                context,
+                baseline_diff.abs(),
+                rel_shift * 100.0,
+                font_ratio,
+                if *detected { "YES" } else { "NO" },
+                if *should_be { "YES" } else { "NO" },
+                status
+            );
+        }
+
+        // Generate threshold recommendations
+        let missed_subscripts: Vec<_> = potential_subscripts
+            .iter()
+            .filter(|(_, _, _, _, _, detected, should_be)| !detected && *should_be)
+            .collect();
+
+        if !missed_subscripts.is_empty() {
+            eprintln!("\n=== THRESHOLD RECOMMENDATIONS ===");
+            let min_font_ratio = missed_subscripts
+                .iter()
+                .map(|(_, _, _, font_ratio, _, _, _)| *font_ratio)
+                .fold(f32::INFINITY, f32::min);
+            let max_font_ratio = missed_subscripts
+                .iter()
+                .map(|(_, _, _, font_ratio, _, _, _)| *font_ratio)
+                .fold(0.0, f32::max);
+            let min_rel_shift = missed_subscripts
+                .iter()
+                .map(|(_, _, _, _, rel_shift, _, _)| *rel_shift)
+                .fold(f32::INFINITY, f32::min);
+            let max_rel_shift = missed_subscripts
+                .iter()
+                .map(|(_, _, _, _, rel_shift, _, _)| *rel_shift)
+                .fold(0.0, f32::max);
+
+            eprintln!("Missed subscripts have:");
+            eprintln!("  Font ratios: {min_font_ratio:.3} - {max_font_ratio:.3} (current threshold: 0.85)");
+            eprintln!("  Relative baseline shifts: {min_rel_shift:.3} - {max_rel_shift:.3} (current threshold: 0.30)");
+
+            if max_font_ratio > 0.85 {
+                eprintln!(
+                    "  → Suggest increasing font_size_ratio_threshold to {:.2}",
+                    (max_font_ratio + 0.05).min(0.95)
+                );
+            }
+            if min_rel_shift < 0.3 {
+                eprintln!(
+                    "  → Suggest decreasing relative_baseline_threshold to {:.2}",
+                    (min_rel_shift - 0.05).max(0.1)
+                );
+            }
+        }
+    }
+
+    eprintln!("=== END ANALYSIS ===\n");
+}
+
+/// Helper function to determine if a character should be a subscript based on context
+fn is_likely_subscript_by_context(text: &str, prev: &str, _next: &str) -> bool {
+    // Single character subscripts after common base characters
+    if text.len() == 1 {
+        let char = text.chars().next().unwrap();
+
+        // Common mathematical subscript patterns
+        if char.is_ascii_alphanumeric()
+            && (
+                prev.ends_with('n') ||    // ni, nj
+            prev.ends_with('M') ||    // Mi, Mj  
+            prev.ends_with('A') ||    // Ai, Aj
+            prev.ends_with('x') ||    // xi, xj
+            prev.ends_with('y') ||    // yi, yj
+            prev == "(" ||            // (i,j) after M
+            (prev.ends_with(',') && text != ",")
+                // second part of (i,j)
+            )
+        {
+            return true;
+        }
+
+        // Opening parenthesis after a capital letter (like M( in M(i,j))
+        if text == "("
+            && (prev.ends_with('M')
+                || prev.ends_with('A')
+                || prev.ends_with('H')
+                || prev.ends_with('X')
+                || prev.ends_with('Y')
+                || prev.ends_with('Z'))
+        {
+            return true;
+        }
+
+        // Closing parenthesis - should match opening
+        if text == ")" && prev.chars().any(|c| c.is_ascii_alphanumeric()) {
+            return true;
+        }
+    }
+
+    // Multi-character content inside parentheses (like "i,j" in M(i,j))
+    if text.len() > 1 && prev == "(" {
+        return true;
+    }
+
+    // Inside parentheses that follow a capital letter (like M(i,j))
+    if text.len() == 1 && prev.contains('(') {
+        return true;
+    }
+
+    false
+}
+
 /// Check if this baseline/font change represents a real subscript based on positioning and font metrics
 fn is_real_subscript(
     current_span: &CharSpan,
     baseline_diff: f32,
     base_font_size: f32,
-    spans: &[CharSpan],
-    current_index: usize,
+    _spans: &[CharSpan],
+    _current_index: usize,
 ) -> bool {
+    // Real subscripts should have:
+    // 1. Significant font size reduction (typically 70% or smaller of base text)
+    // 2. DOWNWARD baseline shift (positive baseline_diff)
+    // 3. Baseline shift that's proportional to font size
+
+    // Subscripts must have positive baseline shift (downward movement)
+    if baseline_diff <= 0.0 {
+        return false;
+    }
+
     let font_size_ratio = current_span.font_size / base_font_size;
     let relative_baseline_shift = baseline_diff.abs() / base_font_size;
 
@@ -68,41 +385,37 @@ fn is_real_subscript(
         return false;
     }
 
-    // Check if this is a parenthesis or bracket that should be grouped with adjacent subscript content
-    if text_trimmed == "(" || text_trimmed == "[" || text_trimmed == "{" {
-        // Look ahead to see if the next spans are subscript-level content
-        if let Some(next_span) = spans.get(current_index + 1) {
-            let next_font_ratio = next_span.font_size / base_font_size;
-            let next_text = next_span.text.trim();
-
-            // If the next span is subscript-sized content (not whitespace),
-            // then this opening bracket should be treated as part of the subscript group
-            if next_font_ratio < 0.85
-                && !next_text.is_empty()
-                && !next_text.chars().all(|c| c.is_whitespace())
-            {
-                eprintln!("🔍 SUBSCRIPT CHECK: '{text_trimmed}' → GROUPED (opening bracket with subscript content)");
-                return false; // Don't start subscript here, wait for the content
-            }
-        }
-    }
-
     // Real subscripts have smaller font AND significant baseline shift
     let has_smaller_font = font_size_ratio < 0.85; // Font is 85% or smaller
     let has_significant_shift = relative_baseline_shift > 0.3; // Shift is 30% of base font size
 
     let is_likely_subscript = has_smaller_font && has_significant_shift;
 
+    // Enhanced debug logging with detailed rejection reasons
+    let mut rejection_reasons = Vec::new();
+    if !has_smaller_font {
+        rejection_reasons.push(format!("font_too_large({font_size_ratio:.3}>0.85)"));
+    }
+    if !has_significant_shift {
+        rejection_reasons.push(format!(
+            "shift_too_small({relative_baseline_shift:.3}<0.30)"
+        ));
+    }
+
+    let decision_detail = if is_likely_subscript {
+        "✓ REAL_SUBSCRIPT".to_string()
+    } else if rejection_reasons.is_empty() {
+        "? UNKNOWN_REJECT".to_string()
+    } else {
+        format!("✗ ARTIFACT ({})", rejection_reasons.join(", "))
+    };
+
     eprintln!(
-        "🔍 SUBSCRIPT CHECK: '{}' font_ratio={:.2} baseline_shift_ratio={:.2} → {}",
+        "🔍 SUBSCRIPT DETAILED: '{}' font={:.1}/{:.1}({:.3}) baseline={:.1}({:.3}) thresholds=font<0.85&shift>0.30 → {}",
         text_trimmed,
-        font_size_ratio,
-        relative_baseline_shift,
-        if is_likely_subscript {
-            "REAL"
-        } else {
-            "ARTIFACT"
-        }
+        current_span.font_size, base_font_size, font_size_ratio,
+        relative_baseline_shift * base_font_size, relative_baseline_shift,
+        decision_detail
     );
 
     is_likely_subscript
@@ -226,6 +539,7 @@ pub(crate) fn detect_script_notation(spans: &[CharSpan]) -> String {
     let mut result = String::new();
     let mut tag_stack: Vec<&'static str> = Vec::new();
     let mut baseline: f32 = 0.0;
+    let mut original_baseline: f32 = 0.0; // Store the original baseline reference
     let mut baseline_initialized = false;
     let mut current_bold = false;
     let mut in_subscript = false;
@@ -250,6 +564,7 @@ pub(crate) fn detect_script_notation(spans: &[CharSpan]) -> String {
         // Initialize baseline and base font size on first span
         if !baseline_initialized {
             baseline = span.bbox.y0;
+            original_baseline = span.bbox.y0; // Store the original baseline
             base_font_size = span.font_size;
             baseline_initialized = true;
             current_bold = is_bold_text(span);
@@ -259,8 +574,11 @@ pub(crate) fn detect_script_notation(spans: &[CharSpan]) -> String {
                 eprintln!("🅱️ BOLD START: Pushed </b> on stack");
             }
             eprintln!("📏 BASELINE INIT: {baseline:.1}, BASE FONT SIZE: {base_font_size:.1}");
+
+            // Run comprehensive analysis after baseline is initialized
+            analyze_potential_subscripts(spans, base_font_size, baseline);
         } else {
-            let baseline_diff = span.bbox.y0 - baseline;
+            let baseline_diff = span.bbox.y0 - original_baseline; // Use original baseline, not current
             let is_bold_now = is_bold_text(span);
 
             // Handle font changes (bold on/off)
@@ -282,8 +600,43 @@ pub(crate) fn detect_script_notation(spans: &[CharSpan]) -> String {
 
             // Check for baseline changes that might indicate scripts
             if baseline_diff.abs() > SCRIPT_THRESHOLD {
-                // Close existing script tags before opening new ones
-                if in_subscript || in_superscript {
+                // Check what the current character should be
+                let should_be_subscript =
+                    is_real_subscript(span, baseline_diff, base_font_size, spans, i);
+                let should_be_superscript =
+                    is_real_superscript(span, baseline_diff, base_font_size);
+
+                // Only close existing script tags if the new character should be in a different mode
+                if should_be_subscript && !in_subscript {
+                    // Close superscript if open, then start subscript
+                    if in_superscript {
+                        if let Some(pos) = tag_stack.iter().rposition(|&tag| tag == "</sup>") {
+                            let closing_tag = tag_stack.remove(pos);
+                            result.push_str(closing_tag);
+                            eprintln!("🔄 SUP CLOSE: Applied {closing_tag}");
+                            in_superscript = false;
+                        }
+                    }
+                    result.push_str("<sub>");
+                    tag_stack.push("</sub>");
+                    in_subscript = true;
+                    eprintln!("⬇️ SUBSCRIPT START: Real subscript detected");
+                } else if should_be_superscript && !in_superscript {
+                    // Close subscript if open, then start superscript
+                    if in_subscript {
+                        if let Some(pos) = tag_stack.iter().rposition(|&tag| tag == "</sub>") {
+                            let closing_tag = tag_stack.remove(pos);
+                            result.push_str(closing_tag);
+                            eprintln!("🔄 SUB CLOSE: Applied {closing_tag}");
+                            in_subscript = false;
+                        }
+                    }
+                    result.push_str("<sup>");
+                    tag_stack.push("</sup>");
+                    in_superscript = true;
+                    eprintln!("⬆️ SUPERSCRIPT START: Real superscript detected");
+                } else if !should_be_subscript && !should_be_superscript {
+                    // Character should be normal - close any open script tags
                     if in_subscript {
                         if let Some(pos) = tag_stack.iter().rposition(|&tag| tag == "</sub>") {
                             let closing_tag = tag_stack.remove(pos);
@@ -300,34 +653,29 @@ pub(crate) fn detect_script_notation(spans: &[CharSpan]) -> String {
                             in_superscript = false;
                         }
                     }
-                }
-
-                if baseline_diff > 0.0 {
-                    // Baseline moved down - potential subscript
-                    if is_real_subscript(span, baseline_diff, base_font_size, spans, i) {
-                        result.push_str("<sub>");
-                        tag_stack.push("</sub>");
-                        in_subscript = true;
-                        eprintln!("⬇️ SUBSCRIPT START: Real subscript detected");
-                    }
-                } else {
-                    // Baseline moved up - potential superscript
-                    if is_real_superscript(span, baseline_diff, base_font_size) {
-                        result.push_str("<sup>");
-                        tag_stack.push("</sup>");
-                        in_superscript = true;
-                        eprintln!("⬆️ SUPERSCRIPT START: Real superscript detected");
-                    }
+                } else if should_be_subscript && in_subscript {
+                    eprintln!("⬇️ SUBSCRIPT CONTINUE: Already in subscript mode");
+                } else if should_be_superscript && in_superscript {
+                    eprintln!("⬆️ SUPERSCRIPT CONTINUE: Already in superscript mode");
                 }
                 baseline = span.bbox.y0;
             } else if baseline_diff.abs() < RETURN_THRESHOLD && (in_subscript || in_superscript) {
                 // Close script tags when returning close to baseline
                 // But only if we're not just processing whitespace/punctuation
+                // AND the current character is not itself a subscript/superscript
                 let text_trimmed = span.text.trim();
+                let is_current_subscript =
+                    is_real_subscript(span, baseline_diff, base_font_size, spans, i);
+                let is_current_superscript =
+                    is_real_superscript(span, baseline_diff, base_font_size);
+
                 if !text_trimmed.is_empty()
                     && !text_trimmed
                         .chars()
                         .all(|c| c.is_whitespace() || "=+−-()[]{}.,;:".contains(c))
+                    && !is_current_subscript  // Don't close if current char is subscript
+                    && !is_current_superscript
+                // Don't close if current char is superscript
                 {
                     if in_subscript {
                         if let Some(pos) = tag_stack.iter().rposition(|&tag| tag == "</sub>") {

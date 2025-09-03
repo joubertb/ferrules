@@ -135,6 +135,85 @@ pub fn format_formula_text(text: &str) -> String {
     }
 }
 
+/// Format mathematical formula text with CharSpan-based subscript/superscript detection
+///
+/// This function provides proper subscript/superscript detection by processing the
+/// original CharSpans that contain positioning and font information. This is more
+/// accurate than pattern-based detection as it uses actual PDF positioning data.
+pub fn format_formula_with_spans(
+    text: &str,
+    line_spans: &[Vec<crate::entities::CharSpan>],
+) -> String {
+    eprintln!(
+        "📋 FORMULA WITH SPANS: Processing formula text with {} line(s) of spans: {}",
+        line_spans.len(),
+        text.chars().take(100).collect::<String>()
+    );
+
+    // Flatten all spans from all lines into a single vector
+    let all_spans: Vec<crate::entities::CharSpan> = line_spans.iter().flatten().cloned().collect();
+
+    eprintln!(
+        "📋 FORMULA WITH SPANS: Flattened to {} total spans",
+        all_spans.len()
+    );
+
+    if all_spans.is_empty() {
+        eprintln!(
+            "📋 FORMULA WITH SPANS: No spans available, falling back to text-only processing"
+        );
+        return format_formula_text(text);
+    }
+
+    // Apply subscript/superscript detection using the actual CharSpans
+    let script_processed = add_tags(&all_spans);
+
+    eprintln!(
+        "📋 FORMULA WITH SPANS: Script processing result: '{}'",
+        script_processed.chars().take(100).collect::<String>()
+    );
+
+    // Apply mathematical symbol corrections to the processed text
+    #[cfg(feature = "correction-engine")]
+    let corrected_text = {
+        use crate::correction::character::fix_math_symbol_corruptions;
+        let fixed = fix_math_symbol_corruptions(&script_processed);
+        eprintln!(
+            "📋 FORMULA WITH SPANS CORRECTION: '{}' → '{}'",
+            script_processed.chars().take(50).collect::<String>(),
+            fixed.chars().take(50).collect::<String>()
+        );
+        fixed
+    };
+
+    #[cfg(not(feature = "correction-engine"))]
+    let corrected_text = script_processed;
+
+    // Clean up substitute characters and apply spacing
+    let cleaned_text = corrected_text.replace('\u{001a}', ""); // Remove SUB (substitute) character
+    let final_text = add_spacing_after_math_symbols(&cleaned_text);
+
+    // Wrap with formula tags
+    #[cfg(feature = "modtext")]
+    {
+        let result = format!("<formula>{final_text}</formula>");
+        eprintln!(
+            "📋 FORMULA WITH SPANS FINAL: '{}'",
+            result.chars().take(150).collect::<String>()
+        );
+        result
+    }
+
+    #[cfg(not(feature = "modtext"))]
+    {
+        eprintln!(
+            "📋 FORMULA WITH SPANS FINAL: '{}'",
+            final_text.chars().take(150).collect::<String>()
+        );
+        final_text
+    }
+}
+
 /// Add spacing around mathematical symbols when no space exists
 ///
 /// This function ensures proper readability by adding spaces before and after mathematical

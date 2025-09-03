@@ -262,19 +262,55 @@ pub(crate) fn merge_elements_into_blocks(
                 blocks.push(text_block);
             }
             ElementType::Formula => {
+                eprintln!("\n🧮 ===== FORMULA ELEMENT PROCESSING =====");
                 eprintln!(
-                    "🧮 FORMULA ELEMENT: Processing formula text: {}",
-                    curr_el
-                        .text_block
-                        .text
-                        .chars()
-                        .take(100)
-                        .collect::<String>()
+                    "🧮 Element ID: {}, Page: {}, Block ID: {}",
+                    curr_el.id, curr_el.page_id, block_id
                 );
+                eprintln!(
+                    "🧮 BBox: ({:.1},{:.1}) - ({:.1},{:.1})",
+                    curr_el.bbox.x0, curr_el.bbox.y0, curr_el.bbox.x1, curr_el.bbox.y1
+                );
+                eprintln!("🧮 Raw Formula Text: '{}'", curr_el.text_block.text);
+
+                // Process the formula text - use spans if available for better subscript detection
+                let processed_text = if !curr_el.line_spans.is_empty() {
+                    eprintln!(
+                        "🧮 Using CharSpan-based formula processing with {} line(s) of spans",
+                        curr_el.line_spans.len()
+                    );
+                    crate::modtext::format_formula_with_spans(
+                        &curr_el.text_block.text,
+                        &curr_el.line_spans,
+                    )
+                } else {
+                    eprintln!("🧮 No spans available, using text-only formula processing");
+                    crate::modtext::format_formula_text(&curr_el.text_block.text)
+                };
+                eprintln!("🧮 Processed Formula: '{processed_text}'");
+
+                // Check if subscripts were detected
+                if processed_text.contains("<sub>") {
+                    eprintln!("🧮 ✓ SUBSCRIPTS DETECTED in formula");
+                } else {
+                    eprintln!("🧮 ✗ NO SUBSCRIPTS detected in formula - potential issue!");
+                }
+
+                if processed_text.contains("ni")
+                    || processed_text.contains("nj")
+                    || processed_text.contains("M(i,j)")
+                {
+                    eprintln!(
+                        "🧮 ⚠️ POTENTIAL SUBSCRIPT PATTERN found but not tagged: check spans"
+                    );
+                }
+
+                eprintln!("🧮 ===== END FORMULA PROCESSING =====\n");
+
                 let formula_block = Block {
                     id: block_id,
                     kind: crate::blocks::BlockType::TextBlock(TextBlock {
-                        text: crate::modtext::format_formula_text(&curr_el.text_block.text),
+                        text: processed_text,
                     }),
                     pages_id: vec![curr_el.page_id],
                     bbox: curr_el.bbox,
@@ -511,6 +547,7 @@ mod tests {
             },
             page_id,
             bbox,
+            line_spans: Vec::new(),
         }
     }
 
@@ -524,6 +561,7 @@ mod tests {
             },
             page_id,
             bbox,
+            line_spans: Vec::new(),
         }
     }
 
@@ -537,6 +575,7 @@ mod tests {
             },
             page_id,
             bbox,
+            line_spans: Vec::new(),
         }
     }
 
@@ -550,6 +589,7 @@ mod tests {
             },
             page_id,
             bbox,
+            line_spans: Vec::new(),
         }
     }
     fn create_image_element(id: usize, page_id: usize, bbox: BBox) -> Element {
@@ -560,6 +600,7 @@ mod tests {
             text_block: ElementText::default(),
             page_id,
             bbox,
+            line_spans: Vec::new(),
         }
     }
 

@@ -347,6 +347,11 @@ pub struct Element {
     pub kind: ElementType,
     pub page_id: usize,
     pub bbox: BBox,
+    /// Stores the CharSpans from each line that was pushed to this element
+    /// Used for formula processing with proper subscript/superscript detection
+    /// Note: Skipped during serialization as this is only needed during processing
+    #[serde(skip)]
+    pub(crate) line_spans: Vec<Vec<CharSpan>>,
 }
 
 impl Element {
@@ -374,6 +379,7 @@ impl Element {
             page_id,
             text_block: Default::default(),
             bbox: layout_block.bbox.to_owned(),
+            line_spans: Vec::new(),
         }
     }
     pub fn push_line(&mut self, line: &Line) {
@@ -383,6 +389,10 @@ impl Element {
         } else {
             self.text_block.append_line(&line.text);
         }
+
+        // Store the CharSpans for potential subscript/superscript processing
+        // This preserves the positioning and font information needed for Formula elements
+        self.line_spans.push(line.spans.clone());
     }
 }
 
