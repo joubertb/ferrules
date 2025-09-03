@@ -346,9 +346,9 @@ mod tests {
 
                     // Each thread should have its own dictionary instance
                     let result = corrector.correct_word("w)th").await;
-                    println!("Thread {} result: {:?}", i, result);
+                    println!("Thread {i} result: {result:?}");
 
-                    assert!(result.is_some(), "Thread {} should find correction", i);
+                    assert!(result.is_some(), "Thread {i} should find correction");
                 });
             });
             handles.push(handle);
