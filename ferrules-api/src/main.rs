@@ -266,13 +266,25 @@ async fn get_debug_handler(
                         error: Some("Debug file not found".to_string()),
                     }),
                 ))
+            } else if e.contains("Path traversal")
+                || e.contains("Path separators")
+                || e.contains("Invalid document name")
+            {
+                Err((
+                    StatusCode::BAD_REQUEST,
+                    Json(ApiResponse {
+                        success: false,
+                        data: None,
+                        error: Some(e),
+                    }),
+                ))
             } else {
                 Err((
                     StatusCode::INTERNAL_SERVER_ERROR,
                     Json(ApiResponse {
                         success: false,
                         data: None,
-                        error: Some(format!("Failed to read debug file: {e}")),
+                        error: Some("Failed to read debug file".to_string()),
                     }),
                 ))
             }
@@ -291,14 +303,30 @@ async fn delete_debug_handler(
             data: Some("Debug file deleted successfully"),
             error: None,
         })),
-        Err(e) => Err((
-            StatusCode::INTERNAL_SERVER_ERROR,
-            Json(ApiResponse {
-                success: false,
-                data: None,
-                error: Some(format!("Failed to delete debug file: {e}")),
-            }),
-        )),
+        Err(e) => {
+            if e.contains("Path traversal")
+                || e.contains("Path separators")
+                || e.contains("Invalid document name")
+            {
+                Err((
+                    StatusCode::BAD_REQUEST,
+                    Json(ApiResponse {
+                        success: false,
+                        data: None,
+                        error: Some(e),
+                    }),
+                ))
+            } else {
+                Err((
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(ApiResponse {
+                        success: false,
+                        data: None,
+                        error: Some("Failed to delete debug file".to_string()),
+                    }),
+                ))
+            }
+        }
     }
 }
 

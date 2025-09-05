@@ -702,3 +702,14 @@ docker exec ferrules-api font-analyzer generate --report analysis-combined.json 
 - **Performance**: Optimized for production use with large documents
 - **Integration**: Critical component for SpeakDoc PDF processing pipeline
 - **Font Correction**: External JSON configuration enables runtime updates without recompilation
+
+- do not use pattern matching when fixing font corruption.
+- We have is_font_subset_corrupted() that detects corrupted fonts
+- when running tests "cargo build" do not use --release.  Use the default debug build (it is faster) and run ./target/debug/ferrules to run the actual test
+- Our font corruption detection and fixing
+    1. Read fonts - If no CMap, default to system font
+    2. Unicode → Glyph Name lookup - Get the glyph name from Unicode
+    3. Glyph Name → Correct Unicode mapping - Use our mapping table
+    4. Compare - If original Unicode ≠ our Unicode, use ours
+- when running target/debug/ferrules and want to look for multiple things in the output, redirect the output of the command to a file and then grep for what you are looking for in the file
+- in rust code, variables must be used directly in the `format!`

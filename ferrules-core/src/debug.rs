@@ -117,6 +117,32 @@ pub fn get_debug_context() -> Option<DebugContext> {
 
 /// Get current debug file path for a doc_name
 pub fn get_debug_file_path(doc_name: &str) -> Result<PathBuf, String> {
+    use std::path::Component;
+
+    // Validate that doc_name doesn't contain path traversal attempts
+    let path = PathBuf::from(doc_name);
+    if path
+        .components()
+        .any(|component| matches!(component, Component::ParentDir))
+    {
+        return Err("Path traversal not allowed".to_string());
+    }
+
+    // Additional validation: ensure doc_name is a simple filename without path separators
+    if doc_name.contains('/') || doc_name.contains('\\') {
+        return Err("Path separators not allowed in doc_name".to_string());
+    }
+
+    // Validate length to prevent extremely long filenames
+    if doc_name.len() > 255 {
+        return Err("Document name too long".to_string());
+    }
+
+    // Ensure doc_name is not empty and doesn't start with dot (hidden files)
+    if doc_name.is_empty() || doc_name.starts_with('.') {
+        return Err("Invalid document name format".to_string());
+    }
+
     let config = DEBUG_CONFIG.get_or_init(DebugConfig::new);
     Ok(config.default_dir.join(format!("{doc_name}-debug.txt")))
 }
