@@ -613,9 +613,9 @@ async fn parse_document_handler(
                 .status(StatusCode::OK)
                 .header(CONTENT_TYPE, "application/json")
                 .body(
-                    // Use to_vec + from_utf8 to preserve Unicode characters instead of escaping them
+                    // Use to_vec_pretty + from_utf8 to preserve Unicode characters and format prettily
                     String::from_utf8(
-                        serde_json::to_vec(&ApiResponse {
+                        serde_json::to_vec_pretty(&ApiResponse {
                             success: true,
                             data: Some(doc),
                             error: None,
@@ -940,9 +940,9 @@ async fn parse_document_sse_handler(
 
     // Create SSE stream
     let stream = ReceiverStream::new(rx).map(|event| {
-        // Use to_vec + from_utf8 to preserve Unicode characters instead of escaping them
-        let data =
-            String::from_utf8(serde_json::to_vec(&event).unwrap_or_default()).unwrap_or_default();
+        // Use to_vec_pretty + from_utf8 to preserve Unicode characters and format prettily
+        let data = String::from_utf8(serde_json::to_vec_pretty(&event).unwrap_or_default())
+            .unwrap_or_default();
         Ok::<_, std::convert::Infallible>(
             axum::response::sse::Event::default()
                 .event(match &event {
