@@ -2,7 +2,7 @@ use clap::Parser;
 
 use ferrules_core::correction::{display_cli_config_info, initialize_for_cli};
 use ferrules_core::{
-    debug::{init_debug_config, DebugOutput},
+    debug::{init_debug_config, set_debug_context_with_dir, DebugOutput},
     layout::model::{ORTConfig, OrtExecutionProvider},
     utils::{create_dirs, get_doc_length, save_parsed_document},
     FerrulesParseConfig, FerrulesParser,
@@ -147,13 +147,6 @@ struct Args {
     /// Debug output mode (none, stderr, file, both)
     #[arg(long, env = "FERRULES_DEBUG_OUTPUT", default_value = "none")]
     debug_output: String,
-
-    #[arg(
-        long,
-        env = "FERRULES_DEBUG_PATH",
-        help = "Specify the directory to store debug output files"
-    )]
-    debug_dir: Option<PathBuf>,
 }
 
 fn parse_page_range(range_str: &str) -> anyhow::Result<Range<usize>> {
@@ -279,8 +272,17 @@ async fn main() {
         .unwrap_or(Uuid::new_v4().to_string());
 
     let save_figs = args.html | args.save_images;
-    let (output_dir_path, debug_path) =
+    let output_dir_path =
         create_dirs(args.output_dir.as_ref(), &doc_name, args.debug, save_figs).unwrap();
+
+    // Set up debug context if debug output to file is enabled
+    if debug_output.contains(DebugOutput::FILE) {
+        set_debug_context_with_dir(
+            doc_name.clone(),
+            Some(debug_output),
+            Some(output_dir_path.clone()),
+        );
+    }
 
     let file = File::open(&args.file_path).await.unwrap();
     let mmap = unsafe { Mmap::map(&file).unwrap() };
@@ -289,7 +291,11 @@ async fn main() {
         password: None,
         flatten_pdf: true,
         page_range,
-        debug_dir: debug_path,
+        debug_dir: if args.debug {
+            Some(output_dir_path.clone())
+        } else {
+            None
+        },
     };
 
     let doc = parser

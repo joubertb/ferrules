@@ -98,9 +98,9 @@ fn recreate_result_dir(result_dir_name: &Path) -> anyhow::Result<PathBuf> {
 pub fn create_dirs<P: AsRef<Path>>(
     output_dir: Option<P>,
     doc_name: &str,
-    debug: bool,
+    _debug: bool,
     save_imgs: bool,
-) -> anyhow::Result<(PathBuf, Option<PathBuf>)> {
+) -> anyhow::Result<PathBuf> {
     let result_dir_name = format!("{}-results", sanitize_doc_name(doc_name));
     let res_dir_path = match output_dir {
         Some(p) => {
@@ -122,18 +122,11 @@ pub fn create_dirs<P: AsRef<Path>>(
         }
     };
     if save_imgs {
-        let debug_path = res_dir_path.join("figures");
-        create_dir(&debug_path).context("cant create debug path")?;
+        let figures_path = res_dir_path.join("figures");
+        create_dir(&figures_path).context("cant create figures path")?;
     }
 
-    let debug_path = if debug {
-        let debug_path = res_dir_path.join("debug");
-        create_dir(&debug_path).context("cant create debug path")?;
-        Some(debug_path)
-    } else {
-        None
-    };
-    Ok((res_dir_path, debug_path))
+    Ok(res_dir_path)
 }
 
 pub fn save_parsed_document(

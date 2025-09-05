@@ -79,13 +79,23 @@ pub fn init_debug_config(default_output: DebugOutput) {
 
 /// Set debug context for current thread
 pub fn set_debug_context(doc_name: String, output_flags: Option<DebugOutput>) {
+    set_debug_context_with_dir(doc_name, output_flags, None);
+}
+
+/// Set debug context for current thread with custom debug directory
+pub fn set_debug_context_with_dir(
+    doc_name: String,
+    output_flags: Option<DebugOutput>,
+    debug_dir: Option<PathBuf>,
+) {
     let config = DEBUG_CONFIG.get_or_init(DebugConfig::new);
     let flags = output_flags.unwrap_or(config.default_output);
+    let dir = debug_dir.unwrap_or_else(|| config.default_dir.clone());
 
     let context = DebugContext {
         doc_name,
         output_flags: flags,
-        debug_dir: config.default_dir.clone(),
+        debug_dir: dir,
     };
 
     // Create debug directory if needed and file output is enabled
