@@ -1,5 +1,5 @@
-use crate::correction;
 use crate::entities::{BBox, Element, ElementType, PageID};
+use crate::{correction, debug_print};
 use anyhow::bail;
 use serde::{Deserialize, Serialize};
 
@@ -9,8 +9,8 @@ pub type TitleLevel = u8;
 fn apply_word_corrections(text: &mut String) {
     // Debug: Log what text we're working with at the block level
     if text.contains("n<sub>j</sub> i") || text.contains("<formula>") {
-        eprintln!("🔍 BLOCK DEBUG: apply_word_corrections called with text length {} containing target patterns", text.len());
-        eprintln!(
+        debug_print!("🔍 BLOCK DEBUG: apply_word_corrections called with text length {} containing target patterns", text.len());
+        debug_print!(
             "🔍 BLOCK DEBUG: Text preview: {}",
             text.chars().take(200).collect::<String>()
         );

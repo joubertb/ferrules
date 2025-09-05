@@ -19,6 +19,8 @@
 //! This module is gated behind the `modtext` feature flag. When disabled,
 //! all functions return unmodified text for minimal impact on performance.
 
+use crate::debug_print;
+
 #[cfg(feature = "modtext")]
 pub mod mathematical;
 
@@ -35,7 +37,7 @@ pub mod mathematical;
 /// ```
 #[allow(dead_code)]
 pub fn process_mathematical_notation(spans: &[crate::entities::CharSpan]) -> String {
-    eprintln!(
+    debug_print!(
         "🟢 process_mathematical_notation CALLED with {} spans",
         spans.len()
     );
@@ -63,7 +65,7 @@ pub fn process_mathematical_notation(spans: &[crate::entities::CharSpan]) -> Str
 /// let enhanced = modtext::add_tags(&char_spans);
 /// ```
 pub fn add_tags(spans: &[crate::entities::CharSpan]) -> String {
-    eprintln!("🏷️ add_tags CALLED with {} spans", spans.len());
+    debug_print!("🏷️ add_tags CALLED with {} spans", spans.len());
     #[cfg(feature = "modtext")]
     {
         mathematical::apply_tags_recursive(spans, 0)
@@ -98,14 +100,14 @@ pub fn detect_inline_subscript_pattern(_text: &str) -> Option<(String, String)> 
 /// When disabled, returns the text unchanged.
 /// Note: Subscript/superscript/bold processing is now handled by add_tags() at the Line level.
 pub fn format_formula_text(text: &str) -> String {
-    eprintln!(
+    debug_print!(
         "📋 FORMULA: format_formula_text called with: {}",
         text.chars().take(100).collect::<String>()
     );
 
     // Step 1: Normalize mathematical Unicode variants to ASCII
     let normalized_text = normalize_mathematical_unicode(text);
-    eprintln!(
+    debug_print!(
         "📋 FORMULA STEP 1 (Unicode normalize): '{}' → '{}'",
         text.chars().take(50).collect::<String>(),
         normalized_text.chars().take(50).collect::<String>()
@@ -113,7 +115,7 @@ pub fn format_formula_text(text: &str) -> String {
 
     // Step 2: Combine mathematical diacritical marks
     let combined_text = combine_mathematical_accents(&normalized_text);
-    eprintln!(
+    debug_print!(
         "📋 FORMULA STEP 2 (Combine accents): '{}' → '{}'",
         normalized_text.chars().take(50).collect::<String>(),
         combined_text.chars().take(50).collect::<String>()
@@ -121,7 +123,7 @@ pub fn format_formula_text(text: &str) -> String {
 
     // Step 3: Standardize subscript/superscript notation
     let standardized_text = standardize_script_notation(&combined_text);
-    eprintln!(
+    debug_print!(
         "📋 FORMULA STEP 3 (Standardize scripts): '{}' → '{}'",
         combined_text.chars().take(50).collect::<String>(),
         standardized_text.chars().take(50).collect::<String>()
@@ -133,7 +135,7 @@ pub fn format_formula_text(text: &str) -> String {
     let corrected_text = {
         use crate::correction::character::fix_math_symbol_corruptions;
         let fixed = fix_math_symbol_corruptions(&standardized_text);
-        eprintln!(
+        debug_print!(
             "📋 FORMULA STEP 4 (Symbol corrections): '{}' → '{}'",
             standardized_text.chars().take(50).collect::<String>(),
             fixed.chars().take(50).collect::<String>()
@@ -168,7 +170,7 @@ pub fn format_formula_with_spans(
     text: &str,
     line_spans: &[Vec<crate::entities::CharSpan>],
 ) -> String {
-    eprintln!(
+    debug_print!(
         "📋 FORMULA WITH SPANS: Processing formula text with {} line(s) of spans: {}",
         line_spans.len(),
         text.chars().take(100).collect::<String>()
@@ -208,7 +210,7 @@ pub fn format_formula_with_spans(
                     all_spans.push(separator_span);
                     let ref_y = prev_significant_y.unwrap_or(py);
                     let total_diff = current_y - ref_y;
-                    eprintln!("➕ LINE BREAK: Added semicolon separator for y-jump {ref_y:.1} -> {current_y:.1} (diff: +{total_diff:.1})");
+                    debug_print!("➕ LINE BREAK: Added semicolon separator for y-jump {ref_y:.1} -> {current_y:.1} (diff: +{total_diff:.1})");
                     prev_significant_y = Some(current_y);
                 }
             }
@@ -223,13 +225,13 @@ pub fn format_formula_with_spans(
         }
     }
 
-    eprintln!(
+    debug_print!(
         "📋 FORMULA WITH SPANS: Flattened to {} total spans",
         all_spans.len()
     );
 
     if all_spans.is_empty() {
-        eprintln!(
+        debug_print!(
             "📋 FORMULA WITH SPANS: No spans available, falling back to text-only processing"
         );
         return format_formula_text(text);
@@ -238,7 +240,7 @@ pub fn format_formula_with_spans(
     // Apply subscript/superscript detection using the actual CharSpans
     let script_processed = add_tags(&all_spans);
 
-    eprintln!(
+    debug_print!(
         "📋 FORMULA WITH SPANS: Script processing result: '{}'",
         script_processed.chars().take(100).collect::<String>()
     );
@@ -247,7 +249,7 @@ pub fn format_formula_with_spans(
 
     // Step 1: Normalize mathematical Unicode variants to ASCII
     let normalized_text = normalize_mathematical_unicode(&script_processed);
-    eprintln!(
+    debug_print!(
         "📋 FORMULA WITH SPANS STEP 1 (Unicode normalize): '{}' → '{}'",
         script_processed.chars().take(50).collect::<String>(),
         normalized_text.chars().take(50).collect::<String>()
@@ -255,7 +257,7 @@ pub fn format_formula_with_spans(
 
     // Step 2: Combine mathematical diacritical marks
     let combined_text = combine_mathematical_accents(&normalized_text);
-    eprintln!(
+    debug_print!(
         "📋 FORMULA WITH SPANS STEP 2 (Combine accents): '{}' → '{}'",
         normalized_text.chars().take(50).collect::<String>(),
         combined_text.chars().take(50).collect::<String>()
@@ -263,7 +265,7 @@ pub fn format_formula_with_spans(
 
     // Step 3: Standardize subscript/superscript notation (this may have minimal effect since add_tags already handles this)
     let standardized_text = standardize_script_notation(&combined_text);
-    eprintln!(
+    debug_print!(
         "📋 FORMULA WITH SPANS STEP 3 (Standardize scripts): '{}' → '{}'",
         combined_text.chars().take(50).collect::<String>(),
         standardized_text.chars().take(50).collect::<String>()
@@ -274,7 +276,7 @@ pub fn format_formula_with_spans(
     let corrected_text = {
         use crate::correction::character::fix_math_symbol_corruptions;
         let fixed = fix_math_symbol_corruptions(&standardized_text);
-        eprintln!(
+        debug_print!(
             "📋 FORMULA WITH SPANS STEP 4 (Symbol corrections): '{}' → '{}'",
             standardized_text.chars().take(50).collect::<String>(),
             fixed.chars().take(50).collect::<String>()
@@ -293,7 +295,7 @@ pub fn format_formula_with_spans(
     #[cfg(feature = "modtext")]
     {
         let result = format!("<formula>{final_text}</formula>");
-        eprintln!(
+        debug_print!(
             "📋 FORMULA WITH SPANS FINAL: '{}'",
             result.chars().take(150).collect::<String>()
         );
@@ -302,7 +304,7 @@ pub fn format_formula_with_spans(
 
     #[cfg(not(feature = "modtext"))]
     {
-        eprintln!(
+        debug_print!(
             "📋 FORMULA WITH SPANS FINAL: '{}'",
             final_text.chars().take(150).collect::<String>()
         );
@@ -341,7 +343,7 @@ fn add_spacing_after_math_symbols(text: &str) -> String {
                 if let Some(last_char) = last_result_char {
                     if !last_char.is_whitespace() && !is_tag_char(prev_char) && prev_char != '(' {
                         result.push(' ');
-                        eprintln!("➕ MATH SPACING: Added space before '{current_char}' after '{prev_char}'");
+                        debug_print!("➕ MATH SPACING: Added space before '{current_char}' after '{prev_char}'");
                     }
                 }
             }
@@ -359,7 +361,7 @@ fn add_spacing_after_math_symbols(text: &str) -> String {
                     && !is_tag_char(next_char)
                 {
                     result.push(' ');
-                    eprintln!(
+                    debug_print!(
                         "➕ MATH SPACING: Added space after '{current_char}' before '{next_char}'"
                     );
                 }
@@ -402,7 +404,9 @@ fn handle_mathematical_x_operators(text: &str) -> String {
             if is_math_summation && has_math_context {
                 result.push('X');
                 result.push(' '); // Add space after X
-                eprintln!("➕ MATH X SPACING: Added space after summation X before '{next_char}'");
+                debug_print!(
+                    "➕ MATH X SPACING: Added space after summation X before '{next_char}'"
+                );
             } else {
                 result.push(current_char);
             }
@@ -447,7 +451,7 @@ fn combine_mathematical_accents(text: &str) -> String {
                 'ˆ' | '^' => {
                     result.push(current_char);
                     result.push('\u{0302}'); // Combining circumflex accent
-                    eprintln!("🔄 ACCENT: Combined '{current_char}ˆ' → '{current_char}̂'");
+                    debug_print!("🔄 ACCENT: Combined '{current_char}ˆ' → '{current_char}̂'");
                     i += 2; // Skip both characters
                     continue;
                 }
@@ -455,7 +459,7 @@ fn combine_mathematical_accents(text: &str) -> String {
                 '˜' | '~' => {
                     result.push(current_char);
                     result.push('\u{0303}'); // Combining tilde
-                    eprintln!("🔄 ACCENT: Combined '{current_char}˜' → '{current_char}̃'");
+                    debug_print!("🔄 ACCENT: Combined '{current_char}˜' → '{current_char}̃'");
                     i += 2; // Skip both characters
                     continue;
                 }
@@ -463,7 +467,7 @@ fn combine_mathematical_accents(text: &str) -> String {
                 '‾' | '¯' => {
                     result.push(current_char);
                     result.push('\u{0305}'); // Combining overline
-                    eprintln!("🔄 ACCENT: Combined '{current_char}‾' → '{current_char}̄'");
+                    debug_print!("🔄 ACCENT: Combined '{current_char}‾' → '{current_char}̄'");
                     i += 2; // Skip both characters
                     continue;
                 }
@@ -471,7 +475,7 @@ fn combine_mathematical_accents(text: &str) -> String {
                 '·' if current_char.is_alphabetic() => {
                     result.push(current_char);
                     result.push('\u{0307}'); // Combining dot above
-                    eprintln!("🔄 ACCENT: Combined '{current_char}·' → '{current_char}̇'");
+                    debug_print!("🔄 ACCENT: Combined '{current_char}·' → '{current_char}̇'");
                     i += 2; // Skip both characters
                     continue;
                 }
@@ -557,7 +561,7 @@ fn normalize_mathematical_unicode(text: &str) -> String {
         };
 
         if normalized != c {
-            eprintln!("🔄 UNICODE: Normalized '{c}' → '{normalized}'");
+            debug_print!("🔄 UNICODE: Normalized '{c}' → '{normalized}'");
         }
 
         result.push(normalized);
@@ -595,7 +599,7 @@ fn standardize_script_notation(text: &str) -> String {
                     _ => current_char,
                 };
                 result.push_str(&format!("<sub>{digit}</sub>"));
-                eprintln!("🔄 SUBSCRIPT: '{current_char}' → '<sub>{digit}</sub>'");
+                debug_print!("🔄 SUBSCRIPT: '{current_char}' → '<sub>{digit}</sub>'");
                 i += 1;
                 continue;
             }
@@ -621,7 +625,7 @@ fn standardize_script_notation(text: &str) -> String {
                     _ => current_char,
                 };
                 result.push_str(&format!("<sub>{letter}</sub>"));
-                eprintln!("🔄 SUBSCRIPT: '{current_char}' → '<sub>{letter}</sub>'");
+                debug_print!("🔄 SUBSCRIPT: '{current_char}' → '<sub>{letter}</sub>'");
                 i += 1;
                 continue;
             }
@@ -641,7 +645,7 @@ fn standardize_script_notation(text: &str) -> String {
                     _ => current_char,
                 };
                 result.push_str(&format!("<sup>{digit}</sup>"));
-                eprintln!("🔄 SUPERSCRIPT: '{current_char}' → '<sup>{digit}</sup>'");
+                debug_print!("🔄 SUPERSCRIPT: '{current_char}' → '<sup>{digit}</sup>'");
                 i += 1;
                 continue;
             }
@@ -676,7 +680,7 @@ fn standardize_script_notation(text: &str) -> String {
                     _ => current_char,
                 };
                 result.push_str(&format!("<sup>{letter}</sup>"));
-                eprintln!("🔄 SUPERSCRIPT: '{current_char}' → '<sup>{letter}</sup>'");
+                debug_print!("🔄 SUPERSCRIPT: '{current_char}' → '<sup>{letter}</sup>'");
                 i += 1;
                 continue;
             }

@@ -10,7 +10,7 @@ use ort::{
     session::{builder::GraphOptimizationLevel, Session},
 };
 
-use crate::entities::BBox;
+use crate::{debug_print, entities::BBox};
 
 pub const LAYOUT_MODEL_BYTES: &[u8] = include_bytes!("../../../models/yolov8s-doclaynet.onnx");
 
@@ -311,7 +311,7 @@ impl ORTLayoutParser {
             debug_assert!(y0 <= y1 && y1 <= original_height as f32);
 
             if x0 > x1 || y0 > y1 {
-                eprintln!("bbox error: ({x0},{y1}), ({x1},{y1})");
+                debug_print!("bbox error: ({x0},{y1}), ({x1},{y1})");
                 continue;
             }
 

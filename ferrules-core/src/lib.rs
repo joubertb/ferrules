@@ -85,6 +85,7 @@ pub(crate) mod draw;
 
 pub mod blocks;
 pub mod correction;
+pub mod debug;
 pub mod entities;
 pub mod layout;
 mod modtext;

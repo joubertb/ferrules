@@ -1,3 +1,4 @@
+use crate::debug_print;
 use std::collections::HashMap;
 use std::sync::LazyLock;
 
@@ -91,7 +92,7 @@ impl GlyphNameResolver {
 
         // Only return if it's different from original
         if correct_char != original_char {
-            eprintln!(
+            debug_print!(
                 "🔧 GLYPH NAME CORRECTION: Font '{font_name}' - Code 0x{unicode_value:04X} '{original_char}' → Glyph '{glyph_name}' → Unicode 0x{correct_unicode:04X} '{correct_char}'"
             );
             Some(correct_char)

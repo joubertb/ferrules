@@ -6,7 +6,7 @@ use std::{path::PathBuf, time::Duration};
 
 use pdfium_render::prelude::{PdfFontWeight, PdfPageTextChar, PdfRect};
 
-use crate::{blocks::Block, layout::model::LayoutBBox};
+use crate::{blocks::Block, debug_print, layout::model::LayoutBBox};
 
 pub type PageID = usize;
 pub type ElementID = usize;
@@ -39,7 +39,7 @@ fn apply_character_corrections(
             if let Some(corrected_char) =
                 resolver.resolve_unicode_from_glyph_name(font_name, unicode_value, original_char)
             {
-                eprintln!(
+                debug_print!(
                     "🔧 GLYPH PATH: Font '{font_name}' - 0x{unicode_value:04X} '{original_char}' → '{corrected_char}'"
                 );
                 return (corrected_char.to_string(), true);
@@ -48,7 +48,7 @@ fn apply_character_corrections(
                 if font_name.contains("NimbusRomNo9L")
                     && (unicode_value == 0x68 || unicode_value == 0x69)
                 {
-                    eprintln!(
+                    debug_print!(
                         "🔧 GLYPH SKIP: Font '{font_name}' - 0x{unicode_value:04X} '{original_char}' → No glyph correction needed"
                     );
                 }
@@ -59,15 +59,15 @@ fn apply_character_corrections(
     // Fallback to mathematical font corrections for both enabled and disabled correction engine
     // This handles cases where the advanced glyph resolver doesn't have a mapping
     if is_mathematical_symbol_font(font_name) {
-        eprintln!("🔧 MATH FONT CHECK: '{font_name}' - Checking if Unicode 0x{unicode_value:04X} '{original_char}' needs mathematical correction");
+        debug_print!("🔧 MATH FONT CHECK: '{font_name}' - Checking if Unicode 0x{unicode_value:04X} '{original_char}' needs mathematical correction");
         if let Some(corrected_char) = get_mathematical_symbol_correction(unicode_value, font_name) {
-            eprintln!("🔧 MATH FONT CORRECTION: '{font_name}' - Unicode {original_char:?} (0x{unicode_value:04X}) → '{corrected_char}' (mathematical symbol)");
+            debug_print!("🔧 MATH FONT CORRECTION: '{font_name}' - Unicode {original_char:?} (0x{unicode_value:04X}) → '{corrected_char}' (mathematical symbol)");
             return (corrected_char.to_string(), true);
         }
     } else {
         // Debug: Log when mathematical font correction is skipped
         if font_name.contains("NimbusRomNo9L") && (unicode_value == 0x68 || unicode_value == 0x69) {
-            eprintln!(
+            debug_print!(
                 "🔧 MATH SKIP: Font '{font_name}' - Not a mathematical symbol font, no correction"
             );
         }
@@ -126,13 +126,13 @@ fn is_font_subset_corrupted(font_name: &str, unicode_value: u32) -> bool {
     // Debug: Always log when checking fonts with h/i characters
     if unicode_value == 0x68 || unicode_value == 0x69 {
         let unicode_char = unicode_value as u8 as char;
-        eprintln!(
+        debug_print!(
             "🔍 CORRUPTION CHECK: Font '{font_name}' Unicode 0x{unicode_value:04X} '{unicode_char}' - is_corrupted_font: {is_corrupted_font}"
         );
 
         // Extra logging for debugging the specific issue
         if unicode_value == 0x69 {
-            eprintln!(
+            debug_print!(
                 "🎯 FOUND 'i' CHARACTER: Font '{font_name}' - Will this be corrected? {is_corrupted_font}"
             );
         }
@@ -147,7 +147,7 @@ fn is_font_subset_corrupted(font_name: &str, unicode_value: u32) -> bool {
         0x68 | 0x69 => {
             // 'h' and 'i' Unicode values in corrupted fonts are often parentheses
             // This is especially true for symbol fonts and corrupted subset fonts
-            eprintln!("🔍 GLYPH CORRUPTION DETECTED: Font '{}' has Unicode 0x{:04X} ({}), corrupted subset - should be parenthesis",
+            debug_print!("🔍 GLYPH CORRUPTION DETECTED: Font '{}' has Unicode 0x{:04X} ({}), corrupted subset - should be parenthesis",
                      font_name, unicode_value, unicode_value as u8 as char);
             true
         }
@@ -160,7 +160,7 @@ fn is_font_subset_corrupted(font_name: &str, unicode_value: u32) -> bool {
 /// Fixes corrupted character mappings in PDF fonts where letters appear
 /// instead of mathematical symbols due to subset font corruption.
 fn apply_character_correction(unicode_value: u32, font_name: &str) -> Option<char> {
-    eprintln!(
+    debug_print!(
         "🔧 APPLYING CHARACTER CORRECTION: Font '{font_name}', Unicode 0x{unicode_value:04X}"
     );
 
@@ -175,11 +175,13 @@ fn apply_character_correction(unicode_value: u32, font_name: &str) -> Option<cha
     if is_corrupted_font {
         match unicode_value {
             0x68 => {
-                eprintln!("   └── CHARACTER CORRECTION: {font_name} 0x68 → '(' (LEFT PARENTHESIS)");
+                debug_print!(
+                    "   └── CHARACTER CORRECTION: {font_name} 0x68 → '(' (LEFT PARENTHESIS)"
+                );
                 Some('(')
             }
             0x69 => {
-                eprintln!(
+                debug_print!(
                     "   └── CHARACTER CORRECTION: {font_name} 0x69 → ')' (RIGHT PARENTHESIS)"
                 );
                 Some(')')
@@ -187,7 +189,9 @@ fn apply_character_correction(unicode_value: u32, font_name: &str) -> Option<cha
             _ => None,
         }
     } else {
-        eprintln!("   └── NO CORRECTION NEEDED: Font '{font_name}' - not in corrupted font list");
+        debug_print!(
+            "   └── NO CORRECTION NEEDED: Font '{font_name}' - not in corrupted font list"
+        );
         None
     }
 }
@@ -468,7 +472,7 @@ impl CharSpan {
 
         // Debug raw character codes in mathematical fonts for investigation
         if font_name.contains("CMMI") && (unicode_value == 0x0068 || unicode_value == 0x0069) {
-            eprintln!(
+            debug_print!(
                 "📍 RAW CHAR: Font '{}' - Raw Unicode 0x{:04X} '{}' → Original Text '{}'",
                 font_name,
                 unicode_value,
@@ -481,7 +485,7 @@ impl CharSpan {
         if font_name.contains("NimbusRomNo9L")
             && (unicode_value == 0x0068 || unicode_value == 0x0069 || unicode_value == 0x0029)
         {
-            eprintln!(
+            debug_print!(
                 "🔍 NIMBUS RAW: Font '{}' - PDFium Unicode 0x{:04X} '{}' → Original Text '{}'",
                 font_name,
                 unicode_value,
@@ -492,7 +496,7 @@ impl CharSpan {
 
         // Debug for u0002 characters specifically to find their source
         if unicode_value == 0x0002 || original_text.contains('\u{0002}') {
-            eprintln!(
+            debug_print!(
                 "🎯 U0002 SOURCE: Font '{}' - Unicode 0x{:04X} '{}' → Text '{}'",
                 font_name,
                 unicode_value,
@@ -520,7 +524,7 @@ impl CharSpan {
 
             // Debug control character corrections at CharSpan level
             if glyph_corrected_text != corrected {
-                eprintln!(
+                debug_print!(
                     "🔧 CHARSPAN CONTROL FIX: '{}' → '{}' (Font: {})",
                     glyph_corrected_text
                         .chars()
@@ -548,7 +552,7 @@ impl CharSpan {
                     ch,
                     '\u{0002}' | '\u{0012}' | '\u{0013}' | '\u{0000}' | '\u{0001}'
                 ) {
-                    eprintln!("🎯 FOUND CONTROL CHAR at CharSpan: '\\u{{{:04X}}}' in Font '{}' - Original: '{}'", 
+                    debug_print!("🎯 FOUND CONTROL CHAR at CharSpan: '\\u{{{:04X}}}' in Font '{}' - Original: '{}'", 
                         ch as u32, font_name, glyph_corrected_text);
                 }
             }
@@ -561,12 +565,12 @@ impl CharSpan {
 
         // Debug after corrections for mathematical fonts
         if font_name.contains("CMMI") && (unicode_value == 0x0068 || unicode_value == 0x0069) {
-            eprintln!("📍 CORRECTED: Font '{font_name}' - Unicode 0x{unicode_value:04X} → '{original_text}' → '{final_text}' (corrupted: {has_corruption})");
+            debug_print!("📍 CORRECTED: Font '{font_name}' - Unicode 0x{unicode_value:04X} → '{original_text}' → '{final_text}' (corrupted: {has_corruption})");
         }
 
         // Special debug for the 'h' character that should become '('
         if original_text == "h" && font_name.contains("CMMI") {
-            eprintln!(
+            debug_print!(
                 "🎯 TRACKING 'h' → '{final_text}': Font '{font_name}' - Unicode 0x{unicode_value:04X} - Corrupted: {has_corruption}"
             );
         }
@@ -608,7 +612,7 @@ impl CharSpan {
 
             // Debug for u0002 characters in append method
             if unicode_value == 0x0002 || original_text.contains('\u{0002}') {
-                eprintln!(
+                debug_print!(
                     "🎯 U0002 APPEND: Font '{}' - Unicode 0x{:04X} → Text '{}'",
                     font_name,
                     unicode_value,
@@ -635,7 +639,7 @@ impl CharSpan {
 
                 // Debug control character corrections in append method
                 if glyph_corrected_text != corrected {
-                    eprintln!(
+                    debug_print!(
                         "🔧 APPEND CONTROL FIX: '{}' → '{}' (Font: {})",
                         glyph_corrected_text
                             .chars()
@@ -719,7 +723,7 @@ impl Line {
     // TODO: find a better pattern here
     // return Some if we fail to append the span-> not great
     pub fn append(&mut self, span: CharSpan) -> Result<(), CharSpan> {
-        eprintln!(
+        debug_print!(
             "🔵 APPEND called with span: '{}'",
             span.text.chars().take(20).collect::<String>()
         );
@@ -741,7 +745,7 @@ impl Line {
                 || script_processed.contains("ei,j")
                 || script_processed.contains("ej,i")
             {
-                eprintln!(
+                debug_print!(
                     "📝 APPEND CALL: script_processed='{}', original_text='{}'",
                     script_processed.chars().take(100).collect::<String>(),
                     self.text.chars().take(100).collect::<String>()
@@ -790,7 +794,7 @@ impl Line {
             || script_processed.contains("ei,j")
             || script_processed.contains("ej,i")
         {
-            eprintln!(
+            debug_print!(
                 "🏁 FINALIZE CALL: script_processed='{}', original_text='{}'",
                 script_processed.chars().take(100).collect::<String>(),
                 self.text.chars().take(100).collect::<String>()
@@ -808,7 +812,7 @@ impl Line {
 
             // Debug: Check if we have the target pattern after mathematical notation processing
             if self.text.contains("n<sub>j</sub> i") {
-                eprintln!(
+                debug_print!(
                     "🎯 FOUND TARGET: Line finalize() found n<sub>j</sub> i pattern: {}",
                     self.text.chars().take(200).collect::<String>()
                 );

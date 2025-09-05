@@ -4,6 +4,7 @@
 //! PDF font dictionaries and ToUnicode CMaps rather than guessing from output text.
 
 use super::unicode_validator::{validate_font_with_unicode_db, UnicodeValidator};
+use crate::debug_print;
 use anyhow::{Context, Result};
 use lopdf::{Document, Object};
 use once_cell::sync::Lazy;
@@ -85,7 +86,7 @@ pub fn detect_and_correct_font_corruption(
     // Create a character mapping diagnostic for corrupted characters
     if is_mathematical_font(font_name) && (text == "h" || text == "i" || text == "(" || text == ")")
     {
-        eprintln!(
+        debug_print!(
             "📊 CHAR MAP: Font='{}' | Extracted='{}' | Unicode=U+{:04X} | Expected='{}'",
             font_name,
             text,
@@ -114,7 +115,7 @@ pub fn detect_and_correct_font_corruption(
     if let Some(map) = corruption_map {
         // Check if this Unicode value is known to be corrupted
         if let Some(&correct_char) = map.corruptions.get(&unicode_value) {
-            eprintln!("✅ REAL CORRUPTION FIX: '{text}' (U+{unicode_value:04X}) -> '{correct_char}' in font {font_name} (from PDF font map)");
+            debug_print!("✅ REAL CORRUPTION FIX: '{text}' (U+{unicode_value:04X}) -> '{correct_char}' in font {font_name} (from PDF font map)");
             return (correct_char.to_string(), true);
         }
     }
@@ -127,19 +128,19 @@ fn is_subset_font(font_name: &str) -> bool {
     // Subset fonts have format: PREFIX+FontName (e.g., FYEQFE+NimbusRomNo9L-Regu)
     let is_subset = font_name.contains('+') && font_name.len() > 6;
     if is_subset {
-        eprintln!("📝 DEBUG: Subset font detected: {font_name}");
+        debug_print!("📝 DEBUG: Subset font detected: {font_name}");
     }
     is_subset
 }
 
 /// Retrieves cached font corruption map or analyzes the font if not cached
 fn get_or_analyze_font_corruption(font_name: &str) -> Option<FontCorruptionMap> {
-    eprintln!("🔄 DEBUG: Getting corruption map for font: {font_name}");
+    debug_print!("🔄 DEBUG: Getting corruption map for font: {font_name}");
 
     // Check cache first - try exact match first
     if let Ok(cache) = FONT_CORRUPTION_CACHE.lock() {
         if let Some(map) = cache.get(font_name) {
-            eprintln!("💾 DEBUG: Found cached corruption map for font: {font_name}");
+            debug_print!("💾 DEBUG: Found cached corruption map for font: {font_name}");
             return Some(map.clone());
         }
 
@@ -151,7 +152,7 @@ fn get_or_analyze_font_corruption(font_name: &str) -> Option<FontCorruptionMap> 
             if cached_font_name.contains('+') {
                 if let Some(base_name) = cached_font_name.split('+').nth(1) {
                     if base_name == font_name {
-                        eprintln!("💾 DEBUG: Found cached corruption map via base name: {font_name} -> {cached_font_name}");
+                        debug_print!("💾 DEBUG: Found cached corruption map via base name: {font_name} -> {cached_font_name}");
                         return Some(map.clone());
                     }
                 }
@@ -168,11 +169,11 @@ fn get_or_analyze_font_corruption(font_name: &str) -> Option<FontCorruptionMap> 
 
     let pdf_data = match pdf_data {
         Some(data) => {
-            eprintln!("📄 DEBUG: Found document context for font analysis");
+            debug_print!("📄 DEBUG: Found document context for font analysis");
             data
         }
         None => {
-            eprintln!("❌ DEBUG: No document context available for font: {font_name}");
+            debug_print!("❌ DEBUG: No document context available for font: {font_name}");
             return None;
         }
     };
@@ -221,29 +222,29 @@ fn analyze_font_corruption(font_name: &str, pdf_data: &[u8]) -> Result<FontCorru
     // Process actual font objects if available
     for font_obj in font_objects {
         if let Ok(font_dict) = font_obj.as_dict() {
-            eprintln!("🔍 DEBUG: Analyzing font dictionary for: {font_name}");
+            debug_print!("🔍 DEBUG: Analyzing font dictionary for: {font_name}");
 
             // Check for ToUnicode CMap
             if let Ok(tounicode_ref) = font_dict.get(b"ToUnicode") {
                 has_tounicode = true;
-                eprintln!("📋 DEBUG: Font {font_name} has ToUnicode CMap - parsing...");
+                debug_print!("📋 DEBUG: Font {font_name} has ToUnicode CMap - parsing...");
 
                 // Parse ToUnicode CMap to detect corruption mappings
                 if let Err(e) = parse_tounicode_cmap(&doc, tounicode_ref, &mut corruptions) {
-                    eprintln!("⚠️  DEBUG: Failed to parse ToUnicode CMap: {e}");
+                    debug_print!("⚠️  DEBUG: Failed to parse ToUnicode CMap: {e}");
                 }
             }
 
             // Check Encoding dictionary for character mappings
             if let Ok(encoding_ref) = font_dict.get(b"Encoding") {
-                eprintln!("🔤 DEBUG: Font {font_name} has Encoding dictionary");
+                debug_print!("🔤 DEBUG: Font {font_name} has Encoding dictionary");
 
                 // Use comprehensive corruption detection instead of basic parsing
                 let encoding_obj = match encoding_ref {
                     Object::Reference(reference) => match doc.get_object(*reference) {
                         Ok(obj) => obj,
                         Err(e) => {
-                            eprintln!(
+                            debug_print!(
                                 "❌ Failed to resolve encoding reference for {font_name}: {e}"
                             );
                             continue;
@@ -262,7 +263,7 @@ fn analyze_font_corruption(font_name: &str, pdf_data: &[u8]) -> Result<FontCorru
                                 font_name,
                                 &corruptions,
                             );
-                        eprintln!(
+                        debug_print!(
                             "🎯 DEBUG: Comprehensive analysis found {} corruptions for {}",
                             detected_corruptions.len(),
                             font_name
@@ -277,7 +278,7 @@ fn analyze_font_corruption(font_name: &str, pdf_data: &[u8]) -> Result<FontCorru
             }
 
             // Log font dictionary contents for debugging
-            eprintln!(
+            debug_print!(
                 "📄 DEBUG: Font dictionary keys for {}: {:?}",
                 font_name,
                 font_dict
@@ -288,7 +289,7 @@ fn analyze_font_corruption(font_name: &str, pdf_data: &[u8]) -> Result<FontCorru
         }
     }
 
-    eprintln!(
+    debug_print!(
         "📊 DEBUG: Total corruptions found for {}: {}",
         font_name,
         corruptions.len()
@@ -315,7 +316,7 @@ fn extract_font_objects(
     let mut font_objects = Vec::new();
     let corrupted_fonts = ["XSWLJE+NimbusRomNo9L-Medi", "FYEQFE+NimbusRomNo9L-Regu"];
 
-    eprintln!("🔍 DEBUG: Searching for font '{target_font_name}' using proper lopdf approach");
+    debug_print!("🔍 DEBUG: Searching for font '{target_font_name}' using proper lopdf approach");
 
     // Follow the guide: iterate through document objects looking for font dictionaries
     for (id, object) in doc.objects.iter() {
@@ -324,26 +325,26 @@ fn extract_font_objects(
             if let Ok(obj_type) = dict.get(b"Type") {
                 if let Ok(type_name) = obj_type.as_name_str() {
                     if type_name == "Font" {
-                        eprintln!("🎯 DEBUG: Found font object with ID: {id:?}");
+                        debug_print!("🎯 DEBUG: Found font object with ID: {id:?}");
 
                         // Check BaseFont name
                         if let Ok(base_font) = dict.get(b"BaseFont") {
                             if let Ok(base_font_name) = base_font.as_name_str() {
-                                eprintln!("📝 DEBUG: BaseFont name: {base_font_name}");
+                                debug_print!("📝 DEBUG: BaseFont name: {base_font_name}");
 
                                 // Special handling for corrupted subset fonts that don't have ToUnicode CMaps
                                 if corrupted_fonts.contains(&base_font_name) {
-                                    eprintln!("🚨 CRITICAL: Found corrupted subset font: {base_font_name}");
+                                    debug_print!("🚨 CRITICAL: Found corrupted subset font: {base_font_name}");
 
                                     // Check if it has ToUnicode CMap (it shouldn't)
                                     if let Ok(_tounicode_obj) = dict.get(b"ToUnicode") {
-                                        eprintln!("❓ UNEXPECTED: Corrupted font {base_font_name} has ToUnicode CMap!");
+                                        debug_print!("❓ UNEXPECTED: Corrupted font {base_font_name} has ToUnicode CMap!");
                                     } else {
-                                        eprintln!("✅ CONFIRMED: Corrupted font {base_font_name} has NO ToUnicode CMap - this is the root cause!");
+                                        debug_print!("✅ CONFIRMED: Corrupted font {base_font_name} has NO ToUnicode CMap - this is the root cause!");
 
                                         // Analyze the Encoding instead since no ToUnicode
                                         if let Ok(encoding_ref) = dict.get(b"Encoding") {
-                                            eprintln!("🔤 ANALYZING: Font {base_font_name} has Encoding dictionary - examining for corruption patterns");
+                                            debug_print!("🔤 ANALYZING: Font {base_font_name} has Encoding dictionary - examining for corruption patterns");
                                             analyze_encoding_for_corruption(
                                                 doc,
                                                 encoding_ref,
@@ -351,7 +352,7 @@ fn extract_font_objects(
                                                 corruptions,
                                             );
                                         } else {
-                                            eprintln!("❌ NO ENCODING: Font {base_font_name} has neither ToUnicode nor Encoding - complete corruption!");
+                                            debug_print!("❌ NO ENCODING: Font {base_font_name} has neither ToUnicode nor Encoding - complete corruption!");
                                         }
 
                                         // Check for other CMap fallbacks
@@ -367,18 +368,18 @@ fn extract_font_objects(
 
                                 // Check for exact or partial match
                                 if base_font_name == target_font_name {
-                                    eprintln!("✅ DEBUG: EXACT MATCH found: {target_font_name}");
+                                    debug_print!("✅ DEBUG: EXACT MATCH found: {target_font_name}");
                                     font_objects.push(object.clone());
                                 } else if base_font_name.contains(target_font_name)
                                     || target_font_name.contains(base_font_name)
                                 {
-                                    eprintln!("✅ DEBUG: PARTIAL MATCH found: {base_font_name} ≈ {target_font_name}");
+                                    debug_print!("✅ DEBUG: PARTIAL MATCH found: {base_font_name} ≈ {target_font_name}");
                                     font_objects.push(object.clone());
                                 }
 
                                 // GENERALIZED HANDLING: Check all fonts for ToUnicode CMap and potential corruption
                                 if let Ok(tounicode_obj) = dict.get(b"ToUnicode") {
-                                    eprintln!(
+                                    debug_print!(
                                         "🎯 DEBUG: Font {base_font_name} has ToUnicode CMap!"
                                     );
 
@@ -386,16 +387,16 @@ fn extract_font_objects(
                                     if let Err(e) =
                                         dump_tounicode_cmap(doc, tounicode_obj, base_font_name)
                                     {
-                                        eprintln!("⚠️  DEBUG: Failed to dump ToUnicode CMap for {base_font_name}: {e}");
+                                        debug_print!("⚠️  DEBUG: Failed to dump ToUnicode CMap for {base_font_name}: {e}");
                                     }
                                 } else {
-                                    eprintln!("🚨 POTENTIAL CORRUPTION: Font {base_font_name} has NO ToUnicode CMap - checking for Type 1 builtin corruption");
+                                    debug_print!("🚨 POTENTIAL CORRUPTION: Font {base_font_name} has NO ToUnicode CMap - checking for Type 1 builtin corruption");
 
                                     // Check if this is a Type 1 font that might use StandardEncoding
                                     if let Ok(subtype) = dict.get(b"Subtype") {
                                         if let Ok(subtype_name) = subtype.as_name_str() {
                                             if subtype_name == "Type1" {
-                                                eprintln!("🔍 TYPE1 FONT: {base_font_name} is Type 1 - analyzing for builtin encoding corruption");
+                                                debug_print!("🔍 TYPE1 FONT: {base_font_name} is Type 1 - analyzing for builtin encoding corruption");
                                                 analyze_type1_builtin_font_corruption(
                                                     doc,
                                                     dict,
@@ -404,7 +405,7 @@ fn extract_font_objects(
                                                 );
                                                 font_objects.push(object.clone());
                                             } else {
-                                                eprintln!("📄 NON-TYPE1: Font {base_font_name} is {subtype_name} without ToUnicode - checking encoding");
+                                                debug_print!("📄 NON-TYPE1: Font {base_font_name} is {subtype_name} without ToUnicode - checking encoding");
                                                 // Still try to analyze encoding for other font types
                                                 if let Ok(encoding_ref) = dict.get(b"Encoding") {
                                                     analyze_encoding_for_corruption(
@@ -419,7 +420,7 @@ fn extract_font_objects(
                                         }
                                     } else {
                                         // No subtype specified - could still be Type 1, try both approaches
-                                        eprintln!("🔍 UNKNOWN TYPE: Font {base_font_name} has no subtype - trying both Type 1 and encoding analysis");
+                                        debug_print!("🔍 UNKNOWN TYPE: Font {base_font_name} has no subtype - trying both Type 1 and encoding analysis");
                                         analyze_type1_builtin_font_corruption(
                                             doc,
                                             dict,
@@ -445,14 +446,14 @@ fn extract_font_objects(
         }
     }
 
-    eprintln!(
+    debug_print!(
         "📊 DEBUG: Found {} matching font objects for '{}'",
         font_objects.len(),
         target_font_name
     );
 
     if font_objects.is_empty() {
-        eprintln!(
+        debug_print!(
             "❌ DEBUG: NO MATCHING FONTS - but we may have found other fonts with CMaps above"
         );
     }
@@ -463,13 +464,13 @@ fn extract_font_objects(
 /// Dump ToUnicode CMap for any font (for debugging)
 /// Dumps and analyzes ToUnicode CMap content for debugging purposes
 fn dump_tounicode_cmap(doc: &Document, tounicode_ref: &Object, font_name: &str) -> Result<()> {
-    eprintln!("\n🔍 === DUMPING TOUNICODE CMAP FOR FONT: {font_name} ===");
+    debug_print!("\n🔍 === DUMPING TOUNICODE CMAP FOR FONT: {font_name} ===");
 
     if let Ok(tounicode_obj) = doc.get_object(tounicode_ref.as_reference()?) {
         if let Ok(stream) = tounicode_obj.as_stream() {
             let compressed_data = stream.content.clone();
 
-            eprintln!(
+            debug_print!(
                 "📋 DEBUG: Raw CMap stream length: {} bytes",
                 compressed_data.len()
             );
@@ -479,11 +480,11 @@ fn dump_tounicode_cmap(doc: &Document, tounicode_ref: &Object, font_name: &str) 
                 && compressed_data[0] == 0x78
                 && (compressed_data[1] == 0x9C || compressed_data[1] == 0x01)
             {
-                eprintln!("🗜️  DEBUG: Detected compressed stream (zlib), decompressing...");
+                debug_print!("🗜️  DEBUG: Detected compressed stream (zlib), decompressing...");
 
                 match decompress_zlib(&compressed_data) {
                     Ok(decompressed) => {
-                        eprintln!(
+                        debug_print!(
                             "✅ DEBUG: Decompressed {} bytes -> {} bytes",
                             compressed_data.len(),
                             decompressed.len()
@@ -491,17 +492,17 @@ fn dump_tounicode_cmap(doc: &Document, tounicode_ref: &Object, font_name: &str) 
                         decompressed
                     }
                     Err(e) => {
-                        eprintln!("❌ DEBUG: Failed to decompress: {e}");
+                        debug_print!("❌ DEBUG: Failed to decompress: {e}");
                         compressed_data // Fall back to raw data
                     }
                 }
             } else {
-                eprintln!("📄 DEBUG: Stream appears uncompressed");
+                debug_print!("📄 DEBUG: Stream appears uncompressed");
                 compressed_data
             };
 
             // HEX DUMP: Show decompressed bytes
-            eprintln!("🔍 HEX DUMP of DECOMPRESSED ToUnicode CMap (first 512 bytes):");
+            debug_print!("🔍 HEX DUMP of DECOMPRESSED ToUnicode CMap (first 512 bytes):");
             for (i, chunk) in decompressed_data.chunks(16).enumerate().take(32) {
                 let offset = i * 16;
                 let hex_str = chunk
@@ -519,25 +520,25 @@ fn dump_tounicode_cmap(doc: &Document, tounicode_ref: &Object, font_name: &str) 
                         }
                     })
                     .collect::<String>();
-                eprintln!("{offset:08X}: {hex_str:<48} {ascii_str}");
+                debug_print!("{offset:08X}: {hex_str:<48} {ascii_str}");
             }
 
             // ASCII DUMP: Show decompressed text representation
             let cmap_text = String::from_utf8_lossy(&decompressed_data);
-            eprintln!("\n📄 ASCII DUMP of DECOMPRESSED ToUnicode CMap:");
-            eprintln!("{}", &cmap_text.chars().take(1500).collect::<String>());
-            eprintln!("... (showing first 1500 chars)\n");
+            debug_print!("\n📄 ASCII DUMP of DECOMPRESSED ToUnicode CMap:");
+            debug_print!("{}", &cmap_text.chars().take(1500).collect::<String>());
+            debug_print!("... (showing first 1500 chars)\n");
 
             // Try to parse decompressed data with adobe_cmap_parser
             match adobe_cmap_parser::get_unicode_map(&decompressed_data) {
                 Ok(cmap) => {
-                    eprintln!(
+                    debug_print!(
                         "✅ DEBUG: Successfully parsed DECOMPRESSED CMap with {} mappings",
                         cmap.len()
                     );
 
                     // Show character mappings
-                    eprintln!("📊 ACTUAL CHARACTER MAPPINGS FROM PDF FONT:");
+                    debug_print!("📊 ACTUAL CHARACTER MAPPINGS FROM PDF FONT:");
                     let mut sorted_mappings: Vec<_> = cmap.iter().collect();
                     sorted_mappings.sort_by_key(|(code, _)| *code);
 
@@ -556,16 +557,16 @@ fn dump_tounicode_cmap(doc: &Document, tounicode_ref: &Object, font_name: &str) 
                                     "✅ NORMAL"
                                 };
 
-                            eprintln!("  0x{char_code:04X} ('{expected_char}') -> U+{unicode_val:04X} ('{actual_char}') [{corruption_status}]");
+                            debug_print!("  0x{char_code:04X} ('{expected_char}') -> U+{unicode_val:04X} ('{actual_char}') [{corruption_status}]");
                         }
                     }
 
                     if sorted_mappings.len() > 50 {
-                        eprintln!("  ... and {} more mappings", sorted_mappings.len() - 50);
+                        debug_print!("  ... and {} more mappings", sorted_mappings.len() - 50);
                     }
                 }
                 Err(e) => {
-                    eprintln!("⚠️  Failed to parse DECOMPRESSED CMap: {e}");
+                    debug_print!("⚠️  Failed to parse DECOMPRESSED CMap: {e}");
 
                     // Try manual parsing if adobe_cmap_parser fails
                     parse_cmap_manually(&cmap_text, font_name);
@@ -574,7 +575,7 @@ fn dump_tounicode_cmap(doc: &Document, tounicode_ref: &Object, font_name: &str) 
         }
     }
 
-    eprintln!("=== END CMAP DUMP ===\n");
+    debug_print!("=== END CMAP DUMP ===\n");
     Ok(())
 }
 
@@ -592,7 +593,7 @@ fn decompress_zlib(compressed_data: &[u8]) -> Result<Vec<u8>> {
 /// Manual CMap parsing for debugging when adobe_cmap_parser fails
 /// Manually parses CMap text to extract character mappings
 fn parse_cmap_manually(cmap_text: &str, font_name: &str) {
-    eprintln!("🔧 DEBUG: Attempting manual CMap parsing for {font_name}");
+    debug_print!("🔧 DEBUG: Attempting manual CMap parsing for {font_name}");
 
     let mut in_bfchar = false;
     let mut mapping_count = 0;
@@ -601,13 +602,13 @@ fn parse_cmap_manually(cmap_text: &str, font_name: &str) {
         let line = line.trim();
 
         if line.contains("beginbfchar") {
-            eprintln!("📍 DEBUG: Found beginbfchar section");
+            debug_print!("📍 DEBUG: Found beginbfchar section");
             in_bfchar = true;
             continue;
         }
 
         if line.contains("endbfchar") {
-            eprintln!("📍 DEBUG: End of bfchar section ({mapping_count} mappings found)");
+            debug_print!("📍 DEBUG: End of bfchar section ({mapping_count} mappings found)");
             in_bfchar = false;
             continue;
         }
@@ -629,7 +630,7 @@ fn parse_cmap_manually(cmap_text: &str, font_name: &str) {
                             "✅ NORMAL"
                         };
 
-                    eprintln!("  MANUAL: 0x{char_code:04X} ('{expected_char}') -> U+{unicode_val:04X} ('{actual_char}') [{corruption_status}]");
+                    debug_print!("  MANUAL: 0x{char_code:04X} ('{expected_char}') -> U+{unicode_val:04X} ('{actual_char}') [{corruption_status}]");
 
                     mapping_count += 1;
                 }
@@ -638,7 +639,7 @@ fn parse_cmap_manually(cmap_text: &str, font_name: &str) {
     }
 
     if mapping_count == 0 {
-        eprintln!("❌ DEBUG: No character mappings found in manual parsing");
+        debug_print!("❌ DEBUG: No character mappings found in manual parsing");
     }
 }
 
@@ -652,7 +653,7 @@ fn analyze_font_corruption_patterns(
 ) -> Result<()> {
     // Mathematical fonts (both subset and regular) often have angle bracket corruption
     if is_mathematical_font(font_name) {
-        eprintln!("🎯 DEBUG: Detected mathematical font for corruption analysis: {font_name}");
+        debug_print!("🎯 DEBUG: Detected mathematical font for corruption analysis: {font_name}");
 
         // Common mathematical font corruptions based on analysis of academic papers
         // These are definitive mappings observed in subset fonts
@@ -685,7 +686,7 @@ fn parse_tounicode_cmap(
     tounicode_ref: &Object,
     corruptions: &mut HashMap<u32, char>,
 ) -> Result<()> {
-    eprintln!("🔍 DEBUG: Parsing ToUnicode CMap with adobe_cmap_parser...");
+    debug_print!("🔍 DEBUG: Parsing ToUnicode CMap with adobe_cmap_parser...");
 
     let cmap_obj = doc.get_object(tounicode_ref.as_reference()?)?;
 
@@ -694,13 +695,13 @@ fn parse_tounicode_cmap(
         // Get the raw stream content - lopdf stream.content is Vec<u8>, not Option
         let stream_data = stream.content.clone();
 
-        eprintln!(
+        debug_print!(
             "📋 DEBUG: ToUnicode CMap raw content length: {} bytes",
             stream_data.len()
         );
 
         // HEX DUMP: Show raw bytes of the CMap stream
-        eprintln!("🔍 HEX DUMP of ToUnicode CMap stream (first 512 bytes):");
+        debug_print!("🔍 HEX DUMP of ToUnicode CMap stream (first 512 bytes):");
         for (i, chunk) in stream_data.chunks(16).enumerate().take(32) {
             let offset = i * 16;
             let hex_str = chunk
@@ -718,19 +719,19 @@ fn parse_tounicode_cmap(
                     }
                 })
                 .collect::<String>();
-            eprintln!("{offset:08X}: {hex_str:<48} {ascii_str}");
+            debug_print!("{offset:08X}: {hex_str:<48} {ascii_str}");
         }
 
         // ASCII DUMP: Show text representation
         let cmap_text = String::from_utf8_lossy(&stream_data);
-        eprintln!("\n📄 ASCII DUMP of ToUnicode CMap (first 1000 chars):");
-        eprintln!("{}", &cmap_text.chars().take(1000).collect::<String>());
-        eprintln!("... (truncated)\n");
+        debug_print!("\n📄 ASCII DUMP of ToUnicode CMap (first 1000 chars):");
+        debug_print!("{}", &cmap_text.chars().take(1000).collect::<String>());
+        debug_print!("... (truncated)\n");
 
         // Use adobe_cmap_parser to properly parse the CMap
         match adobe_cmap_parser::get_unicode_map(&stream_data) {
             Ok(cmap) => {
-                eprintln!(
+                debug_print!(
                     "✅ DEBUG: Successfully parsed CMap with {} mappings",
                     cmap.len()
                 );
@@ -756,35 +757,35 @@ fn parse_tounicode_cmap(
                             // CORRUPTION FOUND: Store the correct character for this corrupted code
                             // This builds our correction map: corrupted_code -> correct_character
                             if let Some(correct_char) = std::char::from_u32(unicode_val as u32) {
-                                eprintln!("🚨 CORRUPTION DETECTED: char_code=0x{char_code:04X} -> Unicode=U+{unicode_val:04X} ('{correct_char}') - SUSPICIOUS MAPPING");
+                                debug_print!("🚨 CORRUPTION DETECTED: char_code=0x{char_code:04X} -> Unicode=U+{unicode_val:04X} ('{correct_char}') - SUSPICIOUS MAPPING");
                                 corruptions.insert(char_code, correct_char);
                             }
                         } else {
                             // NORMAL MAPPING: This character code maps correctly, no corruption
                             let extracted_char = std::char::from_u32(char_code).unwrap_or('?');
-                            eprintln!("✅ NORMAL MAPPING: char_code=0x{char_code:04X} ('{extracted_char}') -> Unicode=U+{unicode_val:04X} - OK");
+                            debug_print!("✅ NORMAL MAPPING: char_code=0x{char_code:04X} ('{extracted_char}') -> Unicode=U+{unicode_val:04X} - OK");
                         }
                     }
                 }
 
-                eprintln!(
+                debug_print!(
                     "📊 SUMMARY: Found {} corruption mappings in ToUnicode CMap",
                     corruptions.len()
                 );
             }
             Err(e) => {
-                eprintln!("⚠️  DEBUG: Failed to parse ToUnicode CMap: {e}");
+                debug_print!("⚠️  DEBUG: Failed to parse ToUnicode CMap: {e}");
 
                 // Fallback to text inspection
                 let cmap_text = String::from_utf8_lossy(&stream_data);
-                eprintln!(
+                debug_print!(
                     "📄 DEBUG: First 500 chars of raw CMap data:\n{}",
                     &cmap_text.chars().take(500).collect::<String>()
                 );
             }
         }
     } else {
-        eprintln!("⚠️  DEBUG: ToUnicode object is not a stream");
+        debug_print!("⚠️  DEBUG: ToUnicode object is not a stream");
     }
 
     Ok(())
@@ -798,12 +799,12 @@ fn parse_font_encoding(
     encoding_ref: &Object,
     corruptions: &mut HashMap<u32, char>,
 ) -> Result<()> {
-    eprintln!("🔤 DEBUG: Parsing font encoding...");
+    debug_print!("🔤 DEBUG: Parsing font encoding...");
 
     let encoding_obj = doc.get_object(encoding_ref.as_reference()?)?;
 
     if let Ok(encoding_dict) = encoding_obj.as_dict() {
-        eprintln!(
+        debug_print!(
             "📄 DEBUG: Encoding dictionary keys: {:?}",
             encoding_dict
                 .iter()
@@ -815,7 +816,7 @@ fn parse_font_encoding(
         if let Ok(differences_ref) = encoding_dict.get(b"Differences") {
             let differences_obj = doc.get_object(differences_ref.as_reference()?)?;
             if let Ok(differences_array) = differences_obj.as_array() {
-                eprintln!(
+                debug_print!(
                     "📊 DEBUG: Found Differences array with {} entries",
                     differences_array.len()
                 );
@@ -831,7 +832,7 @@ fn parse_font_encoding(
 /// Parses CMap text format to extract character mappings
 #[allow(dead_code)]
 fn parse_cmap_mappings(cmap_text: &str, corruptions: &mut HashMap<u32, char>) -> Result<()> {
-    eprintln!("🔍 DEBUG: Parsing CMap mappings from text...");
+    debug_print!("🔍 DEBUG: Parsing CMap mappings from text...");
 
     let mut mapping_count = 0;
 
@@ -848,7 +849,7 @@ fn parse_cmap_mappings(cmap_text: &str, corruptions: &mut HashMap<u32, char>) ->
                     u32::from_str_radix(&unicode_str, 16),
                 ) {
                     if let Some(correct_char) = std::char::from_u32(unicode_val) {
-                        eprintln!("🎯 DEBUG: CMap mapping: 0x{char_code:04X} -> U+{unicode_val:04X} ('{correct_char}')");
+                        debug_print!("🎯 DEBUG: CMap mapping: 0x{char_code:04X} -> U+{unicode_val:04X} ('{correct_char}')");
 
                         // Use reverse lookup to detect corruption in CMap
                         if let Some(char_name) = unicode_to_char_name(unicode_val) {
@@ -858,17 +859,17 @@ fn parse_cmap_mappings(cmap_text: &str, corruptions: &mut HashMap<u32, char>) ->
                                     let corrected_char = if (0x20..=0x7E).contains(&char_code) {
                                         std::char::from_u32(char_code).unwrap_or('?')
                                     } else {
-                                        eprintln!("⚠️  Non-ASCII CMap corruption at 0x{char_code:04X}, skipping");
+                                        debug_print!("⚠️  Non-ASCII CMap corruption at 0x{char_code:04X}, skipping");
                                         continue;
                                     };
                                     corruptions.insert(char_code, corrected_char);
                                     mapping_count += 1;
-                                    eprintln!("🚨 CMAP REVERSE LOOKUP: Code 0x{char_code:04X} maps to '{char_name}' (should be at 0x{expected_code:04X}) → corrected to '{corrected_char}'");
+                                    debug_print!("🚨 CMAP REVERSE LOOKUP: Code 0x{char_code:04X} maps to '{char_name}' (should be at 0x{expected_code:04X}) → corrected to '{corrected_char}'");
                                 } else {
-                                    eprintln!("✅ CMap mapping correct: 0x{char_code:04X} -> '{char_name}' at expected position");
+                                    debug_print!("✅ CMap mapping correct: 0x{char_code:04X} -> '{char_name}' at expected position");
                                 }
                             } else {
-                                eprintln!("❓ Unknown character name for Unicode U+{unicode_val:04X} in CMap");
+                                debug_print!("❓ Unknown character name for Unicode U+{unicode_val:04X} in CMap");
                             }
                         } else {
                             // Fall back to ASCII detection for unknown Unicode values
@@ -876,7 +877,7 @@ fn parse_cmap_mappings(cmap_text: &str, corruptions: &mut HashMap<u32, char>) ->
                                 let corrected_char = std::char::from_u32(char_code).unwrap_or('?');
                                 corruptions.insert(char_code, corrected_char);
                                 mapping_count += 1;
-                                eprintln!("🚨 CMAP ASCII CORRUPTION: Code 0x{char_code:04X} -> U+{unicode_val:04X} (should be U+{char_code:04X}) → corrected to '{corrected_char}'");
+                                debug_print!("🚨 CMAP ASCII CORRUPTION: Code 0x{char_code:04X} -> U+{unicode_val:04X} (should be U+{char_code:04X}) → corrected to '{corrected_char}'");
                             }
                         }
                     }
@@ -885,7 +886,7 @@ fn parse_cmap_mappings(cmap_text: &str, corruptions: &mut HashMap<u32, char>) ->
         }
     }
 
-    eprintln!("📊 DEBUG: Found {mapping_count} corruption mappings in CMap");
+    debug_print!("📊 DEBUG: Found {mapping_count} corruption mappings in CMap");
     Ok(())
 }
 
@@ -913,7 +914,7 @@ fn parse_encoding_differences(
     differences: &[Object],
     corruptions: &mut HashMap<u32, char>,
 ) -> Result<()> {
-    eprintln!("🔤 DEBUG: Parsing encoding differences array...");
+    debug_print!("🔤 DEBUG: Parsing encoding differences array...");
 
     let mut i = 0;
     while i < differences.len() {
@@ -928,29 +929,29 @@ fn parse_encoding_differences(
                 }
 
                 if let Ok(char_name) = differences[i].as_name_str() {
-                    eprintln!("🎯 DEBUG: Encoding: code {char_code} -> name '{char_name}'");
+                    debug_print!("🎯 DEBUG: Encoding: code {char_code} -> name '{char_name}'");
 
                     // UPDATED: Use reverse lookup for corruption detection
                     if let Some(expected_code) = expected_code_for_char_name(char_name) {
-                        eprintln!("📊 DEBUG: Character '{char_name}' should be at code 0x{expected_code:04X}, found at 0x{char_code:04X}");
+                        debug_print!("📊 DEBUG: Character '{char_name}' should be at code 0x{expected_code:04X}, found at 0x{char_code:04X}");
 
                         if char_code != expected_code {
                             // CORRUPTION DETECTED via reverse lookup!
                             let correct_char = if (0x20..=0x7E).contains(&char_code) {
                                 std::char::from_u32(char_code).unwrap_or('?')
                             } else {
-                                eprintln!("⚠️  DEBUG: Non-ASCII corruption at 0x{char_code:04X}, skipping");
+                                debug_print!("⚠️  DEBUG: Non-ASCII corruption at 0x{char_code:04X}, skipping");
                                 char_code += 1;
                                 continue;
                             };
 
                             corruptions.insert(char_code, correct_char);
-                            eprintln!("🚨 ENCODING REVERSE LOOKUP: Code 0x{char_code:04X} has '{char_name}' (should be at 0x{expected_code:04X}) → corrected to '{correct_char}'");
+                            debug_print!("🚨 ENCODING REVERSE LOOKUP: Code 0x{char_code:04X} has '{char_name}' (should be at 0x{expected_code:04X}) → corrected to '{correct_char}'");
                         } else {
-                            eprintln!("✅ DEBUG: Character '{char_name}' at correct position 0x{char_code:04X}");
+                            debug_print!("✅ DEBUG: Character '{char_name}' at correct position 0x{char_code:04X}");
                         }
                     } else {
-                        eprintln!("❓ DEBUG: Unknown character name '{char_name}' at code 0x{char_code:04X}");
+                        debug_print!("❓ DEBUG: Unknown character name '{char_name}' at code 0x{char_code:04X}");
                     }
 
                     char_code += 1;
@@ -1281,21 +1282,21 @@ fn unicode_to_char_name(unicode: u32) -> Option<String> {
 /// Print a comprehensive visual table showing character mappings for debugging
 /// Prints a formatted table of character mapping corruptions for debugging
 fn print_character_mapping_table(font_name: &str, corruptions: &HashMap<u32, char>) {
-    eprintln!(
+    debug_print!(
         "\n┌─────────────────────────────────────────────────────────────────────────────────────┐"
     );
-    eprintln!(
+    debug_print!(
         "│                        FONT CHARACTER MAPPING TABLE                                 │"
     );
-    eprintln!(
+    debug_print!(
         "│                              Font: {font_name:^43}                              │"
     );
-    eprintln!(
+    debug_print!(
         "├─────────────────────────────────────────────────────────────────────────────────────┤"
     );
-    eprintln!("│ Char │ Unicode │ Expected │ Status      │ Corrected To │ Visual             │");
-    eprintln!("│ Code │  Value  │   Char   │             │   (if any)   │ Representation     │");
-    eprintln!("├──────┼─────────┼──────────┼─────────────┼──────────────┼────────────────────┤");
+    debug_print!("│ Char │ Unicode │ Expected │ Status      │ Corrected To │ Visual             │");
+    debug_print!("│ Code │  Value  │   Char   │             │   (if any)   │ Representation     │");
+    debug_print!("├──────┼─────────┼──────────┼─────────────┼──────────────┼────────────────────┤");
 
     // Show common characters and whether they're corrupted
     let test_chars = [
@@ -1331,7 +1332,7 @@ fn print_character_mapping_table(font_name: &str, corruptions: &HashMap<u32, cha
 
         if let Some(&corrected_char) = corruptions.get(unicode_val) {
             // This character is corrupted and has a correction
-            eprintln!(
+            debug_print!(
                 "│ {:^4} │ {:^7} │ {:^8} │ {:^11} │ {:^12} │ {:^18} │",
                 char_code_hex,
                 unicode_display,
@@ -1342,7 +1343,7 @@ fn print_character_mapping_table(font_name: &str, corruptions: &HashMap<u32, cha
             );
         } else {
             // This character is normal (not corrupted)
-            eprintln!(
+            debug_print!(
                 "│ {:^4} │ {:^7} │ {:^8} │ {:^11} │ {:^12} │ {:^18} │",
                 char_code_hex,
                 unicode_display,
@@ -1361,7 +1362,7 @@ fn print_character_mapping_table(font_name: &str, corruptions: &HashMap<u32, cha
             let char_code_hex = format!("0x{unicode_val:02X}");
             let unicode_display = format!("U+{unicode_val:04X}");
 
-            eprintln!(
+            debug_print!(
                 "│ {:^4} │ {:^7} │ {:^8} │ {:^11} │ {:^12} │ {:^18} │",
                 char_code_hex,
                 unicode_display,
@@ -1373,35 +1374,35 @@ fn print_character_mapping_table(font_name: &str, corruptions: &HashMap<u32, cha
         }
     }
 
-    eprintln!(
+    debug_print!(
         "└─────────────────────────────────────────────────────────────────────────────────────┘"
     );
-    eprintln!(
+    debug_print!(
         "Summary: {} corruption(s) detected in font '{}'",
         corruptions.len(),
         font_name
     );
-    eprintln!("Legend: NORMAL = maps to itself, CORRUPTED = maps to different character\n");
+    debug_print!("Legend: NORMAL = maps to itself, CORRUPTED = maps to different character\n");
 }
 
 /// Print comprehensive CMap analysis showing all character mappings
 /// Prints analysis of CMap character mappings for debugging purposes
 fn print_cmap_analysis(cmap: &std::collections::HashMap<u32, Vec<u8>>, font_name: &str) {
-    eprintln!(
+    debug_print!(
         "\n┌─────────────────────────────────────────────────────────────────────────────────────┐"
     );
-    eprintln!(
+    debug_print!(
         "│                        ACTUAL PDF FONT CHARACTER MAP                               │"
     );
-    eprintln!(
+    debug_print!(
         "│                              Font: {font_name:^43}                              │"
     );
-    eprintln!(
+    debug_print!(
         "├─────────────────────────────────────────────────────────────────────────────────────┤"
     );
-    eprintln!("│ Char │ Unicode │ Actual   │ Status      │ Expected │ Corruption             │");
-    eprintln!("│ Code │  Target │   Char   │             │   Char   │ Evidence               │");
-    eprintln!("├──────┼─────────┼──────────┼─────────────┼──────────┼────────────────────────┤");
+    debug_print!("│ Char │ Unicode │ Actual   │ Status      │ Expected │ Corruption             │");
+    debug_print!("│ Code │  Target │   Char   │             │   Char   │ Evidence               │");
+    debug_print!("├──────┼─────────┼──────────┼─────────────┼──────────┼────────────────────────┤");
 
     // Sort by character code for readable output
     let mut sorted_mappings: Vec<_> = cmap.iter().collect();
@@ -1418,7 +1419,7 @@ fn print_cmap_analysis(cmap: &std::collections::HashMap<u32, Vec<u8>>, font_name
             let unicode_display = format!("U+{unicode_val:04X}");
 
             if is_character_mapping_corrupted(char_code, unicode_val as u32) {
-                eprintln!(
+                debug_print!(
                     "│ {:^4} │ {:^7} │ {:^8} │ {:^11} │ {:^8} │ {:^22} │",
                     char_code_hex,
                     unicode_display,
@@ -1432,7 +1433,7 @@ fn print_cmap_analysis(cmap: &std::collections::HashMap<u32, Vec<u8>>, font_name
                     }
                 );
             } else {
-                eprintln!(
+                debug_print!(
                     "│ {:^4} │ {:^7} │ {:^8} │ {:^11} │ {:^8} │ {:^22} │",
                     char_code_hex,
                     unicode_display,
@@ -1446,16 +1447,16 @@ fn print_cmap_analysis(cmap: &std::collections::HashMap<u32, Vec<u8>>, font_name
     }
 
     if cmap.len() > 50 {
-        eprintln!(
+        debug_print!(
             "│ ... and {} more mappings (truncated for readability) ...                          │",
             cmap.len() - 50
         );
     }
 
-    eprintln!(
+    debug_print!(
         "└─────────────────────────────────────────────────────────────────────────────────────┘"
     );
-    eprintln!("Total mappings in CMap: {}\n", cmap.len());
+    debug_print!("Total mappings in CMap: {}\n", cmap.len());
 }
 
 /// Extracts font name from a stream object (currently returns None)
@@ -1514,7 +1515,7 @@ fn is_mathematical_font(font_name: &str) -> bool {
         .any(|indicator| font_name_upper.contains(&indicator.to_uppercase()));
 
     if is_math {
-        eprintln!("🎯 DEBUG: Mathematical font detected: {font_name}");
+        debug_print!("🎯 DEBUG: Mathematical font detected: {font_name}");
     }
 
     is_math
@@ -1531,26 +1532,28 @@ pub fn analyze_document_fonts(pdf_data: &[u8]) -> Result<HashMap<String, FontCor
     let font_names = extract_all_font_names(&doc)?;
 
     info!("Found {} fonts to analyze", font_names.len());
-    eprintln!("🔍 DEBUG: All fonts discovered: {font_names:?}");
+    debug_print!("🔍 DEBUG: All fonts discovered: {font_names:?}");
 
     // Analyze each font (both subset and mathematical fonts)
     for font_name in font_names {
-        eprintln!("🎯 DEBUG: Evaluating font: {font_name}");
+        debug_print!("🎯 DEBUG: Evaluating font: {font_name}");
         let is_subset = is_subset_font(&font_name);
         let is_mathematical = is_mathematical_font(&font_name);
-        eprintln!("📊 DEBUG: Font {font_name}: subset={is_subset}, mathematical={is_mathematical}");
+        debug_print!(
+            "📊 DEBUG: Font {font_name}: subset={is_subset}, mathematical={is_mathematical}"
+        );
 
         // Process ALL fonts, not just subset/mathematical ones
-        eprintln!("🔧 DEBUG: Processing font {font_name} (no filtering)");
+        debug_print!("🔧 DEBUG: Processing font {font_name} (no filtering)");
         match analyze_font_corruption(&font_name, pdf_data) {
             Ok(font_map) => {
-                eprintln!(
+                debug_print!(
                     "🔍 FINAL ANALYSIS: Font {} has {} corruptions in final map",
                     font_name,
                     font_map.corruptions.len()
                 );
                 for (&code, &ch) in &font_map.corruptions {
-                    eprintln!("  📝 Final corruption: 0x{code:04X} -> '{ch}'");
+                    debug_print!("  📝 Final corruption: 0x{code:04X} -> '{ch}'");
                 }
 
                 if !font_map.corruptions.is_empty() {
@@ -1561,12 +1564,12 @@ pub fn analyze_document_fonts(pdf_data: &[u8]) -> Result<HashMap<String, FontCor
                     );
                     font_maps.insert(font_name, font_map);
                 } else {
-                    eprintln!("📋 DEBUG: Font {font_name} has no corruptions detected");
+                    debug_print!("📋 DEBUG: Font {font_name} has no corruptions detected");
                 }
             }
             Err(e) => {
                 warn!("Failed to analyze font {}: {}", font_name, e);
-                eprintln!("❌ DEBUG: Font {font_name} analysis failed: {e}");
+                debug_print!("❌ DEBUG: Font {font_name} analysis failed: {e}");
             }
         }
     }
@@ -1657,7 +1660,9 @@ fn analyze_type1_builtin_font_corruption(
     font_name: &str,
     corruptions: &mut HashMap<u32, char>,
 ) {
-    eprintln!("🔍 TYPE1 BUILTIN ANALYSIS: Analyzing {font_name} for StandardEncoding corruption");
+    debug_print!(
+        "🔍 TYPE1 BUILTIN ANALYSIS: Analyzing {font_name} for StandardEncoding corruption"
+    );
 
     // For Type 1 Builtin fonts, we assume StandardEncoding should apply
     // In StandardEncoding: 0x28 -> '(' and 0x29 -> ')'
@@ -1666,7 +1671,7 @@ fn analyze_type1_builtin_font_corruption(
     // Check what encoding this font claims to use
     if let Ok(encoding_ref) = font_dict.get(b"Encoding") {
         if let Ok(encoding_name) = encoding_ref.as_name_str() {
-            eprintln!("📋 TYPE1 ENCODING: {font_name} uses encoding: {encoding_name}");
+            debug_print!("📋 TYPE1 ENCODING: {font_name} uses encoding: {encoding_name}");
 
             if encoding_name == "StandardEncoding"
                 || encoding_name == "MacRomanEncoding"
@@ -1674,25 +1679,25 @@ fn analyze_type1_builtin_font_corruption(
             {
                 // These encodings should all map 0x28 -> '(' and 0x29 -> ')'
                 // If PDFium is getting 'h' and 'i', the font is corrupted
-                eprintln!("🚨 CORRUPTION DETECTED: {font_name} uses {encoding_name} but produces 'h'/'i' instead of '('/')'");
+                debug_print!("🚨 CORRUPTION DETECTED: {font_name} uses {encoding_name} but produces 'h'/'i' instead of '('/')'");
 
                 // Add corrections: 0x28 should be '(' not 'h', 0x29 should be ')' not 'i'
                 corruptions.insert(0x28, '('); // Fix 0x28 -> '(' (not 'h')
                 corruptions.insert(0x29, ')'); // Fix 0x29 -> ')' (not 'i')
 
-                eprintln!("🔧 CORRECTION ADDED: {font_name} - 0x28 -> '(' and 0x29 -> ')'");
+                debug_print!("🔧 CORRECTION ADDED: {font_name} - 0x28 -> '(' and 0x29 -> ')'");
             }
         }
     } else {
         // No explicit encoding means it should default to StandardEncoding for Type 1
-        eprintln!("📋 TYPE1 DEFAULT: {font_name} uses default StandardEncoding");
-        eprintln!("🚨 CORRUPTION DETECTED: {font_name} should use StandardEncoding but produces 'h'/'i' corruption");
+        debug_print!("📋 TYPE1 DEFAULT: {font_name} uses default StandardEncoding");
+        debug_print!("🚨 CORRUPTION DETECTED: {font_name} should use StandardEncoding but produces 'h'/'i' corruption");
 
         // Add corrections for the known Type 1 StandardEncoding corruption pattern
         corruptions.insert(0x28, '('); // Fix 0x28 -> '(' (not 'h')
         corruptions.insert(0x29, ')'); // Fix 0x29 -> ')' (not 'i')
 
-        eprintln!("🔧 CORRECTION ADDED: {font_name} - 0x28 -> '(' and 0x29 -> ')'");
+        debug_print!("🔧 CORRECTION ADDED: {font_name} - 0x28 -> '(' and 0x29 -> ')'");
     }
 
     // Also check if there are any Differences that might override the base encoding
@@ -1704,7 +1709,7 @@ fn analyze_type1_builtin_font_corruption(
         if let Some(encoding_obj) = encoding_obj {
             if let Ok(encoding_dict) = encoding_obj.as_dict() {
                 if let Ok(differences_ref) = encoding_dict.get(b"Differences") {
-                    eprintln!("🔍 TYPE1 DIFFERENCES: {font_name} has Differences array - analyzing alongside builtin encoding");
+                    debug_print!("🔍 TYPE1 DIFFERENCES: {font_name} has Differences array - analyzing alongside builtin encoding");
                     // Analyze the Differences array as well in case it has additional corruption
                     let additional_corruptions = analyze_differences_array_with_unicode_validation(
                         doc,
@@ -1728,14 +1733,14 @@ fn analyze_encoding_for_corruption(
     font_name: &str,
     corruptions: &mut HashMap<u32, char>,
 ) {
-    eprintln!("🔍 ENCODING ANALYSIS: Examining {font_name} encoding for corruption patterns");
+    debug_print!("🔍 ENCODING ANALYSIS: Examining {font_name} encoding for corruption patterns");
 
     match encoding_ref {
         Object::Reference(reference) => {
             if let Ok(encoding_obj) = doc.get_object(*reference) {
                 analyze_encoding_object(doc, encoding_obj, font_name, corruptions);
             } else {
-                eprintln!("❌ Failed to resolve encoding reference for {font_name}");
+                debug_print!("❌ Failed to resolve encoding reference for {font_name}");
             }
         }
         direct_obj => {
@@ -1753,18 +1758,18 @@ fn analyze_encoding_object(
     corruptions: &mut HashMap<u32, char>,
 ) {
     if let Ok(encoding_dict) = encoding_obj.as_dict() {
-        eprintln!("📋 ENCODING DICT: Font {font_name} has encoding dictionary");
+        debug_print!("📋 ENCODING DICT: Font {font_name} has encoding dictionary");
 
         // Look for BaseEncoding
         if let Ok(base_encoding) = encoding_dict.get(b"BaseEncoding") {
             if let Ok(base_name) = base_encoding.as_name_str() {
-                eprintln!("📝 BASE ENCODING: {font_name} uses base encoding: {base_name}");
+                debug_print!("📝 BASE ENCODING: {font_name} uses base encoding: {base_name}");
             }
         }
 
         // Look for Differences array - this is where corruption mappings would be
         if let Ok(differences_ref) = encoding_dict.get(b"Differences") {
-            eprintln!("🎯 DIFFERENCES FOUND: Font {font_name} has Differences array - this could show corruption!");
+            debug_print!("🎯 DIFFERENCES FOUND: Font {font_name} has Differences array - this could show corruption!");
             let found_corruptions = analyze_differences_array_with_unicode_validation(
                 doc,
                 differences_ref,
@@ -1773,7 +1778,7 @@ fn analyze_encoding_object(
             );
             corruptions.extend(found_corruptions);
         } else {
-            eprintln!("❌ NO DIFFERENCES: Font {font_name} encoding has no Differences array");
+            debug_print!("❌ NO DIFFERENCES: Font {font_name} encoding has no Differences array");
         }
 
         // Debug: show all keys in encoding dictionary
@@ -1781,9 +1786,9 @@ fn analyze_encoding_object(
             .iter()
             .map(|(k, _)| String::from_utf8_lossy(k).to_string())
             .collect();
-        eprintln!("🔑 ENCODING KEYS for {font_name}: {keys:?}");
+        debug_print!("🔑 ENCODING KEYS for {font_name}: {keys:?}");
     } else {
-        eprintln!("⚠️  ENCODING ERROR: Font {font_name} encoding is not a dictionary");
+        debug_print!("⚠️  ENCODING ERROR: Font {font_name} encoding is not a dictionary");
     }
 }
 
@@ -1801,14 +1806,14 @@ fn analyze_differences_array_with_unicode_validation(
     // Use existing corruptions to preserve CMSY corrections
     let mut corruptions = existing_corruptions.clone();
 
-    eprintln!("🔍 DEBUG: Starting Unicode validation analysis for font: {font_name}");
+    debug_print!("🔍 DEBUG: Starting Unicode validation analysis for font: {font_name}");
 
     // First, extract all character mappings from the Differences array
     let char_mappings =
         extract_character_mappings_from_differences(doc, differences_ref, font_name);
 
     if char_mappings.is_empty() {
-        eprintln!(
+        debug_print!(
             "📋 DEBUG: No character mappings found in Differences array for font: {font_name}"
         );
         info!(
@@ -1818,7 +1823,7 @@ fn analyze_differences_array_with_unicode_validation(
         return corruptions;
     }
 
-    eprintln!(
+    debug_print!(
         "🔍 DEBUG: Validating {} character mappings using Unicode Character Database for font: {}",
         char_mappings.len(),
         font_name
@@ -1830,10 +1835,10 @@ fn analyze_differences_array_with_unicode_validation(
     );
 
     // DEBUG: Print all character mappings found
-    eprintln!("📊 DEBUG: All character mappings extracted:");
+    debug_print!("📊 DEBUG: All character mappings extracted:");
     for (&char_code, &unicode_value) in &char_mappings {
         let unicode_char = std::char::from_u32(unicode_value).unwrap_or('?');
-        eprintln!("  -> Code 0x{char_code:04X} ({char_code}) maps to U+{unicode_value:04X} ('{unicode_char}')");
+        debug_print!("  -> Code 0x{char_code:04X} ({char_code}) maps to U+{unicode_value:04X} ('{unicode_char}')");
     }
 
     // ENHANCED: Use both Unicode validation AND reverse lookup for comprehensive detection
@@ -1842,18 +1847,18 @@ fn analyze_differences_array_with_unicode_validation(
     for (&actual_code, &unicode_value) in &char_mappings {
         // Get the character name from Unicode value
         if let Some(char_name) = unicode_to_char_name(unicode_value) {
-            eprintln!("🔍 DEBUG: Checking reverse lookup for code 0x{actual_code:04X} -> unicode U+{unicode_value:04X} (char name: '{char_name}')");
+            debug_print!("🔍 DEBUG: Checking reverse lookup for code 0x{actual_code:04X} -> unicode U+{unicode_value:04X} (char name: '{char_name}')");
 
             // Where SHOULD this character name appear?
             if let Some(expected_code) = expected_code_for_char_name(&char_name) {
-                eprintln!("🔍 DEBUG: Character '{char_name}' should be at code 0x{expected_code:04X}, but found at 0x{actual_code:04X}");
+                debug_print!("🔍 DEBUG: Character '{char_name}' should be at code 0x{expected_code:04X}, but found at 0x{actual_code:04X}");
 
                 if actual_code != expected_code {
                     // REVERSE LOOKUP CORRUPTION DETECTED!
                     let correct_char = if (0x20..=0x7E).contains(&actual_code) {
                         std::char::from_u32(actual_code).unwrap_or('?')
                     } else {
-                        eprintln!("⚠️ DEBUG: Non-ASCII reverse lookup corruption at 0x{actual_code:04X}, skipping");
+                        debug_print!("⚠️ DEBUG: Non-ASCII reverse lookup corruption at 0x{actual_code:04X}, skipping");
                         debug!(
                             "⚠️  Non-ASCII reverse lookup corruption at 0x{:04X}, skipping",
                             actual_code
@@ -1862,34 +1867,36 @@ fn analyze_differences_array_with_unicode_validation(
                     };
 
                     corruptions.insert(actual_code, correct_char);
-                    eprintln!("🚨 DEBUG CORRUPTION DETECTED: Code 0x{actual_code:04X} has '{char_name}' (should be at 0x{expected_code:04X}) → corrected to '{correct_char}'");
+                    debug_print!("🚨 DEBUG CORRUPTION DETECTED: Code 0x{actual_code:04X} has '{char_name}' (should be at 0x{expected_code:04X}) → corrected to '{correct_char}'");
                     info!("🚨 UNICODE REVERSE LOOKUP: Code 0x{:04X} has '{}' (should be at 0x{:04X}) → corrected to '{}'", 
                          actual_code, char_name, expected_code, correct_char);
                 } else {
-                    eprintln!("✅ DEBUG: Code 0x{actual_code:04X} correctly maps to '{char_name}'");
+                    debug_print!(
+                        "✅ DEBUG: Code 0x{actual_code:04X} correctly maps to '{char_name}'"
+                    );
                 }
             } else {
-                eprintln!(
+                debug_print!(
                     "⚠️ DEBUG: No expected code mapping found for character name '{char_name}'"
                 );
             }
         } else {
-            eprintln!("⚠️ DEBUG: No character name found for unicode U+{unicode_value:04X}");
+            debug_print!("⚠️ DEBUG: No character name found for unicode U+{unicode_value:04X}");
         }
     }
 
-    eprintln!(
+    debug_print!(
         "🚨 DEBUG: Total corruptions detected by reverse lookup: {}",
         corruptions.len()
     );
     for (&code, &correct_char) in &corruptions {
-        eprintln!("  -> Code 0x{code:04X} ({code}) should be '{correct_char}' instead");
+        debug_print!("  -> Code 0x{code:04X} ({code}) should be '{correct_char}' instead");
     }
 
     // Also use the original Unicode validator as a backup
     match validate_font_with_unicode_db(font_name, &char_mappings) {
         Ok(validation_result) => {
-            eprintln!("✅ DEBUG: Unicode validation complete for {}: {}/{} mappings invalid ({:.1}% corruption)",
+            debug_print!("✅ DEBUG: Unicode validation complete for {}: {}/{} mappings invalid ({:.1}% corruption)",
                       font_name,
                       validation_result.invalid_mappings.len(),
                       validation_result.total_mappings,
@@ -1908,7 +1915,7 @@ fn analyze_differences_array_with_unicode_validation(
                     // Only add if we haven't already found this corruption via reverse lookup
                     if !corruptions.contains_key(char_code) {
                         corruptions.insert(*char_code, correct_char);
-                        eprintln!("🔧 DEBUG: Unicode validator backup correction: code {char_code} -> '{correct_char}' (U+{correct_unicode:04X})");
+                        debug_print!("🔧 DEBUG: Unicode validator backup correction: code {char_code} -> '{correct_char}' (U+{correct_unicode:04X})");
                         debug!(
                             "🔧 Unicode validator backup correction: code {} -> '{}' (U+{:04X})",
                             char_code, correct_char, correct_unicode
@@ -1921,25 +1928,25 @@ fn analyze_differences_array_with_unicode_validation(
             let validator = UnicodeValidator::new();
             let patterns = validator.detect_systematic_corruption(&validation_result);
             for pattern in patterns {
-                eprintln!("🚨 DEBUG PATTERN: {pattern}");
+                debug_print!("🚨 DEBUG PATTERN: {pattern}");
                 info!("🚨 {}", pattern);
             }
         }
         Err(e) => {
-            eprintln!("⚠️ DEBUG: Unicode validation failed for font {font_name}: {e}");
+            debug_print!("⚠️ DEBUG: Unicode validation failed for font {font_name}: {e}");
             warn!("⚠️ Unicode validation failed for font {}: {}", font_name, e);
             // Fall back to legacy detection method
-            eprintln!("🔄 DEBUG: Falling back to legacy analysis method");
+            debug_print!("🔄 DEBUG: Falling back to legacy analysis method");
             return analyze_differences_array_legacy(doc, differences_ref, font_name);
         }
     }
 
-    eprintln!(
+    debug_print!(
         "✅ DEBUG: Final corruption map has {} entries:",
         corruptions.len()
     );
     for (&code, &correct_char) in &corruptions {
-        eprintln!("  -> Final: Code 0x{code:04X} ({code}) corrected to '{correct_char}'");
+        debug_print!("  -> Final: Code 0x{code:04X} ({code}) corrected to '{correct_char}'");
     }
 
     corruptions
@@ -1996,13 +2003,13 @@ fn extract_character_mappings_from_differences(
                         // Map character name to Unicode value
                         if let Some(unicode_value) = map_char_name_to_unicode(char_name) {
                             char_mappings.insert(char_code, unicode_value);
-                            eprintln!("📊 DEBUG EXTRACT: code {char_code} -> '{char_name}' (U+{unicode_value:04X})");
+                            debug_print!("📊 DEBUG EXTRACT: code {char_code} -> '{char_name}' (U+{unicode_value:04X})");
                             debug!(
                                 "📊 Mapping extracted: code {} -> '{}' (U+{:04X})",
                                 char_code, char_name, unicode_value
                             );
                         } else {
-                            eprintln!("⚠️ DEBUG EXTRACT: Unknown character name '{char_name}' at code {char_code}");
+                            debug_print!("⚠️ DEBUG EXTRACT: Unknown character name '{char_name}' at code {char_code}");
                         }
 
                         offset += 1;
@@ -2032,7 +2039,7 @@ fn analyze_differences_array_legacy(
         Object::Reference(reference) => match doc.get_object(*reference) {
             Ok(obj) => obj,
             Err(e) => {
-                eprintln!("❌ Failed to resolve differences reference for {font_name}: {e}");
+                debug_print!("❌ Failed to resolve differences reference for {font_name}: {e}");
                 return corruptions;
             }
         },
@@ -2040,7 +2047,7 @@ fn analyze_differences_array_legacy(
     };
 
     if let Ok(array) = differences_array.as_array() {
-        eprintln!(
+        debug_print!(
             "📊 DIFFERENCES ARRAY: Font {} has {} elements in Differences",
             font_name,
             array.len()
@@ -2049,7 +2056,7 @@ fn analyze_differences_array_legacy(
         let mut i = 0;
         while i < array.len() {
             if let Ok(code) = array[i].as_i64() {
-                eprintln!("🔢 CHARACTER CODE: {code} starts at position {i}");
+                debug_print!("🔢 CHARACTER CODE: {code} starts at position {i}");
                 i += 1;
                 let mut offset = 0;
 
@@ -2062,12 +2069,12 @@ fn analyze_differences_array_legacy(
 
                     if let Ok(char_name) = array[i].as_name_str() {
                         let char_code = (code + offset) as u32;
-                        eprintln!("🔤 CHARACTER MAPPING: Code {char_code} -> '{char_name}' in font {font_name}");
+                        debug_print!("🔤 CHARACTER MAPPING: Code {char_code} -> '{char_name}' in font {font_name}");
 
                         // NEW REVERSE LOOKUP CORRUPTION DETECTION
                         // Check where this character name SHOULD appear
                         if let Some(expected_code) = expected_code_for_char_name(char_name) {
-                            eprintln!("📊 DEBUG: Character '{char_name}' should be at code 0x{expected_code:04X}, but found at code 0x{char_code:04X}");
+                            debug_print!("📊 DEBUG: Character '{char_name}' should be at code 0x{expected_code:04X}, but found at code 0x{char_code:04X}");
 
                             // Is this character at the wrong position?
                             if char_code != expected_code {
@@ -2078,25 +2085,25 @@ fn analyze_differences_array_legacy(
                                     std::char::from_u32(char_code).unwrap_or('?')
                                 } else {
                                     // Non-ASCII range - would need special handling, skip for now
-                                    eprintln!("⚠️  DEBUG: Non-ASCII corruption at code 0x{char_code:04X}, skipping");
+                                    debug_print!("⚠️  DEBUG: Non-ASCII corruption at code 0x{char_code:04X}, skipping");
                                     continue;
                                 };
 
                                 corruptions.insert(char_code, correct_char);
-                                eprintln!("🚨 REVERSE LOOKUP CORRUPTION: Code 0x{:04X} has '{}' (should be at 0x{:04X}) → should be '{}' (0x{:04X})", 
+                                debug_print!("🚨 REVERSE LOOKUP CORRUPTION: Code 0x{:04X} has '{}' (should be at 0x{:04X}) → should be '{}' (0x{:04X})", 
                                          char_code, char_name, expected_code, correct_char, correct_char as u32);
                             } else {
-                                eprintln!("✅ DEBUG: Character '{char_name}' at correct position 0x{char_code:04X}");
+                                debug_print!("✅ DEBUG: Character '{char_name}' at correct position 0x{char_code:04X}");
                             }
                         } else {
-                            eprintln!("❓ DEBUG: Unknown character name '{char_name}' at code 0x{char_code:04X}");
+                            debug_print!("❓ DEBUG: Unknown character name '{char_name}' at code 0x{char_code:04X}");
                         }
 
                         // Check for ligature corruption patterns
                         // Code 2 -> 'fi' should likely be '(' in mathematical contexts
                         if char_code == 2 && char_name == "fi" {
                             corruptions.insert(char_code, '(');
-                            eprintln!("🚨 DEBUG: LIGATURE CORRUPTION DETECTED: code {char_code} ('{char_name}') should be '(' (U+0028)");
+                            debug_print!("🚨 DEBUG: LIGATURE CORRUPTION DETECTED: code {char_code} ('{char_name}') should be '(' (U+0028)");
                         }
 
                         offset += 1;
@@ -2108,7 +2115,7 @@ fn analyze_differences_array_legacy(
             }
         }
     } else {
-        eprintln!("❌ DIFFERENCES ERROR: Font {font_name} Differences is not an array");
+        debug_print!("❌ DIFFERENCES ERROR: Font {font_name} Differences is not an array");
     }
 
     corruptions
@@ -2132,60 +2139,62 @@ fn analyze_character_corruption(char_code: i64, char_name: &str, font_name: &str
     if char_name != expected_char
         && (char_name == actual_char || char_name == "h" || char_name == "i")
     {
-        eprintln!("🚨 CORRUPTION DETECTED: Font {font_name} maps code 0x{char_code:02X} to '{char_name}' but should be '{expected_char}'");
-        eprintln!("🔧 CORRECTION NEEDED: '{actual_char}' -> '{expected_char}' in font {font_name}");
+        debug_print!("🚨 CORRUPTION DETECTED: Font {font_name} maps code 0x{char_code:02X} to '{char_name}' but should be '{expected_char}'");
+        debug_print!(
+            "🔧 CORRECTION NEEDED: '{actual_char}' -> '{expected_char}' in font {font_name}"
+        );
     } else if char_name == expected_char {
-        eprintln!("✅ CORRECT MAPPING: Font {font_name} correctly maps code 0x{char_code:02X} to '{char_name}'");
+        debug_print!("✅ CORRECT MAPPING: Font {font_name} correctly maps code 0x{char_code:02X} to '{char_name}'");
     }
 }
 
 /// Check for alternative CMap sources when ToUnicode is missing
 /// Checks for alternative CMaps in font dictionary that might contain corruption info
 fn check_alternative_cmaps(doc: &Document, font_dict: &lopdf::Dictionary, font_name: &str) {
-    eprintln!("🔄 FALLBACK SEARCH: Checking {font_name} for alternative CMap sources");
+    debug_print!("🔄 FALLBACK SEARCH: Checking {font_name} for alternative CMap sources");
 
     // 1. Check for CIDToGIDMap (Character ID to Glyph ID mapping)
     if let Ok(cidtogid_ref) = font_dict.get(b"CIDToGIDMap") {
-        eprintln!("🎯 CIDTOGIDMAP: Font {font_name} has CIDToGIDMap - this could provide character mappings!");
+        debug_print!("🎯 CIDTOGIDMAP: Font {font_name} has CIDToGIDMap - this could provide character mappings!");
         analyze_cidtogid_map(doc, cidtogid_ref, font_name);
     }
 
     // 2. Check FontDescriptor for embedded font data
     if let Ok(fontdesc_ref) = font_dict.get(b"FontDescriptor") {
-        eprintln!("📋 FONT DESCRIPTOR: Font {font_name} has FontDescriptor");
+        debug_print!("📋 FONT DESCRIPTOR: Font {font_name} has FontDescriptor");
         analyze_font_descriptor(doc, fontdesc_ref, font_name);
     }
 
     // 3. Check for CharProcs (Type 3 fonts)
     if let Ok(charprocs_ref) = font_dict.get(b"CharProcs") {
-        eprintln!("🎭 CHARPROCS: Font {font_name} has CharProcs dictionary");
+        debug_print!("🎭 CHARPROCS: Font {font_name} has CharProcs dictionary");
         analyze_char_procs(doc, charprocs_ref, font_name);
     }
 
     // 4. Check Subtype to determine font type and available mappings
     if let Ok(subtype_ref) = font_dict.get(b"Subtype") {
         if let Ok(subtype) = subtype_ref.as_name_str() {
-            eprintln!("📝 FONT SUBTYPE: {font_name} is type '{subtype}'");
+            debug_print!("📝 FONT SUBTYPE: {font_name} is type '{subtype}'");
 
             match subtype {
                 "Type0" => {
-                    eprintln!("🔤 TYPE0 FONT: Composite font - check DescendantFonts");
+                    debug_print!("🔤 TYPE0 FONT: Composite font - check DescendantFonts");
                     check_descendant_fonts(doc, font_dict, font_name);
                 }
                 "Type1" | "MMType1" => {
-                    eprintln!("🔤 TYPE1 FONT: PostScript font - check standard encoding");
+                    debug_print!("🔤 TYPE1 FONT: PostScript font - check standard encoding");
                 }
                 "Type3" => {
-                    eprintln!("🔤 TYPE3 FONT: User-defined font with CharProcs");
+                    debug_print!("🔤 TYPE3 FONT: User-defined font with CharProcs");
                 }
                 "TrueType" => {
-                    eprintln!("🔤 TRUETYPE FONT: Check embedded TrueType data");
+                    debug_print!("🔤 TRUETYPE FONT: Check embedded TrueType data");
                 }
                 "CIDFontType0" | "CIDFontType2" => {
-                    eprintln!("🔤 CID FONT: CID-keyed font - check Registry/Ordering");
+                    debug_print!("🔤 CID FONT: CID-keyed font - check Registry/Ordering");
                 }
                 _ => {
-                    eprintln!("❓ UNKNOWN FONT TYPE: {font_name} (subtype: {subtype})");
+                    debug_print!("❓ UNKNOWN FONT TYPE: {font_name} (subtype: {subtype})");
                 }
             }
         }
@@ -2193,33 +2202,33 @@ fn check_alternative_cmaps(doc: &Document, font_dict: &lopdf::Dictionary, font_n
 
     // 5. Check for Registry/Ordering (CID fonts)
     if let Ok(cidsysinfo_ref) = font_dict.get(b"CIDSystemInfo") {
-        eprintln!("🌏 CID SYSTEM INFO: Font {font_name} has CIDSystemInfo");
+        debug_print!("🌏 CID SYSTEM INFO: Font {font_name} has CIDSystemInfo");
         analyze_cid_system_info(doc, cidsysinfo_ref, font_name);
     }
 
-    eprintln!("✅ FALLBACK COMPLETE: Analyzed all alternative CMap sources for {font_name}");
+    debug_print!("✅ FALLBACK COMPLETE: Analyzed all alternative CMap sources for {font_name}");
 }
 
 /// Analyze CIDToGIDMap for character mappings
 fn analyze_cidtogid_map(doc: &Document, cidtogid_ref: &Object, font_name: &str) {
-    eprintln!("🔍 ANALYZING CIDToGIDMap for {font_name}");
+    debug_print!("🔍 ANALYZING CIDToGIDMap for {font_name}");
 
     match cidtogid_ref {
         Object::Reference(reference) => {
             if let Ok(cidtogid_obj) = doc.get_object(*reference) {
                 if let Ok(stream) = cidtogid_obj.as_stream() {
-                    eprintln!(
+                    debug_print!(
                         "📊 CIDToGIDMap: Font {} has stream with {} bytes",
                         font_name,
                         stream.content.len()
                     );
                 } else if let Ok(name) = cidtogid_obj.as_name_str() {
                     if name == "Identity" {
-                        eprintln!(
+                        debug_print!(
                             "🎯 CIDToGIDMap: Font {font_name} uses Identity mapping (CID = GID)"
                         );
                     } else {
-                        eprintln!("📝 CIDToGIDMap: Font {font_name} uses named mapping: {name}");
+                        debug_print!("📝 CIDToGIDMap: Font {font_name} uses named mapping: {name}");
                     }
                 }
             }
@@ -2227,14 +2236,16 @@ fn analyze_cidtogid_map(doc: &Document, cidtogid_ref: &Object, font_name: &str) 
         Object::Name(name_bytes) => {
             if let Ok(name) = std::str::from_utf8(name_bytes) {
                 if name == "Identity" {
-                    eprintln!("🎯 CIDToGIDMap: Font {font_name} uses Identity mapping (CID = GID)");
+                    debug_print!(
+                        "🎯 CIDToGIDMap: Font {font_name} uses Identity mapping (CID = GID)"
+                    );
                 } else {
-                    eprintln!("📝 CIDToGIDMap: Font {font_name} uses named mapping: {name}");
+                    debug_print!("📝 CIDToGIDMap: Font {font_name} uses named mapping: {name}");
                 }
             }
         }
         _ => {
-            eprintln!("❓ CIDToGIDMap: Font {font_name} has unknown CIDToGIDMap type");
+            debug_print!("❓ CIDToGIDMap: Font {font_name} has unknown CIDToGIDMap type");
         }
     }
 }
@@ -2244,25 +2255,25 @@ fn analyze_font_descriptor(doc: &Document, fontdesc_ref: &Object, font_name: &st
     if let Object::Reference(reference) = fontdesc_ref {
         if let Ok(fontdesc_obj) = doc.get_object(*reference) {
             if let Ok(fontdesc_dict) = fontdesc_obj.as_dict() {
-                eprintln!("📋 FONT DESCRIPTOR: Analyzing embedded font data for {font_name}");
+                debug_print!("📋 FONT DESCRIPTOR: Analyzing embedded font data for {font_name}");
 
                 // Check for embedded font files
                 let font_file_keys = ["FontFile", "FontFile2", "FontFile3"];
                 for key_str in &font_file_keys {
                     if let Ok(fontfile_ref) = fontdesc_dict.get(key_str.as_bytes()) {
-                        eprintln!("📁 EMBEDDED FONT: {font_name} has {key_str} - could extract character mappings!");
+                        debug_print!("📁 EMBEDDED FONT: {font_name} has {key_str} - could extract character mappings!");
 
                         if let Object::Reference(file_ref) = fontfile_ref {
                             if let Ok(fontfile_obj) = doc.get_object(*file_ref) {
                                 if let Ok(stream) = fontfile_obj.as_stream() {
-                                    eprintln!(
+                                    debug_print!(
                                         "📊 FONT FILE: {} bytes of embedded font data",
                                         stream.content.len()
                                     );
 
                                     // Check if it's compressed
                                     if let Ok(filter) = stream.dict.get(b"Filter") {
-                                        eprintln!(
+                                        debug_print!(
                                             "🗜️  COMPRESSION: Font file uses filter: {filter:?}"
                                         );
                                     }
@@ -2271,7 +2282,7 @@ fn analyze_font_descriptor(doc: &Document, fontdesc_ref: &Object, font_name: &st
                                     if let Err(e) =
                                         extract_and_analyze_embedded_font(stream, font_name)
                                     {
-                                        eprintln!(
+                                        debug_print!(
                                             "⚠️  Failed to analyze embedded font {font_name}: {e}"
                                         );
                                     }
@@ -2286,7 +2297,7 @@ fn analyze_font_descriptor(doc: &Document, fontdesc_ref: &Object, font_name: &st
                     .iter()
                     .map(|(k, _)| String::from_utf8_lossy(k).to_string())
                     .collect();
-                eprintln!("🔑 FONTDESCRIPTOR KEYS for {font_name}: {keys:?}");
+                debug_print!("🔑 FONTDESCRIPTOR KEYS for {font_name}: {keys:?}");
             }
         }
     }
@@ -2297,7 +2308,7 @@ fn analyze_char_procs(doc: &Document, charprocs_ref: &Object, font_name: &str) {
     if let Object::Reference(reference) = charprocs_ref {
         if let Ok(charprocs_obj) = doc.get_object(*reference) {
             if let Ok(charprocs_dict) = charprocs_obj.as_dict() {
-                eprintln!(
+                debug_print!(
                     "🎭 CHAR PROCEDURES: Font {} has {} character procedures",
                     font_name,
                     charprocs_dict.len()
@@ -2308,7 +2319,7 @@ fn analyze_char_procs(doc: &Document, charprocs_ref: &Object, font_name: &str) {
                     .iter()
                     .map(|(k, _)| String::from_utf8_lossy(k).to_string())
                     .collect();
-                eprintln!("🔤 DEFINED CHARS in {font_name}: {char_names:?}");
+                debug_print!("🔤 DEFINED CHARS in {font_name}: {char_names:?}");
             }
         }
     }
@@ -2317,12 +2328,12 @@ fn analyze_char_procs(doc: &Document, charprocs_ref: &Object, font_name: &str) {
 /// Check DescendantFonts for Type0 composite fonts
 fn check_descendant_fonts(doc: &Document, font_dict: &lopdf::Dictionary, font_name: &str) {
     if let Ok(descendants_ref) = font_dict.get(b"DescendantFonts") {
-        eprintln!("👥 DESCENDANT FONTS: Checking composite font {font_name} descendants");
+        debug_print!("👥 DESCENDANT FONTS: Checking composite font {font_name} descendants");
 
         if let Object::Reference(reference) = descendants_ref {
             if let Ok(descendants_obj) = doc.get_object(*reference) {
                 if let Ok(descendants_array) = descendants_obj.as_array() {
-                    eprintln!(
+                    debug_print!(
                         "📊 DESCENDANTS: Font {} has {} descendant fonts",
                         font_name,
                         descendants_array.len()
@@ -2332,17 +2343,17 @@ fn check_descendant_fonts(doc: &Document, font_dict: &lopdf::Dictionary, font_na
                         if let Object::Reference(desc_ref) = descendant_ref {
                             if let Ok(desc_obj) = doc.get_object(*desc_ref) {
                                 if let Ok(desc_dict) = desc_obj.as_dict() {
-                                    eprintln!("👤 DESCENDANT {i}: Analyzing child font");
+                                    debug_print!("👤 DESCENDANT {i}: Analyzing child font");
 
                                     // Check if descendant has its own ToUnicode
                                     if let Ok(desc_tounicode) = desc_dict.get(b"ToUnicode") {
-                                        eprintln!("🎯 DESCENDANT TOUNICODE: Child font {i} has ToUnicode CMap!");
+                                        debug_print!("🎯 DESCENDANT TOUNICODE: Child font {i} has ToUnicode CMap!");
                                         if let Err(e) = dump_tounicode_cmap(
                                             doc,
                                             desc_tounicode,
                                             &format!("{font_name}[{i}]"),
                                         ) {
-                                            eprintln!(
+                                            debug_print!(
                                                 "⚠️  Failed to dump descendant ToUnicode: {e}"
                                             );
                                         }
@@ -2362,23 +2373,23 @@ fn analyze_cid_system_info(doc: &Document, cidsysinfo_ref: &Object, font_name: &
     if let Object::Reference(reference) = cidsysinfo_ref {
         if let Ok(cidsys_obj) = doc.get_object(*reference) {
             if let Ok(cidsys_dict) = cidsys_obj.as_dict() {
-                eprintln!("🌏 CID SYSTEM INFO: Font {font_name} CID information");
+                debug_print!("🌏 CID SYSTEM INFO: Font {font_name} CID information");
 
                 if let Ok(registry) = cidsys_dict.get(b"Registry") {
                     if let Ok(reg_str) = registry.as_str() {
-                        eprintln!("📝 REGISTRY: {}", String::from_utf8_lossy(reg_str));
+                        debug_print!("📝 REGISTRY: {}", String::from_utf8_lossy(reg_str));
                     }
                 }
 
                 if let Ok(ordering) = cidsys_dict.get(b"Ordering") {
                     if let Ok(ord_str) = ordering.as_str() {
-                        eprintln!("📋 ORDERING: {}", String::from_utf8_lossy(ord_str));
+                        debug_print!("📋 ORDERING: {}", String::from_utf8_lossy(ord_str));
                     }
                 }
 
                 if let Ok(supplement) = cidsys_dict.get(b"Supplement") {
                     if let Ok(supp_num) = supplement.as_i64() {
-                        eprintln!("🔢 SUPPLEMENT: {supp_num}");
+                        debug_print!("🔢 SUPPLEMENT: {supp_num}");
                     }
                 }
             }
@@ -2389,13 +2400,13 @@ fn analyze_cid_system_info(doc: &Document, cidsysinfo_ref: &Object, font_name: &
 /// Analyze font Differences array in the font dictionary
 /// Analyzes font Differences array directly from font dictionary
 fn analyze_font_differences(font_dict: &lopdf::Dictionary, font_name: &str) {
-    eprintln!("🔍 FONT DIFFERENCES: Checking {font_name} for direct Differences array");
+    debug_print!("🔍 FONT DIFFERENCES: Checking {font_name} for direct Differences array");
 
     if let Ok(_differences_ref) = font_dict.get(b"Differences") {
-        eprintln!("🎯 DIRECT DIFFERENCES: Font {font_name} has direct Differences array");
+        debug_print!("🎯 DIRECT DIFFERENCES: Font {font_name} has direct Differences array");
         // This would need document context to resolve, but we can at least detect its presence
     } else {
-        eprintln!("❌ NO DIRECT DIFFERENCES: Font {font_name} has no direct Differences array");
+        debug_print!("❌ NO DIRECT DIFFERENCES: Font {font_name} has no direct Differences array");
     }
 
     // Show all font dictionary keys for debugging
@@ -2403,26 +2414,26 @@ fn analyze_font_differences(font_dict: &lopdf::Dictionary, font_name: &str) {
         .iter()
         .map(|(k, _)| String::from_utf8_lossy(k).to_string())
         .collect();
-    eprintln!("🔑 FONT DICT KEYS for {font_name}: {keys:?}");
+    debug_print!("🔑 FONT DICT KEYS for {font_name}: {keys:?}");
 }
 
 /// Extract and analyze embedded font data from FontFile stream
 /// Extracts and analyzes embedded font data from stream
 fn extract_and_analyze_embedded_font(stream: &lopdf::Stream, font_name: &str) -> Result<()> {
-    eprintln!("🔍 EMBEDDED ANALYSIS: Starting analysis of {font_name} font data");
+    debug_print!("🔍 EMBEDDED ANALYSIS: Starting analysis of {font_name} font data");
 
     // Get raw font data
     let font_data = &stream.content;
-    eprintln!("📊 RAW DATA: {} bytes of font data", font_data.len());
+    debug_print!("📊 RAW DATA: {} bytes of font data", font_data.len());
 
     // Check if data is compressed (FlateDecode)
     let decompressed_data = if let Ok(filter) = stream.dict.get(b"Filter") {
         if let Ok(filter_name) = filter.as_name_str() {
             if filter_name == "FlateDecode" {
-                eprintln!("🗜️  DECOMPRESSING: FlateDecode compression detected");
+                debug_print!("🗜️  DECOMPRESSING: FlateDecode compression detected");
                 match decompress_zlib(font_data) {
                     Ok(decompressed) => {
-                        eprintln!(
+                        debug_print!(
                             "✅ DECOMPRESSED: {} bytes -> {} bytes",
                             font_data.len(),
                             decompressed.len()
@@ -2430,12 +2441,12 @@ fn extract_and_analyze_embedded_font(stream: &lopdf::Stream, font_name: &str) ->
                         decompressed
                     }
                     Err(e) => {
-                        eprintln!("❌ DECOMPRESSION FAILED: {e}");
+                        debug_print!("❌ DECOMPRESSION FAILED: {e}");
                         font_data.to_vec()
                     }
                 }
             } else {
-                eprintln!("❓ UNKNOWN FILTER: {filter_name}");
+                debug_print!("❓ UNKNOWN FILTER: {filter_name}");
                 font_data.to_vec()
             }
         } else {
@@ -2452,7 +2463,7 @@ fn extract_and_analyze_embedded_font(stream: &lopdf::Stream, font_name: &str) ->
     if is_postscript_type1(&decompressed_data) {
         parse_postscript_type1_font(&decompressed_data, font_name)?;
     } else {
-        eprintln!("❓ UNKNOWN FONT FORMAT: Not a recognized PostScript Type1 font");
+        debug_print!("❓ UNKNOWN FONT FORMAT: Not a recognized PostScript Type1 font");
     }
 
     Ok(())
@@ -2461,15 +2472,15 @@ fn extract_and_analyze_embedded_font(stream: &lopdf::Stream, font_name: &str) ->
 /// Analyze the format of the font data
 /// Analyzes font data format and attempts to parse PostScript Type1 fonts
 fn analyze_font_data_format(data: &[u8], font_name: &str) -> Result<()> {
-    eprintln!("🔍 FORMAT ANALYSIS: Analyzing {font_name} font data format");
+    debug_print!("🔍 FORMAT ANALYSIS: Analyzing {font_name} font data format");
 
     if data.len() < 10 {
-        eprintln!("❌ TOO SMALL: Font data too small to analyze");
+        debug_print!("❌ TOO SMALL: Font data too small to analyze");
         return Ok(());
     }
 
     // Show hex dump of first 64 bytes
-    eprintln!("🔍 HEX DUMP of first 64 bytes:");
+    debug_print!("🔍 HEX DUMP of first 64 bytes:");
     let dump_len = std::cmp::min(64, data.len());
     for (i, chunk) in data[..dump_len].chunks(16).enumerate() {
         print!("{:08X}: ", i * 16);
@@ -2490,13 +2501,13 @@ fn analyze_font_data_format(data: &[u8], font_name: &str) -> Result<()> {
     // Check for PostScript Type1 markers
     let data_str = String::from_utf8_lossy(data);
     if data_str.contains("%!PS-AdobeFont-") || data_str.contains("/FontType 1") {
-        eprintln!("✅ POSTSCRIPT TYPE1: Font contains PostScript Type1 markers");
+        debug_print!("✅ POSTSCRIPT TYPE1: Font contains PostScript Type1 markers");
     } else if data_str.contains("%!FontType1") {
-        eprintln!("✅ FONTTYPE1: Font contains FontType1 marker");
+        debug_print!("✅ FONTTYPE1: Font contains FontType1 marker");
     } else if data.starts_with(b"\x80\x01") {
-        eprintln!("✅ PFB FORMAT: Font is in PFB (Printer Font Binary) format");
+        debug_print!("✅ PFB FORMAT: Font is in PFB (Printer Font Binary) format");
     } else {
-        eprintln!("❓ UNKNOWN FORMAT: Font format not immediately recognized");
+        debug_print!("❓ UNKNOWN FORMAT: Font format not immediately recognized");
     }
 
     Ok(())
@@ -2515,7 +2526,7 @@ fn is_postscript_type1(data: &[u8]) -> bool {
 /// Parse PostScript Type1 font to extract character mappings
 /// Parses PostScript Type1 font data to extract encoding information
 fn parse_postscript_type1_font(data: &[u8], font_name: &str) -> Result<()> {
-    eprintln!("🔍 POSTSCRIPT PARSER: Parsing {font_name} Type1 font");
+    debug_print!("🔍 POSTSCRIPT PARSER: Parsing {font_name} Type1 font");
 
     let font_text = if data.starts_with(b"\x80\x01") {
         // PFB format - need to extract ASCII sections
@@ -2526,34 +2537,34 @@ fn parse_postscript_type1_font(data: &[u8], font_name: &str) -> Result<()> {
 
     // Look for encoding vector
     if let Some(encoding_start) = font_text.find("/Encoding") {
-        eprintln!("🎯 ENCODING FOUND: Found /Encoding at position {encoding_start}");
+        debug_print!("🎯 ENCODING FOUND: Found /Encoding at position {encoding_start}");
 
         // For now, demonstrate definitive corruption detection using known PDF vs expected mappings
         demonstrate_definitive_corruption_detection(font_name);
 
         // Extract encoding definition (still work in progress)
         if let Some(encoding_def) = extract_encoding_definition(&font_text[encoding_start..]) {
-            eprintln!("📋 ENCODING DEF: {} characters", encoding_def.len());
+            debug_print!("📋 ENCODING DEF: {} characters", encoding_def.len());
 
             // Compare with PDF Differences array to detect definitive corruption
             compare_postscript_encoding_with_pdf(encoding_def, font_name);
         }
     } else {
-        eprintln!("❌ NO ENCODING: No /Encoding found in PostScript font");
+        debug_print!("❌ NO ENCODING: No /Encoding found in PostScript font");
     }
 
     // Look for CharStrings dictionary
     if let Some(charstrings_start) = font_text.find("/CharStrings") {
-        eprintln!("🎯 CHARSTRINGS FOUND: Found /CharStrings at position {charstrings_start}");
+        debug_print!("🎯 CHARSTRINGS FOUND: Found /CharStrings at position {charstrings_start}");
 
         // Extract character definitions
         if let Some(charstrings) = extract_charstrings_definition(&font_text[charstrings_start..]) {
-            eprintln!(
+            debug_print!(
                 "🔤 CHARACTER DEFINITIONS: {} characters defined",
                 charstrings.len()
             );
             for (char_name, _) in charstrings.iter().take(10) {
-                eprintln!("  📝 CHAR: '{char_name}'");
+                debug_print!("  📝 CHAR: '{char_name}'");
             }
         }
     }
@@ -2613,18 +2624,18 @@ fn extract_pfb_ascii_sections(data: &[u8]) -> Result<String> {
 fn extract_encoding_definition(text: &str) -> Option<Vec<(usize, String)>> {
     let mut encodings = Vec::new();
 
-    eprintln!("🔍 PARSING POSTSCRIPT ENCODING: Looking for encoding definition...");
+    debug_print!("🔍 PARSING POSTSCRIPT ENCODING: Looking for encoding definition...");
 
     // Look for StandardEncoding references
     if text.contains("StandardEncoding") {
-        eprintln!("📝 STANDARD ENCODING: Font uses StandardEncoding base");
+        debug_print!("📝 STANDARD ENCODING: Font uses StandardEncoding base");
     }
 
     // Look for array-style encoding like: /Encoding [/.notdef /space /exclam ...]
     if let Some(start) = text.find("[") {
         if let Some(end) = text[start..].find("]") {
             let encoding_array = &text[start + 1..start + end];
-            eprintln!(
+            debug_print!(
                 "🎯 ARRAY ENCODING: Found encoding array with {} chars",
                 encoding_array.split_whitespace().count()
             );
@@ -2636,7 +2647,7 @@ fn extract_encoding_definition(text: &str) -> Option<Vec<(usize, String)>> {
 
                     // Log important characters for corruption detection
                     if matches!(index, 40 | 41 | 104 | 105) {
-                        eprintln!(
+                        debug_print!(
                             "🔤 KEY CHARACTER: Code {index} -> '{char_name}' (PostScript font)"
                         );
                     }
@@ -2653,7 +2664,7 @@ fn extract_encoding_definition(text: &str) -> Option<Vec<(usize, String)>> {
 
                 // Log important characters for corruption detection
                 if matches!(code, 40 | 41 | 104 | 105) {
-                    eprintln!(
+                    debug_print!(
                         "🔤 KEY CHARACTER: Code {code} -> '{char_name}' (PostScript font via dup)"
                     );
                 }
@@ -2684,7 +2695,7 @@ fn extract_encoding_definition(text: &str) -> Option<Vec<(usize, String)>> {
                     encodings.push((code, char_name.clone()));
 
                     if matches!(code, 40 | 41 | 104 | 105) {
-                        eprintln!("🔤 KEY CHARACTER: Code {code} -> '{char_name}' (PostScript encoding dup)");
+                        debug_print!("🔤 KEY CHARACTER: Code {code} -> '{char_name}' (PostScript encoding dup)");
                     }
                 }
             }
@@ -2692,10 +2703,10 @@ fn extract_encoding_definition(text: &str) -> Option<Vec<(usize, String)>> {
     }
 
     if encodings.is_empty() {
-        eprintln!("❌ NO ENCODING EXTRACTED: Could not parse PostScript encoding");
+        debug_print!("❌ NO ENCODING EXTRACTED: Could not parse PostScript encoding");
         None
     } else {
-        eprintln!(
+        debug_print!(
             "✅ ENCODING EXTRACTED: Found {} character definitions",
             encodings.len()
         );
@@ -2751,15 +2762,17 @@ fn parse_postscript_dup_line(line: &str) -> Option<(usize, String)> {
 /// Compare PostScript font encoding with PDF Differences to detect definitive corruption
 /// Compares PostScript encoding with PDF Differences array for corruption analysis
 fn compare_postscript_encoding_with_pdf(ps_encoding: Vec<(usize, String)>, font_name: &str) {
-    eprintln!("🔍 REAL ENCODING COMPARISON: Comparing PostScript vs PDF encodings for {font_name}");
+    debug_print!(
+        "🔍 REAL ENCODING COMPARISON: Comparing PostScript vs PDF encodings for {font_name}"
+    );
 
     // Get the actual PDF Differences array from the document
     let pdf_differences = get_pdf_differences_for_font(font_name);
 
     if pdf_differences.is_empty() {
-        eprintln!("⚠️  Cannot compare - PDF Differences extraction not implemented yet");
-        eprintln!("   Need to connect to actual document context to get real PDF data");
-        eprintln!(
+        debug_print!("⚠️  Cannot compare - PDF Differences extraction not implemented yet");
+        debug_print!("   Need to connect to actual document context to get real PDF data");
+        debug_print!(
             "   PostScript encoding has {} character definitions",
             ps_encoding.len()
         );
@@ -2767,7 +2780,7 @@ fn compare_postscript_encoding_with_pdf(ps_encoding: Vec<(usize, String)>, font_
     }
 
     // When PDF Differences are available, compare them with PostScript encoding
-    eprintln!(
+    debug_print!(
         "🎯 REAL COMPARISON: PostScript ({} chars) vs PDF ({} chars)",
         ps_encoding.len(),
         pdf_differences.len()
@@ -2782,15 +2795,15 @@ fn compare_postscript_encoding_with_pdf(ps_encoding: Vec<(usize, String)>, font_
             .find(|(pdf_code, _)| pdf_code == ps_code)
         {
             if ps_name != pdf_name {
-                eprintln!("🔍 ENCODING DIFFERENCE: Code {ps_code} -> PostScript:'{ps_name}' vs PDF:'{pdf_name}'");
+                debug_print!("🔍 ENCODING DIFFERENCE: Code {ps_code} -> PostScript:'{ps_name}' vs PDF:'{pdf_name}'");
                 differences_found += 1;
             } else {
-                eprintln!("✅ CONSISTENT: Code {ps_code} -> '{ps_name}' (same in both)");
+                debug_print!("✅ CONSISTENT: Code {ps_code} -> '{ps_name}' (same in both)");
             }
         }
     }
 
-    eprintln!(
+    debug_print!(
         "📊 COMPARISON RESULT for {font_name}: {differences_found} encoding differences found"
     );
 }
@@ -2798,16 +2811,16 @@ fn compare_postscript_encoding_with_pdf(ps_encoding: Vec<(usize, String)>, font_
 /// Demonstrate definitive corruption detection based on real font analysis
 /// Demonstrates definitive corruption detection methodology for debugging
 fn demonstrate_definitive_corruption_detection(font_name: &str) {
-    eprintln!("🎯 REAL FONT ANALYSIS: Analyzing {font_name} using actual PDF data");
+    debug_print!("🎯 REAL FONT ANALYSIS: Analyzing {font_name} using actual PDF data");
 
     if font_name.contains("XSWLJE") || font_name.contains("FYEQFE") {
-        eprintln!("🔍 CORRUPTION DETECTION: {font_name} shows corruption indicators");
-        eprintln!("   Evidence Source: Real PDF font dictionary analysis");
-        eprintln!();
-        eprintln!("   📋 FINDINGS FROM ACTUAL PDF PARSING:");
-        eprintln!("      • Font subset {font_name} has NO ToUnicode CMap (confirmed)");
-        eprintln!("      • PDF Differences array maps codes to basic character names");
-        eprintln!(
+        debug_print!("🔍 CORRUPTION DETECTION: {font_name} shows corruption indicators");
+        debug_print!("   Evidence Source: Real PDF font dictionary analysis");
+        debug_print!("");
+        debug_print!("   📋 FINDINGS FROM ACTUAL PDF PARSING:");
+        debug_print!("      • Font subset {font_name} has NO ToUnicode CMap (confirmed)");
+        debug_print!("      • PDF Differences array maps codes to basic character names");
+        debug_print!(
             "      • Embedded PostScript Type1 font data available ({} bytes)",
             if font_name.contains("XSWLJE") {
                 "15,326"
@@ -2815,37 +2828,37 @@ fn demonstrate_definitive_corruption_detection(font_name: &str) {
                 "19,343"
             }
         );
-        eprintln!("      • Font uses StandardEncoding base with modifications");
-        eprintln!();
-        eprintln!("   🔍 ROOT CAUSE IDENTIFIED:");
-        eprintln!("      Missing ToUnicode CMap = no proper Unicode mappings");
-        eprintln!("      PDF parser falls back to generic character names");
-        eprintln!("      Mathematical symbols get mapped as plain letters");
-        eprintln!();
-        eprintln!("   🎯 DETECTION METHOD:");
-        eprintln!("      ✅ Read actual PDF font dictionary");
-        eprintln!("      ✅ Confirmed absence of ToUnicode CMap");
-        eprintln!("      ✅ Accessed embedded font data");
-        eprintln!("      ✅ Analyzed font encoding structure");
-        eprintln!();
-        eprintln!("   🔧 MATHEMATICAL CORRECTION NEEDED:");
-        eprintln!("      Context: Mathematical formulas with angle brackets");
-        eprintln!("      Expected: ⟨ (U+27E8) and ⟩ (U+27E9)");
-        eprintln!("      Detected: 'h' and 'i' character names in Differences");
-        eprintln!();
-        eprintln!("🎯 RESULT: {font_name} requires mathematical symbol correction");
-        eprintln!("   Based on definitive font structure analysis, not guessing!");
+        debug_print!("      • Font uses StandardEncoding base with modifications");
+        debug_print!("");
+        debug_print!("   🔍 ROOT CAUSE IDENTIFIED:");
+        debug_print!("      Missing ToUnicode CMap = no proper Unicode mappings");
+        debug_print!("      PDF parser falls back to generic character names");
+        debug_print!("      Mathematical symbols get mapped as plain letters");
+        debug_print!("");
+        debug_print!("   🎯 DETECTION METHOD:");
+        debug_print!("      ✅ Read actual PDF font dictionary");
+        debug_print!("      ✅ Confirmed absence of ToUnicode CMap");
+        debug_print!("      ✅ Accessed embedded font data");
+        debug_print!("      ✅ Analyzed font encoding structure");
+        debug_print!("");
+        debug_print!("   🔧 MATHEMATICAL CORRECTION NEEDED:");
+        debug_print!("      Context: Mathematical formulas with angle brackets");
+        debug_print!("      Expected: ⟨ (U+27E8) and ⟩ (U+27E9)");
+        debug_print!("      Detected: 'h' and 'i' character names in Differences");
+        debug_print!("");
+        debug_print!("🎯 RESULT: {font_name} requires mathematical symbol correction");
+        debug_print!("   Based on definitive font structure analysis, not guessing!");
     } else {
-        eprintln!("✅ FONT ANALYSIS: {font_name} appears to have proper character mappings");
+        debug_print!("✅ FONT ANALYSIS: {font_name} appears to have proper character mappings");
     }
-    eprintln!(); // Spacing
+    debug_print!(""); // Spacing
 }
 
 /// Get actual PDF Differences array for a font from the current document context
 /// Gets PDF Differences array data for a specific font (currently returns empty)
 fn get_pdf_differences_for_font(_font_name: &str) -> Vec<(usize, String)> {
-    eprintln!("⚠️  TODO: Replace with real PDF Differences extraction");
-    eprintln!("   This should read from the actual document context, not hardcoded data");
+    debug_print!("⚠️  TODO: Replace with real PDF Differences extraction");
+    debug_print!("   This should read from the actual document context, not hardcoded data");
 
     // TODO: This needs to be connected to the actual PDF document being processed
     // and extract the real Differences array from the font dictionary
@@ -2962,11 +2975,11 @@ fn apply_real_font_corrections(
                     // Apply mathematical symbol corrections based on context
                     match (text, unicode_value) {
                         ("h", 0x68) => {
-                            eprintln!("✅ AUTO-DETECTED CORRECTION: 'h' -> '(' in font {font_name} (missing math symbols) [context: mathematical formula]");
+                            debug_print!("✅ AUTO-DETECTED CORRECTION: 'h' -> '(' in font {font_name} (missing math symbols) [context: mathematical formula]");
                             Some(("(".to_string(), true))
                         }
                         ("i", 0x69) => {
-                            eprintln!("✅ AUTO-DETECTED CORRECTION: 'i' -> ')' in font {font_name} (missing math symbols) [context: mathematical formula]");
+                            debug_print!("✅ AUTO-DETECTED CORRECTION: 'i' -> ')' in font {font_name} (missing math symbols) [context: mathematical formula]");
                             Some((")".to_string(), true))
                         }
                         _ => None,
@@ -2986,7 +2999,7 @@ fn apply_real_font_corrections(
 /// Analyzes Type1 font encoding for corruption patterns
 #[allow(dead_code)]
 fn analyze_type1_encoding(encoding: &[(usize, String)], font_name: &str) {
-    eprintln!("🔍 ENCODING ANALYSIS: Analyzing {font_name} character encoding");
+    debug_print!("🔍 ENCODING ANALYSIS: Analyzing {font_name} character encoding");
 
     // Look for mathematical characters that might be corrupted
     // Updated based on user clarification: h -> ( and i -> )
@@ -3000,18 +3013,18 @@ fn analyze_type1_encoding(encoding: &[(usize, String)], font_name: &str) {
     for &(code, expected_name, expected_unicode) in &mathematical_chars {
         if let Some((_, actual_name)) = encoding.iter().find(|(c, _)| *c == code) {
             if actual_name == expected_name || actual_name == "h" || actual_name == "i" {
-                eprintln!("🚨 CORRUPTION DETECTED: Font {font_name} maps code {code} to '{actual_name}' but should be '{expected_unicode}'");
-                eprintln!("🔧 CORRECTION RULE: {actual_name} -> {expected_unicode}");
+                debug_print!("🚨 CORRUPTION DETECTED: Font {font_name} maps code {code} to '{actual_name}' but should be '{expected_unicode}'");
+                debug_print!("🔧 CORRECTION RULE: {actual_name} -> {expected_unicode}");
             } else if actual_name == "parenleft" || actual_name == "parenright" {
-                eprintln!("✅ CORRECT MAPPING: Font {font_name} correctly maps code {code} to '{actual_name}'");
+                debug_print!("✅ CORRECT MAPPING: Font {font_name} correctly maps code {code} to '{actual_name}'");
             }
         }
     }
 
     // Show first 20 character mappings for debugging
-    eprintln!("📋 CHARACTER MAPPINGS (first 20):");
+    debug_print!("📋 CHARACTER MAPPINGS (first 20):");
     for (code, name) in encoding.iter().take(20) {
-        eprintln!("  {code} -> '{name}'");
+        debug_print!("  {code} -> '{name}'");
     }
 }
 
@@ -3022,9 +3035,10 @@ fn analyze_type1_encoding(encoding: &[(usize, String)], font_name: &str) {
 /// when they should map to '(' and ')' in mathematical contexts
 /// Checks if a font corruption map contains any corrupted CMap entries
 fn has_corrupted_cmap_entries(corruption_map: &FontCorruptionMap) -> bool {
-    eprintln!(
+    debug_print!(
         "🔍 DEBUG: Checking CMap corruption for font: '{}' (has_tounicode={})",
-        corruption_map.font_name, corruption_map.has_tounicode
+        corruption_map.font_name,
+        corruption_map.has_tounicode
     );
 
     // Check for TimesNewRomanPSMT (including case where font name might be empty due to extraction issues)
@@ -3033,7 +3047,7 @@ fn has_corrupted_cmap_entries(corruption_map: &FontCorruptionMap) -> bool {
         || corruption_map.font_name.is_empty(); // Empty name might be TimesNewRomanPSMT
 
     if is_times_font && corruption_map.has_tounicode {
-        eprintln!("🔍 CMAP CORRUPTION: Detected corrupted CMap entries in font '{}' (has ToUnicode but still corrupted)", 
+        debug_print!("🔍 CMAP CORRUPTION: Detected corrupted CMap entries in font '{}' (has ToUnicode but still corrupted)", 
             corruption_map.font_name);
         return true;
     }
@@ -3041,7 +3055,7 @@ fn has_corrupted_cmap_entries(corruption_map: &FontCorruptionMap) -> bool {
     // TODO: Implement more sophisticated CMap corruption detection by analyzing the actual mappings
     // Could check if mathematical character codes map to alphabetic characters instead of symbols
 
-    eprintln!(
+    debug_print!(
         "🔍 DEBUG: No CMap corruption detected for font: '{}'",
         corruption_map.font_name
     );

@@ -10,7 +10,7 @@
 //! - Handles inline subscript patterns within single text spans
 //! - Processes mathematical symbols and spacing
 
-use crate::entities::CharSpan;
+use crate::{debug_print, entities::CharSpan};
 
 /// Configuration for subscript detection thresholds
 ///
@@ -107,7 +107,7 @@ fn is_real_superscript(current_span: &CharSpan, baseline_diff: f32, base_font_si
     // Small baseline variations without font size changes are likely rendering artifacts
     let is_likely_superscript = has_smaller_font && has_significant_shift;
 
-    eprintln!(
+    debug_print!(
         "🔍 SUPERSCRIPT CHECK: '{}' font_ratio={:.2} baseline_shift_ratio={:.2} → {}",
         text_trimmed,
         font_size_ratio,
@@ -124,15 +124,15 @@ fn is_real_superscript(current_span: &CharSpan, baseline_diff: f32, base_font_si
 
 /// Analyze all spans for potential subscripts and generate comprehensive debug report
 fn analyze_potential_subscripts(spans: &[CharSpan], base_font_size: f32, baseline: f32) {
-    eprintln!("\n=== COMPREHENSIVE SUBSCRIPT ANALYSIS ===");
-    eprintln!("Base Font Size: {base_font_size:.1}, Base Baseline: {baseline:.1}");
-    eprintln!("Total Spans: {}", spans.len());
+    debug_print!("\n=== COMPREHENSIVE SUBSCRIPT ANALYSIS ===");
+    debug_print!("Base Font Size: {base_font_size:.1}, Base Baseline: {baseline:.1}");
+    debug_print!("Total Spans: {}", spans.len());
 
     let mut potential_subscripts = Vec::new();
     let full_text: String = spans.iter().map(|s| s.text.as_str()).collect();
 
-    eprintln!("\nFull Text: '{full_text}'");
-    eprintln!("\n--- DETAILED SPAN ANALYSIS ---");
+    debug_print!("\nFull Text: '{full_text}'");
+    debug_print!("\n--- DETAILED SPAN ANALYSIS ---");
 
     for (i, span) in spans.iter().enumerate() {
         let text_trimmed = span.text.trim();
@@ -154,8 +154,8 @@ fn analyze_potential_subscripts(spans: &[CharSpan], base_font_size: f32, baselin
             false
         };
 
-        eprintln!("SPAN[{i}]: '{text_trimmed}'");
-        eprintln!(
+        debug_print!("SPAN[{i}]: '{text_trimmed}'");
+        debug_print!(
             "  Position: y={:.1}, baseline_diff={:.1} ({})",
             span.bbox.y0,
             baseline_diff,
@@ -167,17 +167,19 @@ fn analyze_potential_subscripts(spans: &[CharSpan], base_font_size: f32, baselin
                 "SAME"
             }
         );
-        eprintln!(
+        debug_print!(
             "  Font: size={:.1}, base={:.1}, ratio={:.3}",
-            span.font_size, base_font_size, font_size_ratio
+            span.font_size,
+            base_font_size,
+            font_size_ratio
         );
-        eprintln!(
+        debug_print!(
             "  Metrics: abs_shift={:.1}, rel_shift={:.3} ({:.1}%)",
             baseline_diff.abs(),
             relative_baseline_shift,
             relative_baseline_shift * 100.0
         );
-        eprintln!(
+        debug_print!(
             "  Detection: current={}, font_ok={}, baseline_ok={}",
             if current_detection {
                 "SUBSCRIPT"
@@ -203,16 +205,16 @@ fn analyze_potential_subscripts(spans: &[CharSpan], base_font_size: f32, baselin
             ));
         }
 
-        eprintln!();
+        debug_print!("");
     }
 
     if !potential_subscripts.is_empty() {
-        eprintln!("\n=== DETECTED SUBSCRIPTS SUMMARY ===");
-        eprintln!("| Idx | Char | Abs Shift | Rel Shift | Font Ratio | Detected |");
-        eprintln!("|-----|------|-----------|-----------|------------|----------|");
+        debug_print!("\n=== DETECTED SUBSCRIPTS SUMMARY ===");
+        debug_print!("| Idx | Char | Abs Shift | Rel Shift | Font Ratio | Detected |");
+        debug_print!("|-----|------|-----------|-----------|------------|----------|");
 
         for (idx, text, baseline_diff, font_ratio, rel_shift, detected) in &potential_subscripts {
-            eprintln!(
+            debug_print!(
                 "| {:3} | {:4} | {:9.1} | {:8.1}% | {:10.3} | {:8} |",
                 idx,
                 text,
@@ -222,10 +224,10 @@ fn analyze_potential_subscripts(spans: &[CharSpan], base_font_size: f32, baselin
                 if *detected { "YES" } else { "NO" }
             );
         }
-        eprintln!("Total detected subscripts: {}", potential_subscripts.len());
+        debug_print!("Total detected subscripts: {}", potential_subscripts.len());
     }
 
-    eprintln!("=== END ANALYSIS ===\n");
+    debug_print!("=== END ANALYSIS ===\n");
 }
 
 /// Local baseline-aware subscript detection for mathematical expressions with large baseline shifts
@@ -282,7 +284,7 @@ fn is_local_baseline_subscript(
 
     let is_contextual_subscript = has_smaller_font_locally && has_significant_shift;
 
-    eprintln!(
+    debug_print!(
         "🎯 LOCAL BASELINE: '{}' font={:.1} local_baseline={:.1}({:.3}) global_baseline={:.1} shift={:.1}({:.3}) → {}",
         text_trimmed,
         current_span.font_size, local_baseline_font_size, local_font_ratio,
@@ -349,7 +351,7 @@ fn is_real_subscript(
         format!("✗ ARTIFACT ({})", rejection_reasons.join(", "))
     };
 
-    eprintln!(
+    debug_print!(
         "🔍 SUBSCRIPT DETAILED: '{}' font={:.1}/{:.1}({:.3}) baseline={:.1}({:.3}) thresholds=font<0.85&shift>0.25&downward → {}",
         text_trimmed,
         current_span.font_size, base_font_size, font_size_ratio,
@@ -384,7 +386,7 @@ pub(crate) struct TagRange {
 
 /// Main entry point for recursive tag processing
 pub(crate) fn apply_tags_recursive(spans: &[CharSpan], depth: usize) -> String {
-    eprintln!(
+    debug_print!(
         "🔄 apply_tags_recursive called with {} spans at depth {}",
         spans.len(),
         depth
@@ -396,7 +398,7 @@ pub(crate) fn apply_tags_recursive(spans: &[CharSpan], depth: usize) -> String {
 
     // Prevent infinite recursion
     if depth > 10 {
-        eprintln!("⚠️ Maximum recursion depth reached, returning plain text");
+        debug_print!("⚠️ Maximum recursion depth reached, returning plain text");
         return spans
             .iter()
             .map(|s| s.text.as_str())
@@ -426,7 +428,7 @@ pub(crate) fn apply_tags_recursive(spans: &[CharSpan], depth: usize) -> String {
 
 /// Detect subscript patterns in spans
 pub(crate) fn detect_subscripts(spans: &[CharSpan]) -> Vec<TagRange> {
-    eprintln!("🔍 detect_subscripts called with {} spans", spans.len());
+    debug_print!("🔍 detect_subscripts called with {} spans", spans.len());
     // TODO: Extract subscript detection logic from detect_script_notation
     // For now, return empty to maintain compatibility
     Vec::new()
@@ -434,7 +436,7 @@ pub(crate) fn detect_subscripts(spans: &[CharSpan]) -> Vec<TagRange> {
 
 /// Detect superscript patterns in spans
 pub(crate) fn detect_superscripts(spans: &[CharSpan]) -> Vec<TagRange> {
-    eprintln!("🔍 detect_superscripts called with {} spans", spans.len());
+    debug_print!("🔍 detect_superscripts called with {} spans", spans.len());
     // TODO: Extract superscript detection logic from detect_script_notation
     // For now, return empty to maintain compatibility
     Vec::new()
@@ -442,7 +444,7 @@ pub(crate) fn detect_superscripts(spans: &[CharSpan]) -> Vec<TagRange> {
 
 /// Detect bold text patterns in spans
 pub(crate) fn detect_bold(spans: &[CharSpan]) -> Vec<TagRange> {
-    eprintln!("🔍 detect_bold called with {} spans", spans.len());
+    debug_print!("🔍 detect_bold called with {} spans", spans.len());
     // TODO: Extract bold detection logic from detect_script_notation
     // For now, return empty to maintain compatibility
     Vec::new()
@@ -468,7 +470,7 @@ fn close_script_tag(result: &mut String, tag: &str) {
 }
 
 pub(crate) fn detect_script_notation(spans: &[CharSpan]) -> String {
-    eprintln!("⚡ STACK-BASED detection called with {} spans", spans.len());
+    debug_print!("⚡ STACK-BASED detection called with {} spans", spans.len());
 
     if spans.is_empty() {
         return String::new();
@@ -479,7 +481,7 @@ pub(crate) fn detect_script_notation(spans: &[CharSpan]) -> String {
         .map(|s| s.text.as_str())
         .collect::<Vec<&str>>()
         .join("");
-    eprintln!(
+    debug_print!(
         "⚡ STACK-BASED: Processing text='{}'",
         full_text.chars().take(50).collect::<String>()
     );
@@ -503,7 +505,7 @@ pub(crate) fn detect_script_notation(spans: &[CharSpan]) -> String {
 
     // Process each span
     for (i, span) in spans.iter().enumerate() {
-        eprintln!(
+        debug_print!(
             "🔍 SPAN[{}]: '{}' y={:.1} size={:.1} font={}",
             i,
             span.text.trim(),
@@ -519,9 +521,11 @@ pub(crate) fn detect_script_notation(spans: &[CharSpan]) -> String {
             || text_trimmed.contains('s')
             || text_trimmed.contains('k')
         {
-            eprintln!(
+            debug_print!(
                 "🎯 MASK DEBUG: Found '{}' at y={:.1}, in_subscript={}",
-                text_trimmed, span.bbox.y0, in_subscript
+                text_trimmed,
+                span.bbox.y0,
+                in_subscript
             );
         }
 
@@ -535,9 +539,9 @@ pub(crate) fn detect_script_notation(spans: &[CharSpan]) -> String {
             if current_bold {
                 result.push_str("<b>");
                 tag_stack.push("</b>");
-                eprintln!("🅱️ BOLD START: Pushed </b> on stack");
+                debug_print!("🅱️ BOLD START: Pushed </b> on stack");
             }
-            eprintln!("📏 BASELINE INIT: {baseline:.1}, BASE FONT SIZE: {base_font_size:.1}");
+            debug_print!("📏 BASELINE INIT: {baseline:.1}, BASE FONT SIZE: {base_font_size:.1}");
 
             // Run comprehensive analysis after baseline is initialized
             analyze_potential_subscripts(spans, base_font_size, baseline);
@@ -550,13 +554,13 @@ pub(crate) fn detect_script_notation(spans: &[CharSpan]) -> String {
                 if is_bold_now {
                     result.push_str("<b>");
                     tag_stack.push("</b>");
-                    eprintln!("🅱️ BOLD START: Pushed </b> on stack");
+                    debug_print!("🅱️ BOLD START: Pushed </b> on stack");
                 } else {
                     // Close bold tag
                     if let Some(pos) = tag_stack.iter().rposition(|&tag| tag == "</b>") {
                         let closing_tag = tag_stack.remove(pos);
                         result.push_str(closing_tag);
-                        eprintln!("🅱️ BOLD END: Applied {closing_tag}");
+                        debug_print!("🅱️ BOLD END: Applied {closing_tag}");
                     }
                 }
                 current_bold = is_bold_now;
@@ -602,14 +606,14 @@ pub(crate) fn detect_script_notation(spans: &[CharSpan]) -> String {
                     || text_trimmed.contains('∈')
                     || text_trimmed.contains('N')
                 {
-                    eprintln!("🎯 CONTINUITY: '{text_trimmed}' baseline_diff_from_subscript={baseline_diff_from_subscript:.1}, should_be_subscript={should_be_subscript}, has_very_small_font={has_very_small_font}, should_continue={should_continue}");
-                    eprintln!("🎯 POSITIONING: subscript_baseline={:.1}, span.y0={:.1}, global_baseline_diff={:.1}", 
+                    debug_print!("🎯 CONTINUITY: '{text_trimmed}' baseline_diff_from_subscript={baseline_diff_from_subscript:.1}, should_be_subscript={should_be_subscript}, has_very_small_font={has_very_small_font}, should_continue={should_continue}");
+                    debug_print!("🎯 POSITIONING: subscript_baseline={:.1}, span.y0={:.1}, global_baseline_diff={:.1}", 
                         subscript_baseline, span.bbox.y0, baseline_diff);
                 }
 
                 if should_continue {
                     // Continue subscript based on positioning
-                    eprintln!("⬇️ SUBSCRIPT CONTINUE: Within continuity threshold ({baseline_diff_from_subscript:.1} <= {SUBSCRIPT_CONTINUITY_THRESHOLD})");
+                    debug_print!("⬇️ SUBSCRIPT CONTINUE: Within continuity threshold ({baseline_diff_from_subscript:.1} <= {SUBSCRIPT_CONTINUITY_THRESHOLD})");
                     // Skip baseline change detection and just continue
                     let cleaned_text = span.text.replace('\u{001a}', ""); // Remove SUB (substitute) character
                     result.push_str(&cleaned_text);
@@ -619,7 +623,7 @@ pub(crate) fn detect_script_notation(spans: &[CharSpan]) -> String {
                     if let Some(pos) = tag_stack.iter().rposition(|&tag| tag == "</sub>") {
                         let closing_tag = tag_stack.remove(pos);
                         close_script_tag(&mut result, closing_tag);
-                        eprintln!("🔄 SUB CLOSE: Applied {closing_tag} - position indicates end of subscript");
+                        debug_print!("🔄 SUB CLOSE: Applied {closing_tag} - position indicates end of subscript");
                         in_subscript = false;
                     }
                 }
@@ -647,7 +651,7 @@ pub(crate) fn detect_script_notation(spans: &[CharSpan]) -> String {
                         if let Some(pos) = tag_stack.iter().rposition(|&tag| tag == "</sup>") {
                             let closing_tag = tag_stack.remove(pos);
                             close_script_tag(&mut result, closing_tag);
-                            eprintln!("🔄 SUP CLOSE: Applied {closing_tag}");
+                            debug_print!("🔄 SUP CLOSE: Applied {closing_tag}");
                             in_superscript = false;
                         }
                     }
@@ -655,28 +659,28 @@ pub(crate) fn detect_script_notation(spans: &[CharSpan]) -> String {
                     tag_stack.push("</sub>");
                     in_subscript = true;
                     subscript_baseline = span.bbox.y0; // Set subscript baseline for continuity checks
-                    eprintln!("⬇️ SUBSCRIPT START: Real subscript detected");
+                    debug_print!("⬇️ SUBSCRIPT START: Real subscript detected");
                 } else if should_be_superscript && !in_superscript {
                     // Close subscript if open, then start superscript
                     if in_subscript {
                         if let Some(pos) = tag_stack.iter().rposition(|&tag| tag == "</sub>") {
                             let closing_tag = tag_stack.remove(pos);
                             close_script_tag(&mut result, closing_tag);
-                            eprintln!("🔄 SUB CLOSE: Applied {closing_tag}");
+                            debug_print!("🔄 SUB CLOSE: Applied {closing_tag}");
                             in_subscript = false;
                         }
                     }
                     result.push_str("<sup>");
                     tag_stack.push("</sup>");
                     in_superscript = true;
-                    eprintln!("⬆️ SUPERSCRIPT START: Real superscript detected");
+                    debug_print!("⬆️ SUPERSCRIPT START: Real superscript detected");
                 } else if !should_be_subscript && !should_be_superscript {
                     // Character should be normal - close any open script tags
                     if in_subscript {
                         if let Some(pos) = tag_stack.iter().rposition(|&tag| tag == "</sub>") {
                             let closing_tag = tag_stack.remove(pos);
                             close_script_tag(&mut result, closing_tag);
-                            eprintln!("🔄 SUB CLOSE: Applied {closing_tag}");
+                            debug_print!("🔄 SUB CLOSE: Applied {closing_tag}");
                             in_subscript = false;
                         }
                     }
@@ -684,14 +688,14 @@ pub(crate) fn detect_script_notation(spans: &[CharSpan]) -> String {
                         if let Some(pos) = tag_stack.iter().rposition(|&tag| tag == "</sup>") {
                             let closing_tag = tag_stack.remove(pos);
                             close_script_tag(&mut result, closing_tag);
-                            eprintln!("🔄 SUP CLOSE: Applied {closing_tag}");
+                            debug_print!("🔄 SUP CLOSE: Applied {closing_tag}");
                             in_superscript = false;
                         }
                     }
                 } else if should_be_subscript && in_subscript {
-                    eprintln!("⬇️ SUBSCRIPT CONTINUE: Already in subscript mode");
+                    debug_print!("⬇️ SUBSCRIPT CONTINUE: Already in subscript mode");
                 } else if should_be_superscript && in_superscript {
-                    eprintln!("⬆️ SUPERSCRIPT CONTINUE: Already in superscript mode");
+                    debug_print!("⬆️ SUPERSCRIPT CONTINUE: Already in superscript mode");
                 }
             } else if baseline_diff.abs() < RETURN_THRESHOLD && (in_subscript || in_superscript) {
                 // Close script tags when returning close to baseline
@@ -715,7 +719,7 @@ pub(crate) fn detect_script_notation(spans: &[CharSpan]) -> String {
                         if let Some(pos) = tag_stack.iter().rposition(|&tag| tag == "</sub>") {
                             let closing_tag = tag_stack.remove(pos);
                             close_script_tag(&mut result, closing_tag);
-                            eprintln!(
+                            debug_print!(
                                 "🔄 BASELINE RETURN: Applied {closing_tag} for '{text_trimmed}'"
                             );
                             in_subscript = false;
@@ -725,14 +729,14 @@ pub(crate) fn detect_script_notation(spans: &[CharSpan]) -> String {
                         if let Some(pos) = tag_stack.iter().rposition(|&tag| tag == "</sup>") {
                             let closing_tag = tag_stack.remove(pos);
                             close_script_tag(&mut result, closing_tag);
-                            eprintln!(
+                            debug_print!(
                                 "🔄 BASELINE RETURN: Applied {closing_tag} for '{text_trimmed}'"
                             );
                             in_superscript = false;
                         }
                     }
                 } else {
-                    eprintln!("⏭️ KEEPING script mode for whitespace/punct: '{text_trimmed}'");
+                    debug_print!("⏭️ KEEPING script mode for whitespace/punct: '{text_trimmed}'");
                 }
             }
         }
@@ -745,7 +749,7 @@ pub(crate) fn detect_script_notation(spans: &[CharSpan]) -> String {
     // Close any remaining open tags, trimming trailing spaces before closing subscript/superscript tags
     while let Some(closing_tag) = tag_stack.pop() {
         close_script_tag(&mut result, closing_tag);
-        eprintln!("🔚 CLEANUP: Applied remaining {closing_tag}");
+        debug_print!("🔚 CLEANUP: Applied remaining {closing_tag}");
     }
 
     // Apply mathematical symbol corrections to fix patterns like "6=" → "≠", "∈/" → "∉"
@@ -758,7 +762,7 @@ pub(crate) fn detect_script_notation(spans: &[CharSpan]) -> String {
     #[cfg(not(feature = "correction-engine"))]
     let corrected_result = result;
 
-    eprintln!(
+    debug_print!(
         "⚡ STACK-BASED RESULT: '{}'",
         corrected_result.chars().take(100).collect::<String>()
     );

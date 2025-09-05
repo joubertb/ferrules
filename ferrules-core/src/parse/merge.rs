@@ -4,7 +4,7 @@ use tracing::instrument;
 
 use crate::{
     blocks::{Block, BlockType, ImageBlock, List, TextBlock, Title, TitleLevel},
-    correction,
+    correction, debug_print,
     entities::{Element, ElementID, ElementType, Line, PageID},
     layout::model::LayoutBBox,
 };
@@ -207,7 +207,7 @@ pub(crate) fn merge_elements_into_blocks(
     elements: Vec<Element>,
     title_level: HashMap<(PageID, ElementID), TitleLevel>,
 ) -> anyhow::Result<Vec<Block>> {
-    eprintln!(
+    debug_print!(
         "🔧 merge_elements_into_blocks CALLED with {} elements",
         elements.len()
     );
@@ -219,7 +219,7 @@ pub(crate) fn merge_elements_into_blocks(
     while let Some(mut curr_el) = element_it.next() {
         match &mut curr_el.kind {
             ElementType::Text => {
-                eprintln!(
+                debug_print!(
                     "📄 TEXT ELEMENT: {}",
                     curr_el.text_block.text.chars().take(50).collect::<String>()
                 );
@@ -227,7 +227,7 @@ pub(crate) fn merge_elements_into_blocks(
                     || curr_el.text_block.text.contains("ej,i")
                     || curr_el.text_block.text.contains("δ")
                 {
-                    eprintln!(
+                    debug_print!(
                         "📄 *** FOUND ei,j/δ in TEXT: {}",
                         curr_el
                             .text_block
@@ -262,20 +262,25 @@ pub(crate) fn merge_elements_into_blocks(
                 blocks.push(text_block);
             }
             ElementType::Formula => {
-                eprintln!("\n🧮 ===== FORMULA ELEMENT PROCESSING =====");
-                eprintln!(
+                debug_print!("\n🧮 ===== FORMULA ELEMENT PROCESSING =====");
+                debug_print!(
                     "🧮 Element ID: {}, Page: {}, Block ID: {}",
-                    curr_el.id, curr_el.page_id, block_id
+                    curr_el.id,
+                    curr_el.page_id,
+                    block_id
                 );
-                eprintln!(
+                debug_print!(
                     "🧮 BBox: ({:.1},{:.1}) - ({:.1},{:.1})",
-                    curr_el.bbox.x0, curr_el.bbox.y0, curr_el.bbox.x1, curr_el.bbox.y1
+                    curr_el.bbox.x0,
+                    curr_el.bbox.y0,
+                    curr_el.bbox.x1,
+                    curr_el.bbox.y1
                 );
-                eprintln!("🧮 Raw Formula Text: '{}'", curr_el.text_block.text);
+                debug_print!("🧮 Raw Formula Text: '{}'", curr_el.text_block.text);
 
                 // Process the formula text - use spans if available for better subscript detection
                 let processed_text = if !curr_el.line_spans.is_empty() {
-                    eprintln!(
+                    debug_print!(
                         "🧮 Using CharSpan-based formula processing with {} line(s) of spans",
                         curr_el.line_spans.len()
                     );
@@ -284,28 +289,28 @@ pub(crate) fn merge_elements_into_blocks(
                         &curr_el.line_spans,
                     )
                 } else {
-                    eprintln!("🧮 No spans available, using text-only formula processing");
+                    debug_print!("🧮 No spans available, using text-only formula processing");
                     crate::modtext::format_formula_text(&curr_el.text_block.text)
                 };
-                eprintln!("🧮 Processed Formula: '{processed_text}'");
+                debug_print!("🧮 Processed Formula: '{processed_text}'");
 
                 // Check if subscripts were detected
                 if processed_text.contains("<sub>") {
-                    eprintln!("🧮 ✓ SUBSCRIPTS DETECTED in formula");
+                    debug_print!("🧮 ✓ SUBSCRIPTS DETECTED in formula");
                 } else {
-                    eprintln!("🧮 ✗ NO SUBSCRIPTS detected in formula - potential issue!");
+                    debug_print!("🧮 ✗ NO SUBSCRIPTS detected in formula - potential issue!");
                 }
 
                 if processed_text.contains("ni")
                     || processed_text.contains("nj")
                     || processed_text.contains("M(i,j)")
                 {
-                    eprintln!(
+                    debug_print!(
                         "🧮 ⚠️ POTENTIAL SUBSCRIPT PATTERN found but not tagged: check spans"
                     );
                 }
 
-                eprintln!("🧮 ===== END FORMULA PROCESSING =====\n");
+                debug_print!("🧮 ===== END FORMULA PROCESSING =====\n");
 
                 let formula_block = Block {
                     id: block_id,

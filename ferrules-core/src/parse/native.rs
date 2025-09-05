@@ -6,6 +6,7 @@ use pdfium_render::prelude::{PdfPage, PdfPageTextChar, PdfRenderConfig, Pdfium};
 use tracing::{instrument, Span};
 
 use crate::{
+    debug_print,
     entities::{BBox, CharSpan, Line, PageID},
     layout::model::ORTLayoutParser,
 };
@@ -70,6 +71,7 @@ pub struct ParseNativeRequest {
     pub required_raster_height: u32,
     pub sender_tx: Sender<anyhow::Result<ParseNativePageResult>>,
     pub count_only: bool,
+    pub debug_context: Option<crate::debug::DebugContext>,
 }
 impl ParseNativeRequest {
     pub fn new(
@@ -78,6 +80,7 @@ impl ParseNativeRequest {
         flatten: bool,
         page_range: Option<Range<usize>>,
         sender_tx: Sender<anyhow::Result<ParseNativePageResult>>,
+        debug_context: Option<crate::debug::DebugContext>,
     ) -> Self {
         ParseNativeRequest {
             doc_data: Arc::from(data),
@@ -89,6 +92,7 @@ impl ParseNativeRequest {
             required_raster_height: ORTLayoutParser::REQUIRED_HEIGHT,
             sender_tx,
             count_only: false,
+            debug_context,
         }
     }
 
@@ -96,6 +100,7 @@ impl ParseNativeRequest {
         data: &[u8],
         password: Option<&str>,
         sender_tx: Sender<anyhow::Result<ParseNativePageResult>>,
+        debug_context: Option<crate::debug::DebugContext>,
     ) -> Self {
         ParseNativeRequest {
             doc_data: Arc::from(data),
@@ -106,6 +111,7 @@ impl ParseNativeRequest {
             required_raster_height: 0, // Not needed for counting
             sender_tx,
             count_only: true,
+            debug_context,
         }
     }
 }
@@ -233,7 +239,13 @@ fn handle_parse_native_req(
         required_raster_height,
         sender_tx,
         count_only,
+        debug_context,
     } = req;
+
+    // Set debug context for this thread if provided
+    if let Some(context) = debug_context {
+        crate::debug::set_debug_context(context.doc_name, Some(context.output_flags));
+    }
 
     // Set document context for font corruption analysis
     #[cfg(feature = "correction-engine")]
@@ -241,7 +253,7 @@ fn handle_parse_native_req(
 
     // Use original PDF data directly - corrections are applied at character level during text extraction
     let processed_pdf_data = doc_data.to_vec();
-    eprintln!(
+    debug_print!(
         "🔧 DEBUG: Using original PDF without preprocessing - corrections applied at text level"
     );
 
@@ -315,7 +327,7 @@ pub fn start_native_parser(mut input_rx: Receiver<(ParseNativeRequest, Span)>) {
     while let Some((req, parent_span)) = input_rx.blocking_recv() {
         match handle_parse_native_req(&pdfium, req, parent_span) {
             Ok(_) => {}
-            Err(e) => eprintln!("error parsing request natively : {e:?}"),
+            Err(e) => debug_print!("error parsing request natively : {e:?}"),
         }
     }
 }

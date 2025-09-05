@@ -3,7 +3,10 @@ use std::path::PathBuf;
 use build_html::{Html, HtmlContainer, HtmlElement, HtmlPage, HtmlTag};
 use regex::Regex;
 
-use crate::blocks::{Block, BlockType};
+use crate::{
+    blocks::{Block, BlockType},
+    debug_print,
+};
 
 use super::{Render, Renderer};
 
@@ -107,7 +110,7 @@ impl Renderer for HTMLRenderer {
                 }
             }
             _ => {
-                eprintln!("not implemented yet")
+                debug_print!("not implemented yet")
             }
         }
         Ok(())

@@ -2,6 +2,7 @@ use clap::Parser;
 
 use ferrules_core::correction::{display_cli_config_info, initialize_for_cli};
 use ferrules_core::{
+    debug::{init_debug_config, DebugOutput},
     layout::model::{ORTConfig, OrtExecutionProvider},
     utils::{create_dirs, get_doc_length, save_parsed_document},
     FerrulesParseConfig, FerrulesParser,
@@ -143,7 +144,10 @@ struct Args {
     )]
     verbose: bool,
 
-    /// Directory for debug output files
+    /// Debug output mode (none, stderr, file, both)
+    #[arg(long, env = "FERRULES_DEBUG_OUTPUT", default_value = "none")]
+    debug_output: String,
+
     #[arg(
         long,
         env = "FERRULES_DEBUG_PATH",
@@ -219,6 +223,16 @@ fn parse_ep_args(args: &Args) -> Vec<OrtExecutionProvider> {
 #[tokio::main(flavor = "multi_thread")]
 async fn main() {
     let args = Args::parse();
+
+    // Initialize debug configuration
+    let debug_output = args
+        .debug_output
+        .parse::<DebugOutput>()
+        .unwrap_or_else(|e| {
+            eprintln!("Warning: {e}");
+            DebugOutput::NONE
+        });
+    init_debug_config(debug_output);
 
     // Initialize tracing for debug logging
     if args.debug {

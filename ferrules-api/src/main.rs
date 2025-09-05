@@ -5,7 +5,7 @@ use axum::{
         HeaderMap, Response, StatusCode,
     },
     response::{IntoResponse, Sse},
-    routing::{get, post},
+    routing::{delete, get, post},
     Json, Router,
 };
 use axum_tracing_opentelemetry::middleware::OtelAxumLayer;
@@ -13,6 +13,10 @@ use clap::Parser;
 use ferrules_api::init_tracing;
 use ferrules_core::{
     correction::initialize_for_cli,
+    debug::{
+        cleanup_old_debug_files, clear_debug_context, delete_debug_file, init_debug_config,
+        read_debug_file, set_debug_context, DebugOutput,
+    },
     layout::model::{ORTConfig, OrtExecutionProvider},
     render::markdown::to_markdown,
     FerrulesParseConfig, FerrulesParser,
@@ -62,6 +66,10 @@ struct Args {
     /// Enable debug mode
     #[arg(long, env = "SENTRY_DEBUG", default_value = "false")]
     sentry_debug: bool,
+
+    /// Debug output mode (none, stderr, file, both)
+    #[arg(long, env = "FERRULES_DEBUG_OUTPUT", default_value = "none")]
+    debug_output: String,
 
     /// Use CoreML for layout inference (default: true)
     #[arg(
@@ -241,9 +249,73 @@ impl JobManager {
     }
 }
 
+/// Handler to retrieve debug output for a specific document
+#[tracing::instrument(skip_all)]
+async fn get_debug_handler(
+    Path(doc_name): Path<String>,
+) -> Result<impl IntoResponse, (StatusCode, Json<ApiResponse<()>>)> {
+    match read_debug_file(&doc_name) {
+        Ok(content) => Ok(content),
+        Err(e) => {
+            if e.contains("not found") {
+                Err((
+                    StatusCode::NOT_FOUND,
+                    Json(ApiResponse {
+                        success: false,
+                        data: None,
+                        error: Some("Debug file not found".to_string()),
+                    }),
+                ))
+            } else {
+                Err((
+                    StatusCode::INTERNAL_SERVER_ERROR,
+                    Json(ApiResponse {
+                        success: false,
+                        data: None,
+                        error: Some(format!("Failed to read debug file: {e}")),
+                    }),
+                ))
+            }
+        }
+    }
+}
+
+/// Handler to delete debug output for a specific document
+#[tracing::instrument(skip_all)]
+async fn delete_debug_handler(
+    Path(doc_name): Path<String>,
+) -> Result<impl IntoResponse, (StatusCode, Json<ApiResponse<()>>)> {
+    match delete_debug_file(&doc_name) {
+        Ok(()) => Ok(Json(ApiResponse {
+            success: true,
+            data: Some("Debug file deleted successfully"),
+            error: None,
+        })),
+        Err(e) => Err((
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(ApiResponse {
+                success: false,
+                data: None,
+                error: Some(format!("Failed to delete debug file: {e}")),
+            }),
+        )),
+    }
+}
+
 #[tokio::main]
 async fn main() {
     let args = Args::parse();
+
+    // Initialize debug configuration
+    let debug_output = args
+        .debug_output
+        .parse::<DebugOutput>()
+        .unwrap_or_else(|e| {
+            eprintln!("Warning: {e}");
+            DebugOutput::NONE
+        });
+    init_debug_config(debug_output);
+
     // Check providers
     let providers = parse_ep_args(&args);
     // Initialize Sentry if DSN is provided
@@ -300,9 +372,25 @@ async fn main() {
         .route("/parse", post(parse_document_handler))
         .route("/parse/sse", post(parse_document_sse_handler))
         .route("/parse/cancel/:job_id", post(cancel_job_handler))
+        .route("/debug/:doc_name", get(get_debug_handler))
+        .route("/debug/:doc_name", delete(delete_debug_handler))
         .with_state(app_state)
         .layer(OtelAxumLayer::default())
         .layer(DefaultBodyLimit::max(MAX_SIZE_LIMIT));
+
+    // Start background task for debug file cleanup
+    tokio::spawn(async {
+        let mut interval = tokio::time::interval(std::time::Duration::from_secs(3600)); // Run every hour
+        loop {
+            interval.tick().await;
+            if let Err(e) = cleanup_old_debug_files(4) {
+                // Clean files older than 4 hours
+                tracing::warn!("Failed to cleanup old debug files: {}", e);
+            } else {
+                tracing::debug!("Debug file cleanup completed");
+            }
+        }
+    });
 
     // Run it
     let listener = TcpListener::bind(&args.listen_addr).await.unwrap();
@@ -477,17 +565,17 @@ async fn parse_document_handler(
         page_range,
         debug_dir: None,
     };
+
+    // Generate doc_name and set debug context
+    let doc_name = Uuid::new_v4().to_string();
+    set_debug_context(doc_name.clone(), None);
+
     let doc = state
         .parser
-        .parse_document(
-            &mmap,
-            Uuid::new_v4().to_string(),
-            config,
-            Some(|_| {}),
-            None::<fn() -> bool>,
-        )
+        .parse_document(&mmap, doc_name, config, Some(|_| {}), None::<fn() -> bool>)
         .await
         .map_err(|e| {
+            clear_debug_context(); // Clear on error
             (
                 StatusCode::INTERNAL_SERVER_ERROR,
                 Json(ApiResponse {
@@ -500,7 +588,7 @@ async fn parse_document_handler(
 
     let accept_header = headers.get(ACCEPT).and_then(|h| h.to_str().ok());
 
-    match accept_header {
+    let result = match accept_header {
         Some("text/markdown") => {
             let markdown = to_markdown(&doc, &doc.doc_name, None).map_err(|e| {
                 (
@@ -538,7 +626,12 @@ async fn parse_document_handler(
                 )
                 .unwrap())
         }
-    }
+    };
+
+    // Clear debug context when done
+    clear_debug_context();
+
+    result
 }
 
 fn parse_page_range(range_str: &str) -> anyhow::Result<std::ops::Range<usize>> {

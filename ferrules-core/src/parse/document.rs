@@ -13,6 +13,8 @@ use super::{
 };
 use crate::entities::DocumentMetadata;
 use crate::{
+    debug::get_debug_context,
+    debug_print,
     entities::{ElementType, Page, PageID, ParsedDocument, StructuredPage},
     layout::{
         model::{ORTConfig, ORTLayoutParser},
@@ -155,7 +157,8 @@ impl FerrulesParser {
         let (result_tx, mut result_rx) = mpsc::channel(1);
 
         // Create a count-only request
-        let request = ParseNativeRequest::new_count_only(doc, password, result_tx);
+        let request =
+            ParseNativeRequest::new_count_only(doc, password, result_tx, get_debug_context());
 
         // Send the request to the native queue
         self.native_queue
@@ -302,7 +305,14 @@ impl FerrulesParser {
 
         let mut set = JoinSet::new();
         let (native_tx, mut native_rx) = mpsc::channel(32);
-        let req = ParseNativeRequest::new(data, password, flatten_pdf, page_range, native_tx);
+        let req = ParseNativeRequest::new(
+            data,
+            password,
+            flatten_pdf,
+            page_range,
+            native_tx,
+            get_debug_context(),
+        );
         self.native_queue.push(req).await?;
 
         while let Some(native_page) = native_rx.recv().await {
@@ -331,7 +341,7 @@ impl FerrulesParser {
                         .in_current_span(),
                     );
                 }
-                Err(_) => eprintln!("Error occured parsing page in doc"),
+                Err(_) => debug_print!("Error occured parsing page in doc"),
             }
         }
 
