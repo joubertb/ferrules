@@ -1,26 +1,10 @@
 use crate::entities::{BBox, Element, ElementType, PageID};
-use crate::{correction, debug_print};
+use crate::correction;
 use anyhow::bail;
 use serde::{Deserialize, Serialize};
 
 pub type TitleLevel = u8;
 
-/// Apply word-level font corrections to assembled text
-fn apply_word_corrections(text: &mut String) {
-    // Debug: Log what text we're working with at the block level
-    if text.contains("n<sub>j</sub> i") || text.contains("<formula>") {
-        debug_print!("🔍 BLOCK DEBUG: apply_word_corrections called with text length {} containing target patterns", text.len());
-        debug_print!(
-            "🔍 BLOCK DEBUG: Text preview: {}",
-            text.chars().take(200).collect::<String>()
-        );
-    }
-
-    let corrected = correction::correct_assembled_text(text);
-    if corrected != *text {
-        *text = corrected;
-    }
-}
 
 #[derive(Debug, Default, Deserialize, Serialize)]
 pub struct ImageBlock {
@@ -63,6 +47,8 @@ impl List {
 #[derive(Debug, Default, Deserialize, Serialize)]
 pub struct TextBlock {
     pub(crate) text: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) fertext: Option<String>,
 }
 
 #[derive(Debug, Default, Deserialize, Serialize)]
@@ -74,6 +60,8 @@ pub struct List {
 pub struct Title {
     pub level: TitleLevel,
     pub text: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub fertext: Option<String>,
 }
 
 #[derive(Debug, Deserialize, Serialize)]
@@ -102,11 +90,17 @@ impl Block {
             BlockType::TextBlock(text) => {
                 if let ElementType::Text = &element.kind {
                     self.bbox.merge(&element.bbox);
+
+                    // Store original text if not already stored
+                    if text.fertext.is_none() {
+                        text.fertext = Some(text.text.clone());
+                    }
+
                     text.text.push('\n');
                     text.text.push_str(&element.text_block.text);
 
                     // Apply word-level corrections to assembled text
-                    apply_word_corrections(&mut text.text);
+                    correction::apply_word_corrections(&mut text.text);
 
                     // add page_id
                     Ok(())
@@ -120,7 +114,7 @@ impl Block {
                     let mut txt = element.text_block.text.trim().to_string();
 
                     // Apply word-level corrections to list item text
-                    apply_word_corrections(&mut txt);
+                    correction::apply_word_corrections(&mut txt);
 
                     list.items.push(txt);
                     Ok(())
@@ -131,10 +125,16 @@ impl Block {
             BlockType::Header(header) => {
                 if let ElementType::Header = &element.kind {
                     self.bbox.merge(&element.bbox);
+
+                    // Store original text if not already stored
+                    if header.fertext.is_none() {
+                        header.fertext = Some(header.text.clone());
+                    }
+
                     header.text.push_str(&element.text_block.text);
 
                     // Apply word-level corrections to header text
-                    apply_word_corrections(&mut header.text);
+                    correction::apply_word_corrections(&mut header.text);
 
                     Ok(())
                 } else {
@@ -144,10 +144,16 @@ impl Block {
             BlockType::Footer(footer) => {
                 if let ElementType::Footer = &element.kind {
                     self.bbox.merge(&element.bbox);
+
+                    // Store original text if not already stored
+                    if footer.fertext.is_none() {
+                        footer.fertext = Some(footer.text.clone());
+                    }
+
                     footer.text.push_str(&element.text_block.text);
 
                     // Apply word-level corrections to footer text
-                    apply_word_corrections(&mut footer.text);
+                    correction::apply_word_corrections(&mut footer.text);
 
                     Ok(())
                 } else {

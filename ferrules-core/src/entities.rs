@@ -360,6 +360,7 @@ pub struct Element {
 
 impl Element {
     pub fn from_layout_block(id: usize, layout_block: &LayoutBBox, page_id: usize) -> Self {
+        
         let kind = match layout_block.label {
             "Caption" => ElementType::Caption,
             "Formula" => ElementType::Formula,
@@ -387,11 +388,17 @@ impl Element {
         }
     }
     pub fn push_line(&mut self, line: &Line) {
+
         // Line text is already cleaned in Line::new_from_span() and Line::append()
         if self.text_block.is_empty() {
             self.text_block.push_first(&line.text);
         } else {
             self.text_block.append_line(&line.text);
+        }
+
+        // RAW TEXT DEBUG: Show accumulated text after adding line
+        if self.id == 6 || line.text.contains("structural") || line.text.contains("parent") || line.text.contains("nj") || line.text.contains("ni") || line.text.contains("mask") {
+            debug_print!("🟦 ELEMENT TEXT AFTER:  '{}'", self.text_block.text.chars().take(5000).collect::<String>());
         }
 
         // Store the CharSpans for potential subscript/superscript processing
@@ -727,6 +734,15 @@ impl Line {
             "🔵 APPEND called with span: '{}'",
             span.text.chars().take(20).collect::<String>()
         );
+        
+        // Early debug logging for Block ID 54 analysis - catch ALL append calls
+        let span_preview = span.text.chars().take(20).collect::<String>();
+        let current_preview = self.text.chars().take(50).collect::<String>();
+        if span_preview.contains("j") || current_preview.contains("parent") || span_preview.contains("node") {
+            debug_print!("📊 EARLY APPEND DEBUG - span: '{}', current line: '{}'", span_preview, current_preview);
+            debug_print!("📊 EARLY APPEND - span font: '{}', size: {:.1}, y: {:.1}", span.font_name, span.font_size, span.bbox.y0);
+            debug_print!("📊 EARLY APPEND - line has {} spans so far", self.spans.len());
+        }
         if span.rotation != self.rotation
         // NOTE: sometimes pdfium doesn't inject a linebreak, so we check the span positions
         || span.bbox.y0 > self.bbox.y1
@@ -784,8 +800,26 @@ impl Line {
         // Apply comprehensive text processing to the final line text
         let utf8_fixed = self.text.clone();
 
+        // Debug logging for text block processing - Block ID 54 analysis
+        if self.text.contains("formulated") || self.text.contains("probability") || self.text.contains("nj") || self.text.contains("denotes") {
+            debug_print!("📊 TEXT BLOCK PROCESSING - Line::finalize");
+            debug_print!("📊 Final text: '{}'", self.text.chars().take(100).collect::<String>());
+            debug_print!("📊 Finalizing {} spans:", self.spans.len());
+            for (i, span) in self.spans.iter().enumerate() {
+                debug_print!(
+                    "📊 SPAN[{}]: text='{}' font='{}' size={:.1} y={:.1}",
+                    i, span.text.trim(), span.font_name, span.font_size, span.bbox.y0
+                );
+            }
+        }
+
         // Apply comprehensive tag processing to spans (bold, subscript, superscript, formula)
         let script_processed = crate::modtext::add_tags(&self.spans);
+
+        // Show result after processing for Block ID 54 analysis
+        if self.text.contains("formulated") || self.text.contains("probability") || self.text.contains("nj") || self.text.contains("denotes") {
+            debug_print!("📊 FINALIZE RESULT after add_tags: '{}'", script_processed.chars().take(200).collect::<String>());
+        }
 
         // Debug dual processing calls
         if script_processed.contains("<sub>")

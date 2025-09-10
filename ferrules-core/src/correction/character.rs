@@ -392,9 +392,10 @@ pub fn add_math_symbol_spacing(text: &str) -> String {
         }
     }
 
-    // Clean up any double spaces that might have been created
-    while result.contains("  ") {
-        result = result.replace("  ", " ");
+    // Clean up any triple or more spaces that might have been created
+    // But preserve legitimate double spaces between words
+    while result.contains("   ") {
+        result = result.replace("   ", "  ");
     }
 
     result

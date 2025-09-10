@@ -15,6 +15,62 @@ fn apply_corrections_to_text(text: String) -> String {
     correction::correct_assembled_text(&text)
 }
 
+/// Concatenate CharSpans within a line with proper spacing
+/// Adds spaces between spans when there's a horizontal or vertical gap
+fn concatenate_spans_with_spacing(line_spans: &[crate::entities::CharSpan]) -> String {
+    debug_print!("🔧 SPACING: Called with {} spans", line_spans.len());
+    if line_spans.is_empty() {
+        return String::new();
+    }
+    
+    let mut result = String::new();
+    
+    for (i, span) in line_spans.iter().enumerate() {
+        if i == 0 {
+            // First span - just add the text
+            result.push_str(&span.text);
+        } else {
+            let prev_span = &line_spans[i - 1];
+            
+            // Check horizontal gap (words on same line)
+            let x_gap = span.bbox.x0 - prev_span.bbox.x1;
+            // Check vertical gap (wrapped text)  
+            let y_diff = (span.bbox.y0 - prev_span.bbox.y0).abs();
+            
+            // Check if we need to add a space between spans
+            let needs_space = {
+                // Add space if:
+                // 1. Significant horizontal gap (>2 points) indicating word boundary
+                // 2. Vertical difference (>5 points) indicating line wrap
+                // 3. Previous text doesn't end with space and current doesn't start with one
+                (x_gap > 2.0 || y_diff > 5.0) 
+                    && !prev_span.text.ends_with(' ') 
+                    && !span.text.starts_with(' ')
+            };
+            
+            // Debug every span transition to understand the logic
+            if line_spans.len() > 1 {
+                debug_print!(
+                    "🔧 SPACING DEBUG[{}/{}]: '{}' -> '{}' | x_gap={:.1} y_diff={:.1} needs_space={}",
+                    i-1, i,
+                    prev_span.text.trim().chars().rev().take(20).collect::<String>().chars().rev().collect::<String>(),
+                    span.text.trim().chars().take(20).collect::<String>(),
+                    x_gap,
+                    y_diff,
+                    needs_space
+                );
+            }
+            
+            if needs_space {
+                result.push(' ');
+            }
+            result.push_str(&span.text);
+        }
+    }
+    
+    result
+}
+
 /// This constant defines the minimum required intersection ratio between the bounding box of an
 /// OCR-detected text line and a text block detected through layout analysis.
 /// This approach ensures that only text lines significantly overlapping with a layout block are
@@ -223,6 +279,46 @@ pub(crate) fn merge_elements_into_blocks(
                     "📄 TEXT ELEMENT: {}",
                     curr_el.text_block.text.chars().take(50).collect::<String>()
                 );
+
+                // Focus only on the problematic Block ID 54
+                if block_id == 54 {
+                    debug_print!("🎯 BLOCK 54 ELEMENT TEXT: '{}'", curr_el.text_block.text);
+                    debug_print!("🎯 Block 54 has {} line_spans", curr_el.line_spans.len());
+                    debug_print!(
+                        "🎯 Element ID: {}, Page: {}, Layout Block ID: {}",
+                        curr_el.id,
+                        curr_el.page_id,
+                        curr_el.layout_block_id
+                    );
+
+                    // Show each line_span to understand how they were processed
+                    for (line_idx, line_spans) in curr_el.line_spans.iter().enumerate() {
+                        let line_text: String =
+                            line_spans.iter().map(|s| s.text.as_str()).collect();
+                        debug_print!(
+                            "🎯 LINE_SPAN[{}]: '{}' ({} spans)",
+                            line_idx,
+                            line_text,
+                            line_spans.len()
+                        );
+
+                        for (span_idx, span) in line_spans.iter().enumerate() {
+                            if span.text.contains("ni")
+                                || span.text.contains("nj")
+                                || span.text.contains("i")
+                                || span.text.contains("j")
+                            {
+                                debug_print!(
+                                    "🎯   SPAN[{}]: '{}' font={:.1} y={:.1}",
+                                    span_idx,
+                                    span.text.trim(),
+                                    span.font_size,
+                                    span.bbox.y0
+                                );
+                            }
+                        }
+                    }
+                }
                 if curr_el.text_block.text.contains("ei,j")
                     || curr_el.text_block.text.contains("ej,i")
                     || curr_el.text_block.text.contains("δ")
@@ -237,10 +333,56 @@ pub(crate) fn merge_elements_into_blocks(
                             .collect::<String>()
                     );
                 }
+                // Apply subscript detection to TEXT elements with line_spans (mathematical content)
+                // Get truly original text by reconstructing from raw CharSpans (before any HTML tag processing)
+                let original_text = if !curr_el.line_spans.is_empty() {
+                    // Reconstruct original text from CharSpans
+                    curr_el
+                        .line_spans
+                        .iter()
+                        .map(|line_spans| {
+                            // Space-aware concatenation of spans within a line
+                            concatenate_spans_with_spacing(line_spans)
+                        })
+                        .collect::<Vec<String>>()
+                        .join(" ")
+                } else {
+                    // Fallback to current text if no spans available
+                    curr_el.text_block.text.clone()
+                };
+                let processed_text = if !curr_el.line_spans.is_empty() {
+                    debug_print!(
+                        "🎯 TEXT WITH SPANS: Processing {} line_spans for subscript detection",
+                        curr_el.line_spans.len()
+                    );
+
+                    // Apply subscript detection using CharSpans but WITHOUT formula wrapper (for TEXT elements)
+                    crate::modtext::process_text_with_spans(&original_text, &curr_el.line_spans)
+                } else {
+                    // No spans available, use basic text correction only
+                    apply_corrections_to_text(original_text.clone())
+                };
+
+                if block_id == 54 {
+                    debug_print!("🎯 BLOCK 54 BEFORE processing: '{}'", original_text);
+                    debug_print!("🎯 BLOCK 54 AFTER processing: '{}'", processed_text);
+                    debug_print!(
+                        "🎯 BLOCK 54 Text changed: {}",
+                        original_text != processed_text
+                    );
+                }
+
+                let corrected_text = processed_text;
+
                 let text_block = Block {
                     id: block_id,
                     kind: crate::blocks::BlockType::TextBlock(TextBlock {
-                        text: apply_corrections_to_text(curr_el.text_block.text),
+                        text: corrected_text.clone(),
+                        fertext: if corrected_text != original_text {
+                            Some(original_text)
+                        } else {
+                            None
+                        },
                     }),
                     pages_id: vec![curr_el.page_id],
                     bbox: curr_el.bbox,
@@ -277,6 +419,23 @@ pub(crate) fn merge_elements_into_blocks(
                     curr_el.bbox.y1
                 );
                 debug_print!("🧮 Raw Formula Text: '{}'", curr_el.text_block.text);
+
+                // Get truly original text by reconstructing from raw CharSpans (before any HTML tag processing)
+                let original_text = if !curr_el.line_spans.is_empty() {
+                    // Reconstruct original text from CharSpans
+                    curr_el
+                        .line_spans
+                        .iter()
+                        .map(|line_spans| {
+                            // Space-aware concatenation of spans within a line
+                            concatenate_spans_with_spacing(line_spans)
+                        })
+                        .collect::<Vec<String>>()
+                        .join(" ")
+                } else {
+                    // Fallback to current text if no spans available
+                    curr_el.text_block.text.clone()
+                };
 
                 // Process the formula text - use spans if available for better subscript detection
                 let processed_text = if !curr_el.line_spans.is_empty() {
@@ -315,7 +474,12 @@ pub(crate) fn merge_elements_into_blocks(
                 let formula_block = Block {
                     id: block_id,
                     kind: crate::blocks::BlockType::TextBlock(TextBlock {
-                        text: processed_text,
+                        text: processed_text.clone(),
+                        fertext: if processed_text != original_text {
+                            Some(original_text)
+                        } else {
+                            None
+                        },
                     }),
                     pages_id: vec![curr_el.page_id],
                     bbox: curr_el.bbox,
@@ -351,10 +515,18 @@ pub(crate) fn merge_elements_into_blocks(
                     match element_it.peek() {
                         None => {
                             // last element -> transform to txt block and break
+                            let original_text = curr_el.text_block.text.clone();
+                            let processed_text = apply_corrections_to_text(curr_el.text_block.text);
+
                             let text_block = Block {
                                 id: block_id,
                                 kind: crate::blocks::BlockType::TextBlock(TextBlock {
-                                    text: apply_corrections_to_text(curr_el.text_block.text),
+                                    text: processed_text.clone(),
+                                    fertext: if processed_text != original_text {
+                                        Some(original_text)
+                                    } else {
+                                        None
+                                    },
                                 }),
                                 pages_id: vec![curr_el.page_id],
                                 bbox: curr_el.bbox,
@@ -374,11 +546,26 @@ pub(crate) fn merge_elements_into_blocks(
                                 }
                                 crate::entities::ElementType::Image => {
                                     curr_el.bbox.merge(&next_el.bbox);
+                                    
+                                    // FIXED: Apply script detection to Image caption (Caption→Image case)
+                                    let caption_text = if !curr_el.line_spans.is_empty() {
+                                        debug_print!("🖼️ IMAGE CAPTION: Processing caption with {} line_spans", curr_el.line_spans.len());
+                                        let original_text = curr_el
+                                            .line_spans
+                                            .iter()
+                                            .map(|line_spans| concatenate_spans_with_spacing(line_spans))
+                                            .collect::<Vec<String>>()
+                                            .join(" ");
+                                        crate::modtext::process_text_with_spans(&original_text, &curr_el.line_spans)
+                                    } else {
+                                        apply_corrections_to_text(curr_el.text_block.text.clone())
+                                    };
+                                    
                                     let img_block = Block {
                                         id: block_id,
                                         kind: BlockType::Image(ImageBlock {
                                             id: image_id,
-                                            caption: Some(curr_el.text_block.text),
+                                            caption: Some(caption_text),
                                         }),
                                         pages_id: vec![next_el.page_id],
                                         bbox: curr_el.bbox,
@@ -391,12 +578,19 @@ pub(crate) fn merge_elements_into_blocks(
                                 }
                                 _ => {
                                     // This caption isn't associated with Image/Table, transform to textblock
+                                    let original_text = curr_el.text_block.text.clone();
+                                    let processed_text =
+                                        apply_corrections_to_text(curr_el.text_block.text);
+
                                     let text_block = Block {
                                         id: block_id,
                                         kind: crate::blocks::BlockType::TextBlock(TextBlock {
-                                            text: apply_corrections_to_text(
-                                                curr_el.text_block.text,
-                                            ),
+                                            text: processed_text.clone(),
+                                            fertext: if processed_text != original_text {
+                                                Some(original_text)
+                                            } else {
+                                                None
+                                            },
                                         }),
                                         pages_id: vec![curr_el.page_id],
                                         bbox: curr_el.bbox,
@@ -434,11 +628,26 @@ pub(crate) fn merge_elements_into_blocks(
                                 // TODO: check if there is a case where there is multiple caption associated with the same image
                                 let next_el = element_it.next().unwrap();
                                 curr_el.bbox.merge(&next_el.bbox);
+                                
+                                // FIXED: Apply script detection to Image caption (Image→Caption case)
+                                let caption_text = if !next_el.line_spans.is_empty() {
+                                    debug_print!("🖼️ IMAGE CAPTION: Processing caption with {} line_spans", next_el.line_spans.len());
+                                    let original_text = next_el
+                                        .line_spans
+                                        .iter()
+                                        .map(|line_spans| concatenate_spans_with_spacing(line_spans))
+                                        .collect::<Vec<String>>()
+                                        .join(" ");
+                                    crate::modtext::process_text_with_spans(&original_text, &next_el.line_spans)
+                                } else {
+                                    apply_corrections_to_text(next_el.text_block.text.clone())
+                                };
+                                
                                 let block = Block {
                                     id: block_id,
                                     kind: crate::blocks::BlockType::Image(ImageBlock {
                                         id: image_id,
-                                        caption: Some(next_el.text_block.text),
+                                        caption: Some(caption_text),
                                     }),
                                     pages_id: vec![curr_el.page_id],
                                     bbox: curr_el.bbox,
@@ -466,10 +675,18 @@ pub(crate) fn merge_elements_into_blocks(
                 }
             }
             ElementType::Header => {
+                let original_text = curr_el.text_block.text.clone();
+                let processed_text = apply_corrections_to_text(curr_el.text_block.text);
+
                 let mut header_block = Block {
                     id: block_id,
                     kind: BlockType::Header(TextBlock {
-                        text: apply_corrections_to_text(curr_el.text_block.text),
+                        text: processed_text.clone(),
+                        fertext: if processed_text != original_text {
+                            Some(original_text)
+                        } else {
+                            None
+                        },
                     }),
                     pages_id: vec![curr_el.page_id],
                     bbox: curr_el.bbox,
@@ -487,10 +704,18 @@ pub(crate) fn merge_elements_into_blocks(
                 blocks.push(header_block);
             }
             ElementType::Footer => {
+                let original_text = curr_el.text_block.text.clone();
+                let processed_text = apply_corrections_to_text(curr_el.text_block.text);
+
                 let mut footer_block = Block {
                     id: block_id,
                     kind: BlockType::Footer(TextBlock {
-                        text: apply_corrections_to_text(curr_el.text_block.text),
+                        text: processed_text.clone(),
+                        fertext: if processed_text != original_text {
+                            Some(original_text)
+                        } else {
+                            None
+                        },
                     }),
                     pages_id: vec![curr_el.page_id],
                     bbox: curr_el.bbox,
@@ -511,11 +736,19 @@ pub(crate) fn merge_elements_into_blocks(
                 let lvl = title_level
                     .get(&(curr_el.page_id, curr_el.id))
                     .unwrap_or(&0u8);
+                let original_text = curr_el.text_block.text.clone();
+                let processed_text = apply_corrections_to_text(curr_el.text_block.text);
+
                 let title = Block {
                     id: block_id,
                     kind: BlockType::Title(Title {
                         level: *lvl,
-                        text: apply_corrections_to_text(curr_el.text_block.text),
+                        text: processed_text.clone(),
+                        fertext: if processed_text != original_text {
+                            Some(original_text)
+                        } else {
+                            None
+                        },
                     }),
                     pages_id: vec![curr_el.page_id],
                     bbox: curr_el.bbox,
