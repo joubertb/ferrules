@@ -480,7 +480,6 @@ fn handle_mathematical_x_operators(text: &str) -> String {
                 || text.contains("∉")
                 || text.contains("<sub>")
                 || text.contains("<sup>")
-                || text.contains("Loss")
                 || text.contains("=");
 
             if is_math_summation && has_math_context {

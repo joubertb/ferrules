@@ -273,6 +273,15 @@ pub(crate) fn merge_elements_into_blocks(
     let mut block_id = 0;
     let mut image_id = 0;
     while let Some(mut curr_el) = element_it.next() {
+        // Debug all elements to see their types
+        debug_print!(
+            "🔧 Processing element {}: type={:?}, text='{}', line_spans={}",
+            curr_el.id,
+            curr_el.kind,
+            curr_el.text_block.text.chars().take(50).collect::<String>(),
+            curr_el.line_spans.len()
+        );
+
         match &mut curr_el.kind {
             ElementType::Text => {
                 debug_print!(
@@ -280,59 +289,6 @@ pub(crate) fn merge_elements_into_blocks(
                     curr_el.text_block.text.chars().take(50).collect::<String>()
                 );
 
-                // Focus only on the problematic Block ID 54
-                if block_id == 54 {
-                    debug_print!("🎯 BLOCK 54 ELEMENT TEXT: '{}'", curr_el.text_block.text);
-                    debug_print!("🎯 Block 54 has {} line_spans", curr_el.line_spans.len());
-                    debug_print!(
-                        "🎯 Element ID: {}, Page: {}, Layout Block ID: {}",
-                        curr_el.id,
-                        curr_el.page_id,
-                        curr_el.layout_block_id
-                    );
-
-                    // Show each line_span to understand how they were processed
-                    for (line_idx, line_spans) in curr_el.line_spans.iter().enumerate() {
-                        let line_text: String =
-                            line_spans.iter().map(|s| s.text.as_str()).collect();
-                        debug_print!(
-                            "🎯 LINE_SPAN[{}]: '{}' ({} spans)",
-                            line_idx,
-                            line_text,
-                            line_spans.len()
-                        );
-
-                        for (span_idx, span) in line_spans.iter().enumerate() {
-                            if span.text.contains("ni")
-                                || span.text.contains("nj")
-                                || span.text.contains("i")
-                                || span.text.contains("j")
-                            {
-                                debug_print!(
-                                    "🎯   SPAN[{}]: '{}' font={:.1} y={:.1}",
-                                    span_idx,
-                                    span.text.trim(),
-                                    span.font_size,
-                                    span.bbox.y0
-                                );
-                            }
-                        }
-                    }
-                }
-                if curr_el.text_block.text.contains("ei,j")
-                    || curr_el.text_block.text.contains("ej,i")
-                    || curr_el.text_block.text.contains("δ")
-                {
-                    debug_print!(
-                        "📄 *** FOUND ei,j/δ in TEXT: {}",
-                        curr_el
-                            .text_block
-                            .text
-                            .chars()
-                            .take(100)
-                            .collect::<String>()
-                    );
-                }
                 // Apply subscript detection to TEXT elements with line_spans (mathematical content)
                 // Get truly original text by reconstructing from raw CharSpans (before any HTML tag processing)
                 let original_text = if !curr_el.line_spans.is_empty() {
@@ -488,10 +444,27 @@ pub(crate) fn merge_elements_into_blocks(
                 blocks.push(formula_block);
             }
             ElementType::ListItem => {
+                // Process first list item with HTML tag detection
+                let first_item_text = if !curr_el.line_spans.is_empty() {
+                    debug_print!(
+                        "📋 LIST ITEM WITH SPANS: Processing first list item with {} line_spans for HTML tag detection",
+                        curr_el.line_spans.len()
+                    );
+                    let original_text = curr_el
+                        .line_spans
+                        .iter()
+                        .map(|line_spans| concatenate_spans_with_spacing(line_spans))
+                        .collect::<Vec<String>>()
+                        .join(" ");
+                    crate::modtext::process_text_with_spans(&original_text, &curr_el.line_spans)
+                } else {
+                    apply_corrections_to_text(curr_el.text_block.text.clone())
+                };
+
                 let mut list_block = Block {
                     id: block_id,
                     kind: BlockType::ListBlock(List {
-                        items: vec![curr_el.text_block.text],
+                        items: vec![first_item_text],
                     }),
                     pages_id: vec![curr_el.page_id],
                     bbox: curr_el.bbox,
@@ -501,7 +474,32 @@ pub(crate) fn merge_elements_into_blocks(
                     // TODO: add constraint on gap between bounding boxes on all dimensions (l,r,b,t)
                     if matches!(next_el.kind, crate::entities::ElementType::ListItem) {
                         let next_el = element_it.next().unwrap();
-                        list_block.merge(next_el)?;
+
+                        // Process additional list item with HTML tag detection before merging
+                        let processed_item_text = if !next_el.line_spans.is_empty() {
+                            debug_print!(
+                                "📋 LIST ITEM WITH SPANS: Processing additional list item with {} line_spans for HTML tag detection",
+                                next_el.line_spans.len()
+                            );
+                            let original_text = next_el
+                                .line_spans
+                                .iter()
+                                .map(|line_spans| concatenate_spans_with_spacing(line_spans))
+                                .collect::<Vec<String>>()
+                                .join(" ");
+                            crate::modtext::process_text_with_spans(
+                                &original_text,
+                                &next_el.line_spans,
+                            )
+                        } else {
+                            apply_corrections_to_text(next_el.text_block.text.clone())
+                        };
+
+                        // Manually add the processed text to the list instead of using merge
+                        if let BlockType::ListBlock(list) = &mut list_block.kind {
+                            list.items.push(processed_item_text);
+                        }
+                        list_block.bbox.merge(&next_el.bbox);
                     } else {
                         break;
                     }
@@ -688,8 +686,34 @@ pub(crate) fn merge_elements_into_blocks(
                 }
             }
             ElementType::Header => {
-                let original_text = curr_el.text_block.text.clone();
-                let processed_text = apply_corrections_to_text(curr_el.text_block.text);
+                // Get truly original text by reconstructing from raw CharSpans (before any HTML tag processing)
+                let original_text = if !curr_el.line_spans.is_empty() {
+                    // Reconstruct original text from CharSpans
+                    curr_el
+                        .line_spans
+                        .iter()
+                        .map(|line_spans| {
+                            // Space-aware concatenation of spans within a line
+                            concatenate_spans_with_spacing(line_spans)
+                        })
+                        .collect::<Vec<String>>()
+                        .join(" ")
+                } else {
+                    // Fallback to current text if no spans available
+                    curr_el.text_block.text.clone()
+                };
+
+                let processed_text = if !curr_el.line_spans.is_empty() {
+                    debug_print!(
+                        "📰 HEADER WITH SPANS: Processing header with {} line_spans for HTML tag detection",
+                        curr_el.line_spans.len()
+                    );
+                    // Apply HTML tag detection using CharSpans but WITHOUT formula wrapper (for HEADER elements)
+                    crate::modtext::process_text_with_spans(&original_text, &curr_el.line_spans)
+                } else {
+                    // No spans available, use basic text correction only
+                    apply_corrections_to_text(original_text.clone())
+                };
 
                 let mut header_block = Block {
                     id: block_id,
@@ -717,8 +741,52 @@ pub(crate) fn merge_elements_into_blocks(
                 blocks.push(header_block);
             }
             ElementType::Footer => {
-                let original_text = curr_el.text_block.text.clone();
-                let processed_text = apply_corrections_to_text(curr_el.text_block.text);
+                println!(
+                    "DEBUG: Footer has {} line_spans, text: '{}'",
+                    curr_el.line_spans.len(),
+                    curr_el.text_block.text
+                );
+                if !curr_el.line_spans.is_empty() {
+                    for (i, line_spans) in curr_el.line_spans.iter().enumerate() {
+                        println!("DEBUG: Line {}: {} spans", i, line_spans.len());
+                        for (j, span) in line_spans.iter().enumerate() {
+                            println!(
+                                "DEBUG:   Span {}: '{}' font_size={:.1} y={:.1}",
+                                j, span.text, span.font_size, span.bbox.y0
+                            );
+                        }
+                    }
+                }
+
+                // Get truly original text by reconstructing from raw CharSpans (before any HTML tag processing)
+                let original_text = if !curr_el.line_spans.is_empty() {
+                    // Reconstruct original text from CharSpans
+                    curr_el
+                        .line_spans
+                        .iter()
+                        .map(|line_spans| {
+                            // Space-aware concatenation of spans within a line
+                            concatenate_spans_with_spacing(line_spans)
+                        })
+                        .collect::<Vec<String>>()
+                        .join(" ")
+                } else {
+                    // Fallback to current text if no spans available
+                    curr_el.text_block.text.clone()
+                };
+
+                let processed_text = if !curr_el.line_spans.is_empty() {
+                    println!("DEBUG: Processing footer with spans: '{}'", original_text);
+                    let result = crate::modtext::process_text_with_spans(
+                        &original_text,
+                        &curr_el.line_spans,
+                    );
+                    println!("DEBUG: Footer processing result: '{}'", result);
+                    result
+                } else {
+                    println!("DEBUG: Footer has no spans, using basic processing");
+                    crate::modtext::process_text_with_spans(&original_text, &curr_el.line_spans)
+                };
 
                 let mut footer_block = Block {
                     id: block_id,
@@ -749,8 +817,35 @@ pub(crate) fn merge_elements_into_blocks(
                 let lvl = title_level
                     .get(&(curr_el.page_id, curr_el.id))
                     .unwrap_or(&0u8);
-                let original_text = curr_el.text_block.text.clone();
-                let processed_text = apply_corrections_to_text(curr_el.text_block.text);
+
+                // Get truly original text by reconstructing from raw CharSpans (before any HTML tag processing)
+                let original_text = if !curr_el.line_spans.is_empty() {
+                    // Reconstruct original text from CharSpans
+                    curr_el
+                        .line_spans
+                        .iter()
+                        .map(|line_spans| {
+                            // Space-aware concatenation of spans within a line
+                            concatenate_spans_with_spacing(line_spans)
+                        })
+                        .collect::<Vec<String>>()
+                        .join(" ")
+                } else {
+                    // Fallback to current text if no spans available
+                    curr_el.text_block.text.clone()
+                };
+
+                let processed_text = if !curr_el.line_spans.is_empty() {
+                    debug_print!(
+                        "📜 TITLE WITH SPANS: Processing title with {} line_spans for HTML tag detection",
+                        curr_el.line_spans.len()
+                    );
+                    // Apply HTML tag detection using CharSpans but WITHOUT formula wrapper (for TITLE elements)
+                    crate::modtext::process_text_with_spans(&original_text, &curr_el.line_spans)
+                } else {
+                    // No spans available, use basic text correction only
+                    apply_corrections_to_text(original_text.clone())
+                };
 
                 let title = Block {
                     id: block_id,
