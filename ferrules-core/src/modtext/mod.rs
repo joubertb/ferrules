@@ -165,7 +165,7 @@ pub fn format_formula_text(text: &str) -> String {
 }
 
 /// Process CharSpans into a flattened vector with line break detection
-/// 
+///
 /// This shared function handles the common logic for both formula and text processing:
 /// - Flattens line_spans into a single vector
 /// - Detects y-coordinate jumps indicating line breaks
@@ -176,7 +176,7 @@ fn process_spans_with_line_breaks(
     use_complex_detection: bool,
 ) -> Vec<crate::entities::CharSpan> {
     let mut all_spans = Vec::new();
-    
+
     let mut prev_y: Option<f32> = None;
     let mut prev_significant_y: Option<f32> = None;
     const LINE_BREAK_THRESHOLD: f32 = 10.0;
@@ -188,7 +188,7 @@ fn process_spans_with_line_breaks(
             if !use_complex_detection && span.text.is_empty() {
                 continue;
             }
-            
+
             let current_y = span.bbox.y0;
 
             // Add semicolons as line break separators ONLY for formulas (use_complex_detection=true)
@@ -221,7 +221,7 @@ fn process_spans_with_line_breaks(
                         has_corruption: false,
                     };
                     all_spans.push(separator_span);
-                    
+
                     let ref_y = prev_significant_y.unwrap_or(prev_y.unwrap());
                     let total_diff = current_y - ref_y;
                     debug_print!("➕ FORMULA LINE BREAK: Added semicolon separator for y-jump {ref_y:.1} -> {current_y:.1} (diff: +{total_diff:.1})");
@@ -229,12 +229,15 @@ fn process_spans_with_line_breaks(
             }
 
             all_spans.push(span.clone());
-            
+
             // Update tracking variables for formula processing
             if use_complex_detection {
                 prev_y = Some(current_y);
                 // Update significant y-position for non-punctuation spans
-                if !span.text.trim().is_empty() && span.text.trim() != "." && span.text.trim() != "," {
+                if !span.text.trim().is_empty()
+                    && span.text.trim() != "."
+                    && span.text.trim() != ","
+                {
                     prev_significant_y = Some(current_y);
                 }
             }
@@ -261,7 +264,7 @@ pub fn format_formula_with_spans(
 
     // Use shared span processing with complex line break detection
     let all_spans = process_spans_with_line_breaks(line_spans, true);
-    
+
     debug_print!(
         "📋 FORMULA WITH SPANS: Flattened to {} total spans",
         all_spans.len()
@@ -379,7 +382,7 @@ pub fn process_text_with_spans(
 
     // Apply corrections using the unified correction API
     let corrected_text = crate::correction::correct_assembled_text(&script_processed);
-    
+
     // Clean up substitute characters
     let cleaned_text = corrected_text.replace('\u{001a}', "");
 
@@ -503,6 +506,3 @@ fn handle_mathematical_x_operators(text: &str) -> String {
 fn is_tag_char(c: char) -> bool {
     c == '<' || c == '>' || c == '/'
 }
-
-
-

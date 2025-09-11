@@ -22,32 +22,32 @@ fn concatenate_spans_with_spacing(line_spans: &[crate::entities::CharSpan]) -> S
     if line_spans.is_empty() {
         return String::new();
     }
-    
+
     let mut result = String::new();
-    
+
     for (i, span) in line_spans.iter().enumerate() {
         if i == 0 {
             // First span - just add the text
             result.push_str(&span.text);
         } else {
             let prev_span = &line_spans[i - 1];
-            
+
             // Check horizontal gap (words on same line)
             let x_gap = span.bbox.x0 - prev_span.bbox.x1;
-            // Check vertical gap (wrapped text)  
+            // Check vertical gap (wrapped text)
             let y_diff = (span.bbox.y0 - prev_span.bbox.y0).abs();
-            
+
             // Check if we need to add a space between spans
             let needs_space = {
                 // Add space if:
                 // 1. Significant horizontal gap (>2 points) indicating word boundary
                 // 2. Vertical difference (>5 points) indicating line wrap
                 // 3. Previous text doesn't end with space and current doesn't start with one
-                (x_gap > 2.0 || y_diff > 5.0) 
-                    && !prev_span.text.ends_with(' ') 
+                (x_gap > 2.0 || y_diff > 5.0)
+                    && !prev_span.text.ends_with(' ')
                     && !span.text.starts_with(' ')
             };
-            
+
             // Debug every span transition to understand the logic
             if line_spans.len() > 1 {
                 debug_print!(
@@ -60,14 +60,14 @@ fn concatenate_spans_with_spacing(line_spans: &[crate::entities::CharSpan]) -> S
                     needs_space
                 );
             }
-            
+
             if needs_space {
                 result.push(' ');
             }
             result.push_str(&span.text);
         }
     }
-    
+
     result
 }
 
@@ -546,21 +546,26 @@ pub(crate) fn merge_elements_into_blocks(
                                 }
                                 crate::entities::ElementType::Image => {
                                     curr_el.bbox.merge(&next_el.bbox);
-                                    
+
                                     // FIXED: Apply script detection to Image caption (Caption→Image case)
                                     let caption_text = if !curr_el.line_spans.is_empty() {
                                         debug_print!("🖼️ IMAGE CAPTION: Processing caption with {} line_spans", curr_el.line_spans.len());
                                         let original_text = curr_el
                                             .line_spans
                                             .iter()
-                                            .map(|line_spans| concatenate_spans_with_spacing(line_spans))
+                                            .map(|line_spans| {
+                                                concatenate_spans_with_spacing(line_spans)
+                                            })
                                             .collect::<Vec<String>>()
                                             .join(" ");
-                                        crate::modtext::process_text_with_spans(&original_text, &curr_el.line_spans)
+                                        crate::modtext::process_text_with_spans(
+                                            &original_text,
+                                            &curr_el.line_spans,
+                                        )
                                     } else {
                                         apply_corrections_to_text(curr_el.text_block.text.clone())
                                     };
-                                    
+
                                     let img_block = Block {
                                         id: block_id,
                                         kind: BlockType::Image(ImageBlock {
@@ -628,21 +633,29 @@ pub(crate) fn merge_elements_into_blocks(
                                 // TODO: check if there is a case where there is multiple caption associated with the same image
                                 let next_el = element_it.next().unwrap();
                                 curr_el.bbox.merge(&next_el.bbox);
-                                
+
                                 // FIXED: Apply script detection to Image caption (Image→Caption case)
                                 let caption_text = if !next_el.line_spans.is_empty() {
-                                    debug_print!("🖼️ IMAGE CAPTION: Processing caption with {} line_spans", next_el.line_spans.len());
+                                    debug_print!(
+                                        "🖼️ IMAGE CAPTION: Processing caption with {} line_spans",
+                                        next_el.line_spans.len()
+                                    );
                                     let original_text = next_el
                                         .line_spans
                                         .iter()
-                                        .map(|line_spans| concatenate_spans_with_spacing(line_spans))
+                                        .map(|line_spans| {
+                                            concatenate_spans_with_spacing(line_spans)
+                                        })
                                         .collect::<Vec<String>>()
                                         .join(" ");
-                                    crate::modtext::process_text_with_spans(&original_text, &next_el.line_spans)
+                                    crate::modtext::process_text_with_spans(
+                                        &original_text,
+                                        &next_el.line_spans,
+                                    )
                                 } else {
                                     apply_corrections_to_text(next_el.text_block.text.clone())
                                 };
-                                
+
                                 let block = Block {
                                     id: block_id,
                                     kind: crate::blocks::BlockType::Image(ImageBlock {

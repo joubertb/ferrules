@@ -230,6 +230,16 @@ impl FerrulesParser {
             debug_dir,
         } = config;
         let start_time = Instant::now();
+
+        // Initialize universal font corrector with PDF data for direct glyph extraction
+        #[cfg(feature = "correction-engine")]
+        {
+            use crate::font_analysis::initialize_universal_corrector;
+            if let Err(e) = initialize_universal_corrector(doc) {
+                tracing::warn!("Failed to initialize universal font corrector: {}", e);
+            }
+        }
+
         let parsed_pages = self
             .parse_doc_pages(
                 doc,

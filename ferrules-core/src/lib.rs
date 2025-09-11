@@ -87,6 +87,7 @@ pub mod blocks;
 pub mod correction;
 pub mod debug;
 pub mod entities;
+pub mod font_analysis;
 pub mod layout;
 mod modtext;
 pub mod ocr;

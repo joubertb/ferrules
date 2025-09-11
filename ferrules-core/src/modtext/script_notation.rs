@@ -181,56 +181,58 @@ fn is_real_script_common(
     current_span: &CharSpan,
     baseline_diff: f32,
     base_font_size: f32,
-    _script_type: &str, // "subscript" or "superscript" for debug messages
-    upward_limit: f32,   // Max upward movement as fraction of font size  
+    _script_type: &str,  // "subscript" or "superscript" for debug messages
+    upward_limit: f32,   // Max upward movement as fraction of font size
     downward_limit: f32, // Max downward movement as fraction of font size
 ) -> (bool, Vec<String>) {
     let font_size_ratio = current_span.font_size / base_font_size;
     let relative_baseline_shift = baseline_diff / current_span.font_size;
-    
+
     // Skip empty or whitespace-only text
     let text_trimmed = current_span.text.trim();
     if text_trimmed.is_empty() {
         return (false, vec!["empty_text".to_string()]);
     }
-    
+
     // Check movement limits
     let mut rejection_reasons = Vec::new();
-    
+
     // Check upward movement limit
     if baseline_diff < 0.0 && relative_baseline_shift < -upward_limit {
         rejection_reasons.push(format!(
             "upward_too_large({relative_baseline_shift:.3}<-{upward_limit})"
         ));
     }
-    
-    // Check downward movement limit  
+
+    // Check downward movement limit
     if baseline_diff > 0.0 && relative_baseline_shift > downward_limit {
         rejection_reasons.push(format!(
             "downward_too_large({relative_baseline_shift:.3}>{downward_limit})"
         ));
     }
-    
+
     // Early return if movement limits violated
     if !rejection_reasons.is_empty() {
         return (false, rejection_reasons);
     }
-    
+
     // Check core requirements
     let has_smaller_font = font_size_ratio < FONT_SIZE_SCRIPT_THRESHOLD;
     let has_significant_shift = relative_baseline_shift.abs() > PROPORTIONAL_SCRIPT_THRESHOLD;
-    
+
     if !has_smaller_font {
-        rejection_reasons.push(format!("font_too_large({font_size_ratio:.3}>{FONT_SIZE_SCRIPT_THRESHOLD})"));
+        rejection_reasons.push(format!(
+            "font_too_large({font_size_ratio:.3}>{FONT_SIZE_SCRIPT_THRESHOLD})"
+        ));
     }
     if !has_significant_shift {
         rejection_reasons.push(format!(
             "shift_too_small({relative_baseline_shift:.3}abs<{PROPORTIONAL_SCRIPT_THRESHOLD})"
         ));
     }
-    
+
     let is_likely_script = has_smaller_font && has_significant_shift;
-    
+
     (is_likely_script, rejection_reasons)
 }
 
@@ -252,8 +254,8 @@ fn is_real_superscript(current_span: &CharSpan, sequential_diff: f32, base_font_
         sequential_diff,
         base_font_size,
         "superscript",
-        SUPERSCRIPT_UPWARD_LIMIT,  // upward_limit: 13.5% of font size upward movement max
-        f32::INFINITY, // downward_limit: no limit on upward movement
+        SUPERSCRIPT_UPWARD_LIMIT, // upward_limit: 13.5% of font size upward movement max
+        f32::INFINITY,            // downward_limit: no limit on upward movement
     );
 
     let text_trimmed = current_span.text.trim();
@@ -344,7 +346,11 @@ fn analyze_potential_subscripts(spans: &[CharSpan], base_font_size: f32, baselin
             } else {
                 "NORMAL"
             },
-            if font_size_ratio < FONT_SIZE_SCRIPT_THRESHOLD { "YES" } else { "NO" },
+            if font_size_ratio < FONT_SIZE_SCRIPT_THRESHOLD {
+                "YES"
+            } else {
+                "NO"
+            },
             if relative_baseline_shift > RELATIVE_BASELINE_THRESHOLD {
                 "YES"
             } else {
@@ -424,14 +430,14 @@ fn is_local_baseline_subscript(
 
     // Use the second-largest font size as local baseline if available, otherwise largest
     // This handles cases where we have: 10pt(global) > 7pt(local baseline) > 5pt(subscript)
-    let local_baseline_font_size = if font_sizes.len() >= 2 && font_sizes[0] >= base_font_size * LOCAL_BASELINE_FONT_RATIO
-    {
-        // If largest font is close to global baseline, use second largest as local baseline
-        font_sizes[1]
-    } else {
-        // Otherwise use largest as local baseline
-        font_sizes[0]
-    };
+    let local_baseline_font_size =
+        if font_sizes.len() >= 2 && font_sizes[0] >= base_font_size * LOCAL_BASELINE_FONT_RATIO {
+            // If largest font is close to global baseline, use second largest as local baseline
+            font_sizes[1]
+        } else {
+            // Otherwise use largest as local baseline
+            font_sizes[0]
+        };
 
     // Compare current font size to LOCAL baseline font size
     let local_font_ratio = current_span.font_size / local_baseline_font_size;
@@ -489,8 +495,8 @@ fn is_real_subscript(
         sequential_diff,
         base_font_size,
         "subscript",
-        SUBSCRIPT_UPWARD_LIMIT,   // upward_limit: 12% of font size upward movement max
-        SCRIPT_DOWNWARD_LIMIT,    // downward_limit: 200% of font size downward movement max
+        SUBSCRIPT_UPWARD_LIMIT, // upward_limit: 12% of font size upward movement max
+        SCRIPT_DOWNWARD_LIMIT,  // downward_limit: 200% of font size downward movement max
     );
 
     let text_trimmed = current_span.text.trim();
@@ -569,12 +575,12 @@ fn close_script_tag(result: &mut String, tag: &str) {
 /// This prevents malformed nesting like <sup><b></sup></b>
 fn close_tags_until(result: &mut String, tag_stack: &mut Vec<&'static str>, target_tag: &str) {
     let mut closed_tags = Vec::new();
-    
+
     // Close tags in LIFO order until we find the target
     while let Some(tag) = tag_stack.pop() {
         close_script_tag(result, tag);
         debug_print!("🔄 LIFO CLOSE: Applied {tag}");
-        
+
         if tag == target_tag {
             break; // Found and closed the target tag
         } else {
@@ -582,12 +588,12 @@ fn close_tags_until(result: &mut String, tag_stack: &mut Vec<&'static str>, targ
             closed_tags.push(tag);
         }
     }
-    
+
     // Reopen any tags that were closed prematurely (in reverse order)
     for tag in closed_tags.into_iter().rev() {
         let opening_tag = match tag {
             "</b>" => "<b>",
-            "</sub>" => "<sub>", 
+            "</sub>" => "<sub>",
             "</sup>" => "<sup>",
             _ => continue,
         };
@@ -605,91 +611,119 @@ lazy_static! {
 }
 
 /// Fix spacing around script tags
-/// Examples: 
+/// Examples:
 /// - "mask </sub>" -> "mask</sub>" (spaces before closing tags)
 /// - "<sup> 2</sup>" -> "<sup>2</sup>" (spaces after opening tags)
 fn fix_script_tag_spacing(text: &str) -> String {
     // Remove spaces before closing tags: "mask </sub>" -> "mask</sub>"
     let step1 = SCRIPT_TAG_SPACING_REGEX.replace_all(text, "</");
-    
+
     // Remove spaces after opening tags: "<sup> 2</sup>" -> "<sup>2</sup>"
-    SCRIPT_OPENING_TAG_SPACING_REGEX.replace_all(&step1, "$1").to_string()
+    SCRIPT_OPENING_TAG_SPACING_REGEX
+        .replace_all(&step1, "$1")
+        .to_string()
 }
 
 /// Detect if spans require clustering-based detection due to multiple baselines
 /// Returns true if the text has complex mathematical structure that would benefit from clustering
 fn requires_baseline_clustering(spans: &[CharSpan]) -> bool {
     if spans.len() < MIN_SPANS_FOR_CLUSTERING {
-        debug_print!("🔍 COMPLEXITY CHECK: Only {} spans, too short for clustering", spans.len());
+        debug_print!(
+            "🔍 COMPLEXITY CHECK: Only {} spans, too short for clustering",
+            spans.len()
+        );
         return false; // Too short for complex formulas
     }
 
     // Calculate Y-position variance to detect multiple baselines
-    let y_positions: Vec<f32> = spans.iter()
+    let y_positions: Vec<f32> = spans
+        .iter()
         .filter(|s| !s.text.trim().is_empty())
         .map(|s| s.bbox.y0)
         .collect();
-    
+
     if y_positions.len() < 4 {
-        debug_print!("🔍 COMPLEXITY CHECK: Only {} non-empty spans, too few for clustering", y_positions.len());
+        debug_print!(
+            "🔍 COMPLEXITY CHECK: Only {} non-empty spans, too few for clustering",
+            y_positions.len()
+        );
         return false;
     }
 
     // Calculate standard deviation of Y positions
     let mean_y = y_positions.iter().sum::<f32>() / y_positions.len() as f32;
-    let variance = y_positions.iter()
+    let variance = y_positions
+        .iter()
         .map(|y| (y - mean_y).powi(2))
-        .sum::<f32>() / y_positions.len() as f32;
+        .sum::<f32>()
+        / y_positions.len() as f32;
     let std_dev = variance.sqrt();
-    
+
     // Check for multiple distinct baseline groups (high Y variance)
     let has_multiple_baselines = std_dev > ABSOLUTE_BASELINE_THRESHOLD; // 3+ points of Y variation suggests multiple baselines
-    
+
     // Check for mathematical content indicators
     let full_text: String = spans.iter().map(|s| s.text.as_str()).collect();
-    let has_math_symbols = full_text.contains('∑') || full_text.contains('∈') || 
-                          full_text.contains('∪') || full_text.contains('∩') ||
-                          full_text.contains("Loss") || full_text.contains("MLM");
-    
+    let has_math_symbols = full_text.contains('∑')
+        || full_text.contains('∈')
+        || full_text.contains('∪')
+        || full_text.contains('∩')
+        || full_text.contains("Loss")
+        || full_text.contains("MLM");
+
     let should_cluster = has_multiple_baselines && has_math_symbols;
-    
-    debug_print!("🔍 COMPLEXITY CHECK: {} spans, std_dev={:.1}, math_symbols={}, cluster={}", 
-                 spans.len(), std_dev, has_math_symbols, should_cluster);
-    debug_print!("📊 Y-positions: {:?}", y_positions);  
+
+    debug_print!(
+        "🔍 COMPLEXITY CHECK: {} spans, std_dev={:.1}, math_symbols={}, cluster={}",
+        spans.len(),
+        std_dev,
+        has_math_symbols,
+        should_cluster
+    );
+    debug_print!("📊 Y-positions: {:?}", y_positions);
     debug_print!("📝 Text content: '{}'", full_text);
-    
+
     should_cluster
 }
 
 /// Apply clustering-based formatting for complex mathematical formulas
 fn apply_clustering_formatting(spans: &[CharSpan]) -> String {
-    debug_print!("🔬 CLUSTERING FORMATTING: Processing {} spans with baseline clustering", spans.len());
-    
+    debug_print!(
+        "🔬 CLUSTERING FORMATTING: Processing {} spans with baseline clustering",
+        spans.len()
+    );
+
     // Get clustering results
     let cluster_results = detect_subscripts_clustered(spans);
-    
+
     // Convert clustering results to formatted text
     let mut result = String::new();
     let mut tag_stack: Vec<&'static str> = Vec::new();
     let mut current_bold = false;
     let mut in_subscript = false;
     let mut in_superscript = false;
-    
+
     for (i, span) in spans.iter().enumerate() {
         let text_trimmed = span.text.trim();
         if text_trimmed.is_empty() {
             continue;
         }
-        
+
         // Find the clustering result for this span
-        let (_, is_sub, is_sup) = cluster_results.iter()
+        let (_, is_sub, is_sup) = cluster_results
+            .iter()
             .find(|(idx, _, _)| *idx == i)
             .copied()
             .unwrap_or((i, false, false));
-        
-        debug_print!("🔬 CLUSTERING SPAN[{}]: '{}' → sub={}, sup={}", 
-                     i, text_trimmed, is_sub, is_sup);
-        
+
+        debug_print!(
+            "🔬 CLUSTERING SPAN[{}]: '{}' → sub={}, sup={}",
+            i,
+            text_trimmed,
+            is_sub,
+            is_sup
+        );
+
         // Handle bold changes
         let is_bold_now = is_bold_text(span);
         if is_bold_now != current_bold {
@@ -701,7 +735,7 @@ fn apply_clustering_formatting(spans: &[CharSpan]) -> String {
             }
             current_bold = is_bold_now;
         }
-        
+
         // Handle script changes based on clustering results
         if is_sub && !in_subscript && !in_superscript {
             result.push_str("<sub>");
@@ -726,45 +760,48 @@ fn apply_clustering_formatting(spans: &[CharSpan]) -> String {
                 debug_print!("🔄 CLUSTER SUP END: '{}'", text_trimmed);
             }
         }
-        
+
         // Add spacing between spans when needed
         if i > 0 && !result.is_empty() {
             let prev_span = &spans[i - 1];
             let x_gap = span.bbox.x0 - prev_span.bbox.x1;
             let y_diff = (span.bbox.y0 - prev_span.bbox.y0).abs();
-            
+
             let needs_space = (x_gap > SPAN_SPACING_THRESHOLD || y_diff > CLUSTERING_Y_THRESHOLD)
                 && !result.ends_with(' ')
                 && !text_trimmed.starts_with(' ');
-                
+
             if needs_space {
                 result.push(' ');
             }
         }
-        
+
         // Add the cleaned text
-        let cleaned_text = span.text.replace('\u{001a}', ""); 
+        let cleaned_text = span.text.replace('\u{001a}', "");
         result.push_str(&cleaned_text);
     }
-    
+
     // Close any remaining tags
     while let Some(closing_tag) = tag_stack.pop() {
         close_script_tag(&mut result, closing_tag);
     }
-    
+
     // Apply post-processing
     #[cfg(feature = "correction-engine")]
     let corrected_result = {
         use crate::correction::character::fix_math_symbol_corruptions;
         fix_math_symbol_corruptions(&result)
     };
-    
+
     #[cfg(not(feature = "correction-engine"))]
     let corrected_result = result;
-    
+
     let spaced_result = fix_script_tag_spacing(&corrected_result);
-    
-    debug_print!("🔬 CLUSTERING RESULT: '{}'", spaced_result.chars().take(100).collect::<String>());
+
+    debug_print!(
+        "🔬 CLUSTERING RESULT: '{}'",
+        spaced_result.chars().take(100).collect::<String>()
+    );
     spaced_result
 }
 
@@ -830,7 +867,7 @@ pub(crate) fn apply_text_formatting(spans: &[CharSpan]) -> String {
 
         // Debug specific characters to understand mask splitting
         let text_trimmed = span.text.trim();
-        
+
         // Skip superscript/subscript detection for empty spans to prevent empty tags
         // Empty spans should not trigger tag opening/closing logic
         if text_trimmed.is_empty() {
@@ -850,12 +887,15 @@ pub(crate) fn apply_text_formatting(spans: &[CharSpan]) -> String {
                     .map(|s| s.font_size)
                     .filter(|&size| size > MIN_FONT_SIZE_FILTER)
                     .collect();
-                
+
                 base_font_size = if font_sizes.is_empty() {
                     span.font_size
                 } else {
                     // Use maximum font size as base - this ensures subscripts don't affect base calculation
-                    *font_sizes.iter().max_by(|a, b| a.partial_cmp(b).unwrap()).unwrap()
+                    *font_sizes
+                        .iter()
+                        .max_by(|a, b| a.partial_cmp(b).unwrap())
+                        .unwrap()
                 };
                 debug_print!("📏 BASE FONT SIZE: {base_font_size:.1}");
             }
@@ -877,7 +917,10 @@ pub(crate) fn apply_text_formatting(spans: &[CharSpan]) -> String {
             } else {
                 // Use maximum font size as base instead of median
                 // This ensures subscripts (which are smaller) don't dominate the calculation
-                *font_sizes.iter().max_by(|a, b| a.partial_cmp(b).unwrap()).unwrap()
+                *font_sizes
+                    .iter()
+                    .max_by(|a, b| a.partial_cmp(b).unwrap())
+                    .unwrap()
             };
 
             font_size_initialized = true;
@@ -899,8 +942,10 @@ pub(crate) fn apply_text_formatting(spans: &[CharSpan]) -> String {
 
         debug_print!(
             "📏 SEQUENTIAL COMPARISON: span.y0={:.1}, prev_y={:?}, diff={:.1}",
-            span.bbox.y0, 
-            previous_y_position.map(|y| format!("{y:.1}")).unwrap_or_else(|| "NONE".to_string()), 
+            span.bbox.y0,
+            previous_y_position
+                .map(|y| format!("{y:.1}"))
+                .unwrap_or_else(|| "NONE".to_string()),
             sequential_diff
         );
 
@@ -931,21 +976,26 @@ pub(crate) fn apply_text_formatting(spans: &[CharSpan]) -> String {
             // When we're already in subscript mode, check for continuity based purely on positioning
             if in_subscript {
                 // Check if current character is also a subscript based on sequential movement
-                let should_be_subscript = is_real_subscript(span, sequential_diff, base_font_size, spans, i);
+                let should_be_subscript =
+                    is_real_subscript(span, sequential_diff, base_font_size, spans, i);
 
                 // Continue subscript only if:
                 // 1. Current character would be detected as subscript OR
-                // 2. Character has a very small font OR  
+                // 2. Character has a very small font OR
                 // 3. Text is empty (whitespace spans)
                 //
                 // For sequential approach, we rely on the movement detection rather than absolute positioning
-                let has_very_small_font = span.font_size <= base_font_size * VERY_SMALL_FONT_THRESHOLD; // Much stricter font requirement
+                let has_very_small_font =
+                    span.font_size <= base_font_size * VERY_SMALL_FONT_THRESHOLD; // Much stricter font requirement
 
-                let should_continue = should_be_subscript || has_very_small_font || text_trimmed.is_empty();
+                let should_continue =
+                    should_be_subscript || has_very_small_font || text_trimmed.is_empty();
 
                 if should_continue {
                     // Continue subscript based on sequential detection
-                    debug_print!("⬇️ SUBSCRIPT CONTINUE: Sequential detection supports continuation");
+                    debug_print!(
+                        "⬇️ SUBSCRIPT CONTINUE: Sequential detection supports continuation"
+                    );
                     // Skip baseline change detection and just continue
                     let cleaned_text = span.text.replace('\u{001a}', ""); // Remove SUB (substitute) character
                     result.push_str(&cleaned_text);
@@ -961,18 +1011,19 @@ pub(crate) fn apply_text_formatting(spans: &[CharSpan]) -> String {
             // Check for sequential movement changes that might indicate scripts
             // Use font-proportional threshold instead of absolute threshold
             let relative_sequential_shift = sequential_diff.abs() / span.font_size;
-            
+
             debug_print!(
                 "📏 PROPORTIONAL THRESHOLDS: sequential_diff={:.1}pt, font_size={:.1}pt, relative_shift={:.3} ({:.1}%) | script_threshold={:.3} ({:.1}%), return_threshold={:.3} ({:.1}%)",
                 sequential_diff.abs(), span.font_size, relative_sequential_shift, relative_sequential_shift * 100.0,
                 PROPORTIONAL_SCRIPT_THRESHOLD, PROPORTIONAL_SCRIPT_THRESHOLD * 100.0,
                 PROPORTIONAL_RETURN_THRESHOLD, PROPORTIONAL_RETURN_THRESHOLD * 100.0
             );
-            
+
             if relative_sequential_shift > PROPORTIONAL_SCRIPT_THRESHOLD {
                 // ENHANCED CONTEXT-AWARE SUBSCRIPT DETECTION
                 // Use sequential character comparison for script detection
-                let should_be_subscript = is_real_subscript(span, sequential_diff, base_font_size, spans, i);
+                let should_be_subscript =
+                    is_real_subscript(span, sequential_diff, base_font_size, spans, i);
 
                 let mut should_be_superscript =
                     is_real_superscript(span, sequential_diff, base_font_size);
@@ -982,8 +1033,8 @@ pub(crate) fn apply_text_formatting(spans: &[CharSpan]) -> String {
 
                 // REFERENCE NUMBER PATTERN DETECTION
                 // Check if this looks like a reference citation (digit after text)
-                let prev_text = if i > 0 { spans[i-1].text.trim() } else { "" };
-                let is_likely_reference = text_trimmed.chars().all(|c| c.is_ascii_digit()) && 
+                let prev_text = if i > 0 { spans[i - 1].text.trim() } else { "" };
+                let is_likely_reference = text_trimmed.chars().all(|c| c.is_ascii_digit()) &&
                     prev_text.chars().any(|c| c.is_alphabetic()) &&
                     prev_text.len() > MATH_VARIABLE_MIN_LENGTH && // Not single math variables like n, t, c
                     font_ratio < FONT_SIZE_SCRIPT_THRESHOLD; // Still require smaller font
@@ -991,22 +1042,38 @@ pub(crate) fn apply_text_formatting(spans: &[CharSpan]) -> String {
                 // For likely reference numbers, prefer superscript even with problematic positioning
                 if is_likely_reference && !should_be_subscript && !should_be_superscript {
                     should_be_superscript = true;
-                    debug_print!("📄 REFERENCE OVERRIDE: Treating '{}' after '{}' as superscript", text_trimmed, prev_text);
+                    debug_print!(
+                        "📄 REFERENCE OVERRIDE: Treating '{}' after '{}' as superscript",
+                        text_trimmed,
+                        prev_text
+                    );
                 }
 
                 // Priority logic: Prefer superscript for upward movement (negative baseline_diff)
                 // and subscript for downward movement (positive baseline_diff)
-                let is_optical_alignment_case =
-                    should_be_subscript && should_be_superscript && font_ratio < OPTICAL_ALIGNMENT_FONT_THRESHOLD;
+                let is_optical_alignment_case = should_be_subscript
+                    && should_be_superscript
+                    && font_ratio < OPTICAL_ALIGNMENT_FONT_THRESHOLD;
 
                 // FIXED: Use sequential movement direction to determine priority
-                if should_be_superscript && sequential_diff < 0.0 && !in_superscript && !in_subscript {
+                if should_be_superscript
+                    && sequential_diff < 0.0
+                    && !in_superscript
+                    && !in_subscript
+                {
                     // Superscript has priority for upward movement (negative sequential_diff)
                     result.push_str("<sup>");
                     tag_stack.push("</sup>");
                     in_superscript = true;
-                    debug_print!("⬆️ SUPERSCRIPT START: Real superscript detected (sequential_diff={:.2})", sequential_diff);
-                } else if should_be_subscript && sequential_diff > 0.0 && !in_subscript && !in_superscript {
+                    debug_print!(
+                        "⬆️ SUPERSCRIPT START: Real superscript detected (sequential_diff={:.2})",
+                        sequential_diff
+                    );
+                } else if should_be_subscript
+                    && sequential_diff > 0.0
+                    && !in_subscript
+                    && !in_superscript
+                {
                     // Subscript has priority for downward movement (positive sequential_diff)
                     result.push_str("<sub>");
                     tag_stack.push("</sub>");
@@ -1060,7 +1127,9 @@ pub(crate) fn apply_text_formatting(spans: &[CharSpan]) -> String {
                         );
                     }
                 }
-            } else if relative_sequential_shift < PROPORTIONAL_RETURN_THRESHOLD && (in_subscript || in_superscript) {
+            } else if relative_sequential_shift < PROPORTIONAL_RETURN_THRESHOLD
+                && (in_subscript || in_superscript)
+            {
                 // Close script tags when returning close to baseline
                 // But only if we're not just processing whitespace/punctuation
                 // AND the current character is not itself a subscript/superscript
@@ -1101,8 +1170,12 @@ pub(crate) fn apply_text_formatting(spans: &[CharSpan]) -> String {
             // This handles cases where "N" exits subscript mode but "mask" should re-enter it
             // Use proportional threshold for consistency
             let relative_sequential_shift_for_restart = sequential_diff.abs() / span.font_size;
-            if !in_subscript && !in_superscript && relative_sequential_shift_for_restart <= PROPORTIONAL_SCRIPT_THRESHOLD {
-                let should_be_subscript = is_real_subscript(span, sequential_diff, base_font_size, spans, i);
+            if !in_subscript
+                && !in_superscript
+                && relative_sequential_shift_for_restart <= PROPORTIONAL_SCRIPT_THRESHOLD
+            {
+                let should_be_subscript =
+                    is_real_subscript(span, sequential_diff, base_font_size, spans, i);
 
                 if should_be_subscript {
                     result.push_str("<sub>");
@@ -1165,7 +1238,10 @@ pub(crate) fn apply_text_formatting(spans: &[CharSpan]) -> String {
 
     debug_print!(
         "⚡ STACK-BASED RESULT: '{}'",
-        spaced_result.chars().take(DEBUG_CHAR_LIMIT).collect::<String>()
+        spaced_result
+            .chars()
+            .take(DEBUG_CHAR_LIMIT)
+            .collect::<String>()
     );
 
     spaced_result
@@ -1211,18 +1287,19 @@ fn cluster_baselines(spans: &[CharSpan], y_threshold: f32) -> Vec<Vec<usize>> {
     if spans.is_empty() {
         return Vec::new();
     }
-    
+
     // Create spans with their indices, sorted by Y position
-    let mut indexed_spans: Vec<(usize, f32)> = spans.iter()
+    let mut indexed_spans: Vec<(usize, f32)> = spans
+        .iter()
         .enumerate()
         .map(|(i, span)| (i, span.bbox.y0))
         .collect();
     indexed_spans.sort_by(|a, b| a.1.partial_cmp(&b.1).unwrap());
-    
+
     let mut clusters = Vec::new();
     let mut current_cluster = vec![indexed_spans[0].0];
     let mut current_baseline = indexed_spans[0].1;
-    
+
     for (span_idx, y_pos) in indexed_spans.iter().skip(1) {
         if (y_pos - current_baseline).abs() <= y_threshold {
             // Close enough to current baseline - add to cluster
@@ -1235,26 +1312,38 @@ fn cluster_baselines(spans: &[CharSpan], y_threshold: f32) -> Vec<Vec<usize>> {
         }
     }
     clusters.push(current_cluster);
-    
-    debug_print!("🗂️ BASELINE CLUSTERING: Created {} clusters with threshold {:.1}pt", 
-                 clusters.len(), y_threshold);
-    
+
+    debug_print!(
+        "🗂️ BASELINE CLUSTERING: Created {} clusters with threshold {:.1}pt",
+        clusters.len(),
+        y_threshold
+    );
+
     for (i, cluster) in clusters.iter().enumerate() {
-        let cluster_y_positions: Vec<f32> = cluster.iter()
-            .map(|&idx| spans[idx].bbox.y0)
-            .collect();
-        let cluster_text: String = cluster.iter()
+        let cluster_y_positions: Vec<f32> = cluster.iter().map(|&idx| spans[idx].bbox.y0).collect();
+        let cluster_text: String = cluster
+            .iter()
             .map(|&idx| spans[idx].text.trim())
             .collect::<Vec<_>>()
             .join("");
-        
-        debug_print!("  Cluster {}: {} spans, Y range {:.1}-{:.1}, text: '{}'", 
-                     i, cluster.len(), 
-                     cluster_y_positions.iter().fold(f32::INFINITY, |a, &b| a.min(b)),
-                     cluster_y_positions.iter().fold(f32::NEG_INFINITY, |a, &b| a.max(b)),
-                     cluster_text.chars().take(DEBUG_CLUSTER_TEXT_LIMIT).collect::<String>());
+
+        debug_print!(
+            "  Cluster {}: {} spans, Y range {:.1}-{:.1}, text: '{}'",
+            i,
+            cluster.len(),
+            cluster_y_positions
+                .iter()
+                .fold(f32::INFINITY, |a, &b| a.min(b)),
+            cluster_y_positions
+                .iter()
+                .fold(f32::NEG_INFINITY, |a, &b| a.max(b)),
+            cluster_text
+                .chars()
+                .take(DEBUG_CLUSTER_TEXT_LIMIT)
+                .collect::<String>()
+        );
     }
-    
+
     clusters
 }
 
@@ -1263,70 +1352,83 @@ fn cluster_baselines(spans: &[CharSpan], y_threshold: f32) -> Vec<Vec<usize>> {
 /// Apply subscript detection within a baseline cluster using GLOBAL baseline
 /// This fixes the issue where subscripts form their own cluster and appear normal relative to cluster baseline
 fn detect_subscripts_in_cluster_with_global_baseline(
-    spans: &[CharSpan], 
-    cluster_indices: &[usize], 
+    spans: &[CharSpan],
+    cluster_indices: &[usize],
     global_base_font_size: f32,
-    global_baseline: f32
-) -> Vec<(usize, bool, bool)> {  // (span_index, is_subscript, is_superscript)
+    global_baseline: f32,
+) -> Vec<(usize, bool, bool)> {
+    // (span_index, is_subscript, is_superscript)
     if cluster_indices.is_empty() {
         return Vec::new();
     }
-    
+
     // Calculate cluster base font size as maximum font size in cluster
-    let cluster_base_font_size = cluster_indices.iter()
+    let cluster_base_font_size = cluster_indices
+        .iter()
         .map(|&idx| spans[idx].font_size)
         .fold(0.0, f32::max)
         .max(global_base_font_size * MIN_FONT_SIZE_RATIO); // Don't let it get too small
-    
-    debug_print!("📐 GLOBAL CLUSTER ANALYSIS: global_baseline={:.1}, cluster_base_font={:.1}", 
-                 global_baseline, cluster_base_font_size);
-    
+
+    debug_print!(
+        "📐 GLOBAL CLUSTER ANALYSIS: global_baseline={:.1}, cluster_base_font={:.1}",
+        global_baseline,
+        cluster_base_font_size
+    );
+
     let mut results = Vec::new();
-    
+
     for &span_idx in cluster_indices {
         let span = &spans[span_idx];
         let baseline_diff = span.bbox.y0 - global_baseline; // Compare to GLOBAL baseline
         let font_ratio = span.font_size / cluster_base_font_size;
-        
+
         // Apply research-based thresholds using global baseline comparison
         let has_smaller_font = font_ratio < FONT_SIZE_SCRIPT_THRESHOLD;
-        
+
         // For very small movements (< 1pt), be more tolerant if font is small
         let abs_baseline_diff = baseline_diff.abs();
         let is_tiny_movement = abs_baseline_diff < TINY_MOVEMENT_THRESHOLD;
-        
+
         // ChatGPT's normalized composite scoring approach
         // 1. Normalized vertical offset (positive = below baseline = subscript candidate)
         let v = baseline_diff / cluster_base_font_size; // Normalized by font size
-        
+
         // 2. Font size shrinkage (0 = normal size, >0 = smaller than average)
         let s = if span.font_size < cluster_base_font_size {
             1.0 - (span.font_size / cluster_base_font_size)
         } else {
             0.0
         };
-        
+
         // 3. Directional confidence scores [0,1]
         let raw_sub = VERTICAL_WEIGHT * v.max(0.0) + SIZE_WEIGHT * s;
         let raw_sup = VERTICAL_WEIGHT * (-v).max(0.0) + SIZE_WEIGHT * s;
-        
+
         // 4. Normalize to [0,1] using reference values
         let denom = VERTICAL_WEIGHT * VERTICAL_REF + SIZE_WEIGHT * SIZE_REF;
-        let sub_confidence = (raw_sub / denom).clamp(CONFIDENCE_NORMALIZATION_MIN, CONFIDENCE_NORMALIZATION_MAX);
-        let sup_confidence = (raw_sup / denom).clamp(CONFIDENCE_NORMALIZATION_MIN, CONFIDENCE_NORMALIZATION_MAX);
-        
+        let sub_confidence =
+            (raw_sub / denom).clamp(CONFIDENCE_NORMALIZATION_MIN, CONFIDENCE_NORMALIZATION_MAX);
+        let sup_confidence =
+            (raw_sup / denom).clamp(CONFIDENCE_NORMALIZATION_MIN, CONFIDENCE_NORMALIZATION_MAX);
+
         let (is_subscript, is_superscript) = if s > FONT_SIZE_STRONG_SHRINKAGE_THRESHOLD {
             // Strong font size reduction (>25%) → likely subscript regardless of baseline positioning
             // This handles PDF rendering issues where subscripts are positioned inconsistently
             debug_print!("  🔬 FONT SIZE OVERRIDE: '{}' strong_shrinkage={:.3} baseline={:.3} → treating as subscript", 
                          span.text.trim(), s, v);
             (true, false)
-        } else if sub_confidence > COMPOSITE_SUBSCRIPT_CONFIDENCE_THRESHOLD && sub_confidence > sup_confidence && has_smaller_font {
+        } else if sub_confidence > COMPOSITE_SUBSCRIPT_CONFIDENCE_THRESHOLD
+            && sub_confidence > sup_confidence
+            && has_smaller_font
+        {
             // High subscript confidence AND smaller font
             debug_print!("  🔬 COMPOSITE SUBSCRIPT: '{}' sub_conf={:.3} sup_conf={:.3} (v={:.3} s={:.3}) baseline_diff={:.1}", 
                          span.text.trim(), sub_confidence, sup_confidence, v, s, baseline_diff);
             (true, false)
-        } else if sup_confidence > COMPOSITE_SUBSCRIPT_CONFIDENCE_THRESHOLD && sup_confidence > sub_confidence && has_smaller_font {
+        } else if sup_confidence > COMPOSITE_SUBSCRIPT_CONFIDENCE_THRESHOLD
+            && sup_confidence > sub_confidence
+            && has_smaller_font
+        {
             // High superscript confidence AND smaller font
             debug_print!("  🔬 COMPOSITE SUPERSCRIPT: '{}' sub_conf={:.3} sup_conf={:.3} (v={:.3} s={:.3}) baseline_diff={:.1}", 
                          span.text.trim(), sub_confidence, sup_confidence, v, s, baseline_diff);
@@ -1338,17 +1440,22 @@ fn detect_subscripts_in_cluster_with_global_baseline(
             (true, false)
         } else {
             // Low confidence for both
-            debug_print!("  🔬 NO SCRIPT: '{}' sub_conf={:.3} sup_conf={:.3} < threshold={:.3}", 
-                         span.text.trim(), sub_confidence, sup_confidence, COMPOSITE_SUBSCRIPT_CONFIDENCE_THRESHOLD);
+            debug_print!(
+                "  🔬 NO SCRIPT: '{}' sub_conf={:.3} sup_conf={:.3} < threshold={:.3}",
+                span.text.trim(),
+                sub_confidence,
+                sup_confidence,
+                COMPOSITE_SUBSCRIPT_CONFIDENCE_THRESHOLD
+            );
             (false, false)
         };
-        
+
         debug_print!("  📍 GLOBAL SPAN[{}]: '{}' global_baseline_diff={:.1} font_ratio={:.2} → sub={} sup={}", 
                      span_idx, span.text.trim(), baseline_diff, font_ratio, is_subscript, is_superscript);
-        
+
         results.push((span_idx, is_subscript, is_superscript));
     }
-    
+
     results
 }
 
@@ -1358,33 +1465,33 @@ pub(crate) fn detect_subscripts_clustered(spans: &[CharSpan]) -> Vec<(usize, boo
     if spans.is_empty() {
         return Vec::new();
     }
-    
+
     debug_print!("🔬 CLUSTERED DETECTION: Processing {} spans", spans.len());
-    
+
     // Step 1: Cluster spans by baseline proximity (5pt threshold based on typical font sizes)
     let clusters = cluster_baselines(spans, CLUSTERING_Y_THRESHOLD);
-    
+
     // Step 2: Calculate global base font size
-    let global_base_font_size = spans.iter()
+    let global_base_font_size = spans
+        .iter()
         .map(|s| s.font_size)
         .filter(|&size| size > MIN_FONT_SIZE_FILTER)
         .fold(0.0, f32::max);
-    
+
     // Step 3: Calculate GLOBAL baseline from the largest cluster (main text)
     let global_baseline = if clusters.is_empty() {
         0.0
     } else {
         // Find the largest cluster (likely contains main text)
-        let largest_cluster = clusters.iter()
-            .max_by_key(|cluster| cluster.len())
-            .unwrap();
-        
+        let largest_cluster = clusters.iter().max_by_key(|cluster| cluster.len()).unwrap();
+
         // Calculate median Y position from the largest cluster
-        let mut main_y_positions: Vec<f32> = largest_cluster.iter()
+        let mut main_y_positions: Vec<f32> = largest_cluster
+            .iter()
             .map(|&idx| spans[idx].bbox.y0)
             .collect();
         main_y_positions.sort_by(|a, b| a.partial_cmp(b).unwrap());
-        
+
         if main_y_positions.len().is_multiple_of(2) {
             let mid = main_y_positions.len() / 2;
             (main_y_positions[mid - 1] + main_y_positions[mid]) / 2.0
@@ -1392,25 +1499,37 @@ pub(crate) fn detect_subscripts_clustered(spans: &[CharSpan]) -> Vec<(usize, boo
             main_y_positions[main_y_positions.len() / 2]
         }
     };
-    
-    debug_print!("🌍 GLOBAL BASELINE: {:.1} from largest cluster ({} spans)", 
-                 global_baseline, 
-                 clusters.iter().max_by_key(|c| c.len()).map(|c| c.len()).unwrap_or(0));
-    
+
+    debug_print!(
+        "🌍 GLOBAL BASELINE: {:.1} from largest cluster ({} spans)",
+        global_baseline,
+        clusters
+            .iter()
+            .max_by_key(|c| c.len())
+            .map(|c| c.len())
+            .unwrap_or(0)
+    );
+
     // Step 4: Detect subscripts within each cluster using GLOBAL baseline
     let mut all_results = Vec::new();
-    
+
     for (cluster_idx, cluster_indices) in clusters.iter().enumerate() {
         debug_print!("🎯 Processing cluster {}", cluster_idx);
         let cluster_results = detect_subscripts_in_cluster_with_global_baseline(
-            spans, cluster_indices, global_base_font_size, global_baseline
+            spans,
+            cluster_indices,
+            global_base_font_size,
+            global_baseline,
         );
         all_results.extend(cluster_results);
     }
-    
+
     // Sort results by original span index
     all_results.sort_by_key(|&(idx, _, _)| idx);
-    
-    debug_print!("✅ CLUSTERED DETECTION: Completed with {} results", all_results.len());
+
+    debug_print!(
+        "✅ CLUSTERED DETECTION: Completed with {} results",
+        all_results.len()
+    );
     all_results
 }

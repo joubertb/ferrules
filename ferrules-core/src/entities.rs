@@ -27,34 +27,43 @@ fn apply_character_corrections(
 
     #[cfg(feature = "correction-engine")]
     {
-        use crate::correction::GlyphNameResolver;
-        use std::sync::Mutex;
+        use crate::debug_println;
+        use crate::font_analysis::correct_character_with_universal_corrector;
 
-        // Thread-safe global glyph resolver (lazy initialization)
-        static GLYPH_RESOLVER: std::sync::LazyLock<Mutex<GlyphNameResolver>> =
-            std::sync::LazyLock::new(|| Mutex::new(GlyphNameResolver::new()));
-
-        // Use glyph name resolution - this is the correct approach matching PDF viewers
-        if let Ok(mut resolver) = GLYPH_RESOLVER.lock() {
-            if let Some(corrected_char) =
-                resolver.resolve_unicode_from_glyph_name(font_name, unicode_value, original_char)
-            {
-                debug_print!(
-                    "🔧 GLYPH PATH: Font '{font_name}' - 0x{unicode_value:04X} '{original_char}' → '{corrected_char}'"
+        // Use UniversalFontCorrector - direct PDF glyph extraction approach
+        if let Some(corrected_char) =
+            correct_character_with_universal_corrector(unicode_value, font_name)
+        {
+            if corrected_char == '\0' {
+                debug_println!(
+                    "🔧 APPLY CORRECTION: Font '{font_name}' - 0x{unicode_value:04X} '{original_char}' → [SUPPRESSED]"
+                );
+                return (String::new(), true); // Return empty string to suppress character
+            } else {
+                debug_println!(
+                    "🔧 APPLY CORRECTION: Font '{font_name}' - 0x{unicode_value:04X} '{original_char}' → '{corrected_char}'"
                 );
                 return (corrected_char.to_string(), true);
-            } else {
-                // Debug: Log when glyph resolution doesn't apply
-                if font_name.contains("NimbusRomNo9L")
-                    && (unicode_value == 0x68 || unicode_value == 0x69)
-                {
-                    debug_print!(
-                        "🔧 GLYPH SKIP: Font '{font_name}' - 0x{unicode_value:04X} '{original_char}' → No glyph correction needed"
-                    );
-                }
             }
         }
     }
+
+    // Try universal glyph-based correction
+    // TODO: This requires access to font glyph information from pdfium-render
+    // For now, this is disabled until we can extract glyph names
+    // {
+    //     use crate::font_analysis::UniversalFontCorrector;
+    //
+    //     if let Some(corrected_char) = UniversalFontCorrector::correct_character_from_glyph(
+    //         unicode_value,
+    //         None  // glyph_name - need to extract from font
+    //     ) {
+    //         debug_print!(
+    //             "🔧 GLYPH CORRECTOR: Unicode 0x{unicode_value:04X} → '{corrected_char}' (glyph-based)"
+    //         );
+    //         return (corrected_char.to_string(), true);
+    //     }
+    // }
 
     // Fallback to mathematical font corrections for both enabled and disabled correction engine
     // This handles cases where the advanced glyph resolver doesn't have a mapping
@@ -360,7 +369,6 @@ pub struct Element {
 
 impl Element {
     pub fn from_layout_block(id: usize, layout_block: &LayoutBBox, page_id: usize) -> Self {
-        
         let kind = match layout_block.label {
             "Caption" => ElementType::Caption,
             "Formula" => ElementType::Formula,
@@ -388,17 +396,11 @@ impl Element {
         }
     }
     pub fn push_line(&mut self, line: &Line) {
-
         // Line text is already cleaned in Line::new_from_span() and Line::append()
         if self.text_block.is_empty() {
             self.text_block.push_first(&line.text);
         } else {
             self.text_block.append_line(&line.text);
-        }
-
-        // RAW TEXT DEBUG: Show accumulated text after adding line
-        if self.id == 6 || line.text.contains("structural") || line.text.contains("parent") || line.text.contains("nj") || line.text.contains("ni") || line.text.contains("mask") {
-            debug_print!("🟦 ELEMENT TEXT AFTER:  '{}'", self.text_block.text.chars().take(5000).collect::<String>());
         }
 
         // Store the CharSpans for potential subscript/superscript processing
@@ -477,48 +479,6 @@ impl CharSpan {
         let original_text = original_unicode.unwrap_or_default().to_string();
         let unicode_value = char.unicode_value();
 
-        // Debug raw character codes in mathematical fonts for investigation
-        if font_name.contains("CMMI") && (unicode_value == 0x0068 || unicode_value == 0x0069) {
-            debug_print!(
-                "📍 RAW CHAR: Font '{}' - Raw Unicode 0x{:04X} '{}' → Original Text '{}'",
-                font_name,
-                unicode_value,
-                original_unicode.unwrap_or('\0'),
-                original_text
-            );
-        }
-
-        // Debug NimbusRomNo9L characters to see what PDFium is giving us
-        if font_name.contains("NimbusRomNo9L")
-            && (unicode_value == 0x0068 || unicode_value == 0x0069 || unicode_value == 0x0029)
-        {
-            debug_print!(
-                "🔍 NIMBUS RAW: Font '{}' - PDFium Unicode 0x{:04X} '{}' → Original Text '{}'",
-                font_name,
-                unicode_value,
-                original_unicode.unwrap_or('\0'),
-                original_text
-            );
-        }
-
-        // Debug for u0002 characters specifically to find their source
-        if unicode_value == 0x0002 || original_text.contains('\u{0002}') {
-            debug_print!(
-                "🎯 U0002 SOURCE: Font '{}' - Unicode 0x{:04X} '{}' → Text '{}'",
-                font_name,
-                unicode_value,
-                original_unicode.unwrap_or('\0'),
-                original_text
-                    .chars()
-                    .map(|c| if c.is_control() {
-                        format!("\\u{{{:04X}}}", c as u32)
-                    } else {
-                        c.to_string()
-                    })
-                    .collect::<String>()
-            );
-        }
-
         // Apply character-level font corrections (glyph name resolution)
         let (glyph_corrected_text, has_corruption) =
             apply_character_corrections(&original_text, unicode_value, &font_name);
@@ -570,17 +530,8 @@ impl CharSpan {
         #[cfg(not(feature = "correction-engine"))]
         let final_text = glyph_corrected_text;
 
-        // Debug after corrections for mathematical fonts
-        if font_name.contains("CMMI") && (unicode_value == 0x0068 || unicode_value == 0x0069) {
-            debug_print!("📍 CORRECTED: Font '{font_name}' - Unicode 0x{unicode_value:04X} → '{original_text}' → '{final_text}' (corrupted: {has_corruption})");
-        }
-
-        // Special debug for the 'h' character that should become '('
-        if original_text == "h" && font_name.contains("CMMI") {
-            debug_print!(
-                "🎯 TRACKING 'h' → '{final_text}': Font '{font_name}' - Unicode 0x{unicode_value:04X} - Corrupted: {has_corruption}"
-            );
-        }
+        // No special case text corrections - use only glyph-based universal approach
+        let corrected_final_text = final_text;
 
         Self {
             bbox: BBox::from_pdfrect(
@@ -588,7 +539,7 @@ impl CharSpan {
                     .expect("Error init span tight bound char"),
                 page_bbox.height(),
             ),
-            text: final_text,
+            text: corrected_final_text,
             font_name,
             font_weight: char.font_weight(),
             font_size: char.unscaled_font_size().value,
@@ -616,23 +567,6 @@ impl CharSpan {
             let original_text = char.unicode_char().unwrap_or_default().to_string();
             let unicode_value = char.unicode_value();
             let font_name = char.font_name();
-
-            // Debug for u0002 characters in append method
-            if unicode_value == 0x0002 || original_text.contains('\u{0002}') {
-                debug_print!(
-                    "🎯 U0002 APPEND: Font '{}' - Unicode 0x{:04X} → Text '{}'",
-                    font_name,
-                    unicode_value,
-                    original_text
-                        .chars()
-                        .map(|c| if c.is_control() {
-                            format!("\\u{{{:04X}}}", c as u32)
-                        } else {
-                            c.to_string()
-                        })
-                        .collect::<String>()
-                );
-            }
 
             // Apply character-level font corrections (glyph name resolution)
             let (glyph_corrected_text, char_has_corruption) =
@@ -675,6 +609,8 @@ impl CharSpan {
             let char_text = glyph_corrected_text;
 
             self.text.push_str(&char_text);
+
+            // No special case text corrections - use only glyph-based universal approach
             self.char_end_idx = char.index();
             self.bbox.merge(&char_bbox);
 
@@ -734,14 +670,29 @@ impl Line {
             "🔵 APPEND called with span: '{}'",
             span.text.chars().take(20).collect::<String>()
         );
-        
+
         // Early debug logging for Block ID 54 analysis - catch ALL append calls
         let span_preview = span.text.chars().take(20).collect::<String>();
         let current_preview = self.text.chars().take(50).collect::<String>();
-        if span_preview.contains("j") || current_preview.contains("parent") || span_preview.contains("node") {
-            debug_print!("📊 EARLY APPEND DEBUG - span: '{}', current line: '{}'", span_preview, current_preview);
-            debug_print!("📊 EARLY APPEND - span font: '{}', size: {:.1}, y: {:.1}", span.font_name, span.font_size, span.bbox.y0);
-            debug_print!("📊 EARLY APPEND - line has {} spans so far", self.spans.len());
+        if span_preview.contains("j")
+            || current_preview.contains("parent")
+            || span_preview.contains("node")
+        {
+            debug_print!(
+                "📊 EARLY APPEND DEBUG - span: '{}', current line: '{}'",
+                span_preview,
+                current_preview
+            );
+            debug_print!(
+                "📊 EARLY APPEND - span font: '{}', size: {:.1}, y: {:.1}",
+                span.font_name,
+                span.font_size,
+                span.bbox.y0
+            );
+            debug_print!(
+                "📊 EARLY APPEND - line has {} spans so far",
+                self.spans.len()
+            );
         }
         if span.rotation != self.rotation
         // NOTE: sometimes pdfium doesn't inject a linebreak, so we check the span positions
@@ -753,20 +704,6 @@ impl Line {
 
             // Apply comprehensive tag processing to spans (bold, subscript, superscript, formula)
             let script_processed = crate::modtext::add_tags(&self.spans);
-
-            // Debug dual processing calls
-            if script_processed.contains("<sub>")
-                || script_processed.contains("ni")
-                || script_processed.contains("nj")
-                || script_processed.contains("ei,j")
-                || script_processed.contains("ej,i")
-            {
-                debug_print!(
-                    "📝 APPEND CALL: script_processed='{}', original_text='{}'",
-                    script_processed.chars().take(100).collect::<String>(),
-                    self.text.chars().take(100).collect::<String>()
-                );
-            }
 
             // Use script-processed text if it differs significantly from original
             // This preserves regular text while converting mathematical notation
@@ -801,14 +738,25 @@ impl Line {
         let utf8_fixed = self.text.clone();
 
         // Debug logging for text block processing - Block ID 54 analysis
-        if self.text.contains("formulated") || self.text.contains("probability") || self.text.contains("nj") || self.text.contains("denotes") {
+        if self.text.contains("formulated")
+            || self.text.contains("probability")
+            || self.text.contains("nj")
+            || self.text.contains("denotes")
+        {
             debug_print!("📊 TEXT BLOCK PROCESSING - Line::finalize");
-            debug_print!("📊 Final text: '{}'", self.text.chars().take(100).collect::<String>());
+            debug_print!(
+                "📊 Final text: '{}'",
+                self.text.chars().take(100).collect::<String>()
+            );
             debug_print!("📊 Finalizing {} spans:", self.spans.len());
             for (i, span) in self.spans.iter().enumerate() {
                 debug_print!(
                     "📊 SPAN[{}]: text='{}' font='{}' size={:.1} y={:.1}",
-                    i, span.text.trim(), span.font_name, span.font_size, span.bbox.y0
+                    i,
+                    span.text.trim(),
+                    span.font_name,
+                    span.font_size,
+                    span.bbox.y0
                 );
             }
         }
@@ -817,8 +765,15 @@ impl Line {
         let script_processed = crate::modtext::add_tags(&self.spans);
 
         // Show result after processing for Block ID 54 analysis
-        if self.text.contains("formulated") || self.text.contains("probability") || self.text.contains("nj") || self.text.contains("denotes") {
-            debug_print!("📊 FINALIZE RESULT after add_tags: '{}'", script_processed.chars().take(200).collect::<String>());
+        if self.text.contains("formulated")
+            || self.text.contains("probability")
+            || self.text.contains("nj")
+            || self.text.contains("denotes")
+        {
+            debug_print!(
+                "📊 FINALIZE RESULT after add_tags: '{}'",
+                script_processed.chars().take(200).collect::<String>()
+            );
         }
 
         // Debug dual processing calls
