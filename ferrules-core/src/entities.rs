@@ -536,6 +536,73 @@ impl Line {
             spans: vec![span],
         }
     }
+
+    /// Determines if a new span should start a new line based on spatial positioning
+    ///
+    /// Uses both X and Y coordinates to detect legitimate line breaks:
+    /// - Y-coordinate jump: Significant vertical movement indicates new line
+    /// - X-coordinate reset: Horizontal position reset to left margin indicates wrapping
+    /// - Text control characters: Only used as hints when spatial positioning is ambiguous
+    fn should_start_new_line(&self, new_span: &CharSpan) -> bool {
+        // Always start new line if rotation differs
+        if new_span.rotation != self.rotation {
+            return true;
+        }
+
+        // Calculate spatial differences
+        let y_diff = new_span.bbox.y0 - self.bbox.y0;
+        let x_diff = new_span.bbox.x0 - self.bbox.x1;
+
+        // Thresholds for line break detection
+        const SIGNIFICANT_Y_JUMP: f32 = 5.0; // Points indicating clear line break
+        const X_RESET_THRESHOLD: f32 = -20.0; // Negative X movement indicating wrap to new line
+        const SAME_LINE_Y_TOLERANCE: f32 = 2.0; // Y tolerance for same line (handles slight baseline variations)
+
+        // Strong indicators of new line (spatial positioning takes priority)
+        if y_diff.abs() > SIGNIFICANT_Y_JUMP {
+            debug_print!(
+                "📍 NEW LINE: Significant Y jump {:.1} > {:.1} threshold",
+                y_diff.abs(),
+                SIGNIFICANT_Y_JUMP
+            );
+            return true;
+        }
+
+        // Text wrapping: X resets to left margin with small Y change
+        if x_diff < X_RESET_THRESHOLD && y_diff.abs() > SAME_LINE_Y_TOLERANCE {
+            debug_print!(
+                "📍 NEW LINE: X reset {:.1} < {:.1} with Y change {:.1}",
+                x_diff,
+                X_RESET_THRESHOLD,
+                y_diff.abs()
+            );
+            return true;
+        }
+
+        // Spans are spatially on same line - check if control characters should override
+        if y_diff.abs() <= SAME_LINE_Y_TOLERANCE {
+            // For very close Y coordinates, ignore text control characters
+            // This fixes the footer footnote case where "1\n" and "https://..." should be same line
+            debug_print!(
+                "📍 SAME LINE: Y diff {:.1} <= {:.1} tolerance, ignoring text control chars",
+                y_diff.abs(),
+                SAME_LINE_Y_TOLERANCE
+            );
+            return false;
+        }
+
+        // Ambiguous spatial positioning - use text control characters as hints
+        if new_span.text.ends_with("\n") || new_span.text.ends_with("\x02") {
+            debug_print!(
+                "📍 NEW LINE: Text control character with ambiguous spatial positioning (Y diff: {:.1})",
+                y_diff.abs()
+            );
+            return true;
+        }
+
+        // Default: continue same line
+        false
+    }
     // TODO: find a better pattern here
     // return Some if we fail to append the span-> not great
     pub fn append(&mut self, span: CharSpan) -> Result<(), CharSpan> {
@@ -544,34 +611,8 @@ impl Line {
             span.text.chars().take(20).collect::<String>()
         );
 
-        // Early debug logging for Block ID 54 analysis - catch ALL append calls
-        let span_preview = span.text.chars().take(20).collect::<String>();
-        let current_preview = self.text.chars().take(50).collect::<String>();
-        if span_preview.contains("j")
-            || current_preview.contains("parent")
-            || span_preview.contains("node")
-        {
-            debug_print!(
-                "📊 EARLY APPEND DEBUG - span: '{}', current line: '{}'",
-                span_preview,
-                current_preview
-            );
-            debug_print!(
-                "📊 EARLY APPEND - span font: '{}', size: {:.1}, y: {:.1}",
-                span.font_name,
-                span.font_size,
-                span.bbox.y0
-            );
-            debug_print!(
-                "📊 EARLY APPEND - line has {} spans so far",
-                self.spans.len()
-            );
-        }
-        if span.rotation != self.rotation
-        // NOTE: sometimes pdfium doesn't inject a linebreak, so we check the span positions
-        || span.bbox.y0 > self.bbox.y1
-        || span.text.ends_with("\n") || span.text.ends_with("\x02")
-        {
+        // Use spatial positioning logic instead of simple text/Y checks
+        if self.should_start_new_line(&span) {
             // Character corrections are now applied at CharSpan level, no need to re-apply here
             let utf8_fixed = self.text.clone();
 
@@ -610,58 +651,8 @@ impl Line {
         // Apply comprehensive text processing to the final line text
         let utf8_fixed = self.text.clone();
 
-        // Debug logging for text block processing - Block ID 54 analysis
-        if self.text.contains("formulated")
-            || self.text.contains("probability")
-            || self.text.contains("nj")
-            || self.text.contains("denotes")
-        {
-            debug_print!("📊 TEXT BLOCK PROCESSING - Line::finalize");
-            debug_print!(
-                "📊 Final text: '{}'",
-                self.text.chars().take(100).collect::<String>()
-            );
-            debug_print!("📊 Finalizing {} spans:", self.spans.len());
-            for (i, span) in self.spans.iter().enumerate() {
-                debug_print!(
-                    "📊 SPAN[{}]: text='{}' font='{}' size={:.1} y={:.1}",
-                    i,
-                    span.text.trim(),
-                    span.font_name,
-                    span.font_size,
-                    span.bbox.y0
-                );
-            }
-        }
-
         // Apply comprehensive tag processing to spans (bold, subscript, superscript, formula)
         let script_processed = crate::modtext::add_tags(&self.spans);
-
-        // Show result after processing for Block ID 54 analysis
-        if self.text.contains("formulated")
-            || self.text.contains("probability")
-            || self.text.contains("nj")
-            || self.text.contains("denotes")
-        {
-            debug_print!(
-                "📊 FINALIZE RESULT after add_tags: '{}'",
-                script_processed.chars().take(200).collect::<String>()
-            );
-        }
-
-        // Debug dual processing calls
-        if script_processed.contains("<sub>")
-            || script_processed.contains("ni")
-            || script_processed.contains("nj")
-            || script_processed.contains("ei,j")
-            || script_processed.contains("ej,i")
-        {
-            debug_print!(
-                "🏁 FINALIZE CALL: script_processed='{}', original_text='{}'",
-                script_processed.chars().take(100).collect::<String>(),
-                self.text.chars().take(100).collect::<String>()
-            );
-        }
 
         // Use script-processed text if it differs significantly from original
         // This preserves regular text while converting mathematical notation
@@ -671,14 +662,6 @@ impl Line {
                 || script_processed.contains("<b>"))
         {
             self.text = script_processed;
-
-            // Debug: Check if we have the target pattern after mathematical notation processing
-            if self.text.contains("n<sub>j</sub> i") {
-                debug_print!(
-                    "🎯 FOUND TARGET: Line finalize() found n<sub>j</sub> i pattern: {}",
-                    self.text.chars().take(200).collect::<String>()
-                );
-            }
         } else {
             self.text = utf8_fixed;
         }

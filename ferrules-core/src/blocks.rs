@@ -1,10 +1,9 @@
-use crate::entities::{BBox, Element, ElementType, PageID};
 use crate::correction;
+use crate::entities::{BBox, Element, ElementType, PageID};
 use anyhow::bail;
 use serde::{Deserialize, Serialize};
 
 pub type TitleLevel = u8;
-
 
 #[derive(Debug, Default, Deserialize, Serialize)]
 pub struct ImageBlock {

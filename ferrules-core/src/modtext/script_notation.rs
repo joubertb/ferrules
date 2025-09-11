@@ -42,6 +42,9 @@ const SUBSCRIPT_UPWARD_LIMIT: f32 = 0.12; // 12% of font size
 /// Upward movement limit for superscripts as fraction of font size  
 const SUPERSCRIPT_UPWARD_LIMIT: f32 = 0.135; // 13.5% of font size
 
+/// Lenient upward movement limit for footnote superscripts as fraction of font size
+const FOOTNOTE_SUPERSCRIPT_UPWARD_LIMIT: f32 = 0.25; // 25% of font size for footnote markers
+
 /// Downward movement limit for scripts as fraction of font size
 const SCRIPT_DOWNWARD_LIMIT: f32 = 2.0; // 200% of font size
 
@@ -174,6 +177,46 @@ pub(crate) struct TagRange {
     pub content_spans: Vec<CharSpan>, // For recursive processing
 }
 
+/// Detect if text appears to be a footnote marker that should use lenient superscript thresholds
+///
+/// Footnote markers are typically:
+/// - Single digits (1, 2, 3, etc.)
+/// - Small superscript symbols (*, †, ‡, etc.)
+/// - Single letters (a, b, c, etc.)
+/// - Roman numerals (i, ii, iii, iv, etc.)
+fn is_footnote_marker(text: &str) -> bool {
+    let trimmed = text.trim();
+    if trimmed.is_empty() {
+        return false;
+    }
+
+    // Single digits (most common footnote pattern)
+    if trimmed.len() == 1 && trimmed.chars().next().unwrap().is_ascii_digit() {
+        return true;
+    }
+
+    // Common footnote symbols
+    if matches!(trimmed, "*" | "†" | "‡" | "§" | "¶" | "**") {
+        return true;
+    }
+
+    // Single lowercase letters (often used for footnotes)
+    if trimmed.len() == 1 && trimmed.chars().next().unwrap().is_ascii_lowercase() {
+        return true;
+    }
+
+    // Short roman numerals
+    if trimmed.len() <= 4
+        && trimmed
+            .chars()
+            .all(|c| matches!(c, 'i' | 'v' | 'x' | 'I' | 'V' | 'X'))
+    {
+        return true;
+    }
+
+    false
+}
+
 /// Common script detection logic shared between subscript and superscript detection
 ///
 /// Returns (is_script, rejection_reasons) tuple
@@ -237,7 +280,12 @@ fn is_real_script_common(
 }
 
 /// Check if this baseline/font change represents a real superscript based on positioning and font metrics
-fn is_real_superscript(current_span: &CharSpan, sequential_diff: f32, base_font_size: f32) -> bool {
+fn is_real_superscript(
+    current_span: &CharSpan,
+    sequential_diff: f32,
+    base_font_size: f32,
+    is_first_span: bool,
+) -> bool {
     // Real superscripts should have:
     // 1. Significant font size reduction (typically 70% or smaller of base text)
     // 2. UPWARD movement from previous character (NEGATIVE sequential_diff in PDF coordinates)
@@ -248,14 +296,21 @@ fn is_real_superscript(current_span: &CharSpan, sequential_diff: f32, base_font_
         return false;
     }
 
-    // Use common detection logic with superscript-specific limits
+    // Special case: Use lenient threshold for footnote markers appearing first
+    let upward_limit = if is_first_span && is_footnote_marker(&current_span.text) {
+        FOOTNOTE_SUPERSCRIPT_UPWARD_LIMIT
+    } else {
+        SUPERSCRIPT_UPWARD_LIMIT
+    };
+
+    // Use common detection logic with appropriate upward limit
     let (is_likely_superscript, rejection_reasons) = is_real_script_common(
         current_span,
         sequential_diff,
         base_font_size,
         "superscript",
-        SUPERSCRIPT_UPWARD_LIMIT, // upward_limit: 13.5% of font size upward movement max
-        f32::INFINITY,            // downward_limit: no limit on upward movement
+        upward_limit,
+        f32::INFINITY, // downward_limit: no limit on upward movement
     );
 
     let text_trimmed = current_span.text.trim();
@@ -667,9 +722,7 @@ fn requires_baseline_clustering(spans: &[CharSpan]) -> bool {
     let has_math_symbols = full_text.contains('∑')
         || full_text.contains('∈')
         || full_text.contains('∪')
-        || full_text.contains('∩')
-        || full_text.contains("Loss")
-        || full_text.contains("MLM");
+        || full_text.contains('∩');
 
     let should_cluster = has_multiple_baselines && has_math_symbols;
 
@@ -937,7 +990,16 @@ pub(crate) fn apply_text_formatting(spans: &[CharSpan]) -> String {
         let sequential_diff = if let Some(prev_y) = previous_y_position {
             span.bbox.y0 - prev_y
         } else {
-            0.0 // First character has no movement
+            // First character: Look ahead to next non-empty span for comparison
+            if let Some(next_span) = spans
+                .get(i + 1..)
+                .and_then(|remaining| remaining.iter().find(|s| !s.text.trim().is_empty()))
+            {
+                // Compare first span against next non-empty span (for footnote superscripts)
+                span.bbox.y0 - next_span.bbox.y0
+            } else {
+                0.0 // No next span to compare against
+            }
         };
 
         debug_print!(
@@ -1026,7 +1088,7 @@ pub(crate) fn apply_text_formatting(spans: &[CharSpan]) -> String {
                     is_real_subscript(span, sequential_diff, base_font_size, spans, i);
 
                 let mut should_be_superscript =
-                    is_real_superscript(span, sequential_diff, base_font_size);
+                    is_real_superscript(span, sequential_diff, base_font_size, i == 0);
 
                 // Calculate font ratio for reference detection
                 let font_ratio = span.font_size / base_font_size;
@@ -1137,7 +1199,7 @@ pub(crate) fn apply_text_formatting(spans: &[CharSpan]) -> String {
                 let is_current_subscript =
                     is_real_subscript(span, sequential_diff, base_font_size, spans, i);
                 let is_current_superscript =
-                    is_real_superscript(span, sequential_diff, base_font_size);
+                    is_real_superscript(span, sequential_diff, base_font_size, i == 0);
 
                 if !text_trimmed.is_empty()
                     && !text_trimmed
