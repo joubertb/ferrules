@@ -2951,7 +2951,6 @@ fn is_mathematical_context_font(font_name: &str) -> bool {
     font_name.contains("CMR") ||    // Computer Modern Roman (used in math)
     font_name.contains("Math") ||   // General math fonts
     font_name.contains("Symbol") // Symbol fonts
-                                 // REMOVED: NimbusRomNo9L - these are regular text fonts, not mathematical fonts
 }
 
 /// Apply real font corrections based on automatic font corruption detection

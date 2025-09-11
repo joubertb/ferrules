@@ -65,145 +65,18 @@ fn apply_character_corrections(
     //     }
     // }
 
-    // Fallback to mathematical font corrections for both enabled and disabled correction engine
-    // This handles cases where the advanced glyph resolver doesn't have a mapping
-    if is_mathematical_symbol_font(font_name) {
-        debug_print!("🔧 MATH FONT CHECK: '{font_name}' - Checking if Unicode 0x{unicode_value:04X} '{original_char}' needs mathematical correction");
-        if let Some(corrected_char) = get_mathematical_symbol_correction(unicode_value, font_name) {
-            debug_print!("🔧 MATH FONT CORRECTION: '{font_name}' - Unicode {original_char:?} (0x{unicode_value:04X}) → '{corrected_char}' (mathematical symbol)");
-            return (corrected_char.to_string(), true);
-        }
-    } else {
-        // Debug: Log when mathematical font correction is skipped
-        if font_name.contains("NimbusRomNo9L") && (unicode_value == 0x68 || unicode_value == 0x69) {
-            debug_print!(
-                "🔧 MATH SKIP: Font '{font_name}' - Not a mathematical symbol font, no correction"
-            );
-        }
-    }
+    // REMOVED: Old fallback mathematical font correction system
+    // The universal corrector now handles all font corrections
 
     // No correction needed - return original text
     (original_text.to_string(), false)
 }
 
-/// Identifies mathematical symbol fonts that commonly have corrupted subset mappings
-fn is_mathematical_symbol_font(font_name: &str) -> bool {
-    // Computer Modern mathematical SYMBOL font families (not italic text fonts)
-    font_name.contains("CMSY") ||  // Computer Modern Symbol - actual symbols
-    font_name.contains("CMEX") ||  // Computer Modern Extended - math extensions
-    // CMMI (Computer Modern Math Italic) removed - these are for mathematical variables, not symbols
-    // CMTI, CMTT removed - these are text fonts, not symbol fonts
-    // Add other mathematical symbol font families as discovered
-    font_name.contains("Symbol") || // Generic mathematical symbol fonts
-    font_name.contains("MathFont")
-}
+// REMOVED: is_mathematical_symbol_font() function
+// No longer needed - universal corrector handles all font detection
 
-/// Returns the correct mathematical symbol for a Unicode value in a given mathematical font
-///
-/// This mimics what PDFium's fallback mechanism would do - map character codes to
-/// appropriate mathematical symbols based on font context and mathematical standards.
-///
-/// This system detects when mathematical fonts have corrupted subset mappings (indicated
-/// by missing glyph names "N/A" in our font analysis) and applies the same fallback
-/// logic that PDFium's rendering engine uses.
-fn get_mathematical_symbol_correction(unicode_value: u32, font_name: &str) -> Option<char> {
-    // Implement font subset corruption detection and correction
-    if is_font_subset_corrupted(font_name, unicode_value) {
-        return apply_character_correction(unicode_value, font_name);
-    }
-
-    // If no corruption detected, no correction needed
-    None
-}
-
-/// Detects if a font subset has corrupted glyph mappings that would trigger PDFium's fallback
-///
-/// This is based on our font analysis showing mathematical fonts with:
-/// - Missing glyph names ("N/A")
-/// - Wrong Unicode mappings for mathematical symbols
-/// - Subset fonts without proper ToUnicode CMaps
-fn is_font_subset_corrupted(font_name: &str, unicode_value: u32) -> bool {
-    // Check for fonts that commonly have h/i → parentheses corruption pattern
-    // This includes symbol fonts but NOT regular text fonts or mathematical italic fonts
-    let is_corrupted_font = font_name.contains("CMSY") ||  // Computer Modern Symbol - actual symbols
-                           font_name.contains("TimesNewRomanPSMT") ||  // Times fonts with corruption
-                           font_name.contains("Symbol") ||  // Generic symbol fonts
-                           (font_name.contains("+") && font_name.len() > 10 && !font_name.contains("NimbusRomNo9L")); // Subset fonts (+ prefix) but exclude NimbusRomNo9L
-                                                                                                                      // CMMI removed - these are mathematical italic fonts for variables, not corrupted symbols
-                                                                                                                      // NimbusRomNo9L removed - this is a regular text font that only needs ligature corrections via glyph mapping
-
-    // Debug: Always log when checking fonts with h/i characters
-    if unicode_value == 0x68 || unicode_value == 0x69 {
-        let unicode_char = unicode_value as u8 as char;
-        debug_print!(
-            "🔍 CORRUPTION CHECK: Font '{font_name}' Unicode 0x{unicode_value:04X} '{unicode_char}' - is_corrupted_font: {is_corrupted_font}"
-        );
-
-        // Extra logging for debugging the specific issue
-        if unicode_value == 0x69 {
-            debug_print!(
-                "🎯 FOUND 'i' CHARACTER: Font '{font_name}' - Will this be corrected? {is_corrupted_font}"
-            );
-        }
-    }
-
-    if !is_corrupted_font {
-        return false;
-    }
-
-    // Check for specific corruption patterns we've identified
-    match unicode_value {
-        0x68 | 0x69 => {
-            // 'h' and 'i' Unicode values in corrupted fonts are often parentheses
-            // This is especially true for symbol fonts and corrupted subset fonts
-            debug_print!("🔍 GLYPH CORRUPTION DETECTED: Font '{}' has Unicode 0x{:04X} ({}), corrupted subset - should be parenthesis",
-                     font_name, unicode_value, unicode_value as u8 as char);
-            true
-        }
-        _ => false, // Add more corruption patterns as we discover them
-    }
-}
-
-/// Applies character correction for corrupted font mappings
-///
-/// Fixes corrupted character mappings in PDF fonts where letters appear
-/// instead of mathematical symbols due to subset font corruption.
-fn apply_character_correction(unicode_value: u32, font_name: &str) -> Option<char> {
-    debug_print!(
-        "🔧 APPLYING CHARACTER CORRECTION: Font '{font_name}', Unicode 0x{unicode_value:04X}"
-    );
-
-    // Apply h/i → parentheses mapping for all corrupted fonts
-    let is_corrupted_font = font_name.contains("CMSY") ||
-                           font_name.contains("CMMI12") ||
-                           // REMOVED: NimbusRomNo9L - this is a regular text font, not corrupted
-                           font_name.contains("TimesNewRomanPSMT") ||
-                           font_name.contains("Symbol") ||
-                           (font_name.contains("+") && font_name.len() > 10 && !font_name.contains("NimbusRomNo9L"));
-
-    if is_corrupted_font {
-        match unicode_value {
-            0x68 => {
-                debug_print!(
-                    "   └── CHARACTER CORRECTION: {font_name} 0x68 → '(' (LEFT PARENTHESIS)"
-                );
-                Some('(')
-            }
-            0x69 => {
-                debug_print!(
-                    "   └── CHARACTER CORRECTION: {font_name} 0x69 → ')' (RIGHT PARENTHESIS)"
-                );
-                Some(')')
-            }
-            _ => None,
-        }
-    } else {
-        debug_print!(
-            "   └── NO CORRECTION NEEDED: Font '{font_name}' - not in corrupted font list"
-        );
-        None
-    }
-}
+// REMOVED: get_mathematical_symbol_correction() function
+// No longer needed - universal corrector handles all mathematical symbol corrections
 
 #[derive(Debug, Default, Clone, Deserialize, Serialize)]
 pub struct BBox {

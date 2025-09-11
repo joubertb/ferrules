@@ -170,8 +170,6 @@ impl GlyphNameResolver {
         // system fonts would return "i" for 0x69, not "parenright"
         // These are mathematical variables, not symbols, so we should NOT correct them
 
-        // REMOVED: NimbusRomNo9L glyph mappings - these are regular text fonts, not corrupted
-
         // Default: assume standard glyph names for regular fonts
         match unicode_value {
             0x0068 => Some("h".to_string()),
