@@ -36,17 +36,7 @@ const SPAN_SPACING_THRESHOLD: f32 = 2.0; // 2 points
 const CLUSTERING_Y_THRESHOLD: f32 = 5.0; // 5 points
 
 // === Proportional Movement Limits ===
-/// Upward movement limit for subscripts as fraction of font size
-const SUBSCRIPT_UPWARD_LIMIT: f32 = 0.12; // 12% of font size
-
-/// Upward movement limit for superscripts as fraction of font size  
-const SUPERSCRIPT_UPWARD_LIMIT: f32 = 0.135; // 13.5% of font size
-
-/// Lenient upward movement limit for footnote superscripts as fraction of font size
-const FOOTNOTE_SUPERSCRIPT_UPWARD_LIMIT: f32 = 0.25; // 25% of font size for footnote markers
-
-/// Downward movement limit for scripts as fraction of font size
-const SCRIPT_DOWNWARD_LIMIT: f32 = 2.0; // 200% of font size
+// Note: Legacy threshold-based limits have been replaced with composite scoring
 
 // === Font Size Ratios ===
 /// Very small font threshold - fonts smaller than this get special handling
@@ -217,68 +207,6 @@ fn is_footnote_marker(text: &str) -> bool {
     false
 }
 
-/// Common script detection logic shared between subscript and superscript detection
-///
-/// Returns (is_script, rejection_reasons) tuple
-fn is_real_script_common(
-    current_span: &CharSpan,
-    baseline_diff: f32,
-    base_font_size: f32,
-    _script_type: &str,  // "subscript" or "superscript" for debug messages
-    upward_limit: f32,   // Max upward movement as fraction of font size
-    downward_limit: f32, // Max downward movement as fraction of font size
-) -> (bool, Vec<String>) {
-    let font_size_ratio = current_span.font_size / base_font_size;
-    let relative_baseline_shift = baseline_diff / current_span.font_size;
-
-    // Skip empty or whitespace-only text
-    let text_trimmed = current_span.text.trim();
-    if text_trimmed.is_empty() {
-        return (false, vec!["empty_text".to_string()]);
-    }
-
-    // Check movement limits
-    let mut rejection_reasons = Vec::new();
-
-    // Check upward movement limit
-    if baseline_diff < 0.0 && relative_baseline_shift < -upward_limit {
-        rejection_reasons.push(format!(
-            "upward_too_large({relative_baseline_shift:.3}<-{upward_limit})"
-        ));
-    }
-
-    // Check downward movement limit
-    if baseline_diff > 0.0 && relative_baseline_shift > downward_limit {
-        rejection_reasons.push(format!(
-            "downward_too_large({relative_baseline_shift:.3}>{downward_limit})"
-        ));
-    }
-
-    // Early return if movement limits violated
-    if !rejection_reasons.is_empty() {
-        return (false, rejection_reasons);
-    }
-
-    // Check core requirements
-    let has_smaller_font = font_size_ratio < FONT_SIZE_SCRIPT_THRESHOLD;
-    let has_significant_shift = relative_baseline_shift.abs() > PROPORTIONAL_SCRIPT_THRESHOLD;
-
-    if !has_smaller_font {
-        rejection_reasons.push(format!(
-            "font_too_large({font_size_ratio:.3}>{FONT_SIZE_SCRIPT_THRESHOLD})"
-        ));
-    }
-    if !has_significant_shift {
-        rejection_reasons.push(format!(
-            "shift_too_small({relative_baseline_shift:.3}abs<{PROPORTIONAL_SCRIPT_THRESHOLD})"
-        ));
-    }
-
-    let is_likely_script = has_smaller_font && has_significant_shift;
-
-    (is_likely_script, rejection_reasons)
-}
-
 /// Check if this baseline/font change represents a real superscript based on positioning and font metrics
 fn is_real_superscript(
     current_span: &CharSpan,
@@ -296,33 +224,57 @@ fn is_real_superscript(
         return false;
     }
 
-    // Special case: Use lenient threshold for footnote markers appearing first
-    let upward_limit = if is_first_span && is_footnote_marker(&current_span.text) {
-        FOOTNOTE_SUPERSCRIPT_UPWARD_LIMIT
+    let text_trimmed = current_span.text.trim();
+    if text_trimmed.is_empty() {
+        return false;
+    }
+
+    // Apply composite scoring (ChatGPT approach)
+    // Normalize by BASE font size, not current span's font size
+    let v = sequential_diff / base_font_size; // Normalized vertical offset (negative for upward)
+    let s = if current_span.font_size < base_font_size {
+        1.0 - (current_span.font_size / base_font_size) // Font shrinkage
     } else {
-        SUPERSCRIPT_UPWARD_LIMIT
+        0.0
     };
 
-    // Use common detection logic with appropriate upward limit
-    let (is_likely_superscript, rejection_reasons) = is_real_script_common(
-        current_span,
-        sequential_diff,
-        base_font_size,
-        "superscript",
-        upward_limit,
-        f32::INFINITY, // downward_limit: no limit on upward movement
-    );
+    // Calculate superscript confidence
+    let raw_sup = VERTICAL_WEIGHT * (-v).max(0.0) + SIZE_WEIGHT * s;
+    let denom = VERTICAL_WEIGHT * VERTICAL_REF + SIZE_WEIGHT * SIZE_REF;
+    let sup_confidence =
+        (raw_sup / denom).clamp(CONFIDENCE_NORMALIZATION_MIN, CONFIDENCE_NORMALIZATION_MAX);
 
-    let text_trimmed = current_span.text.trim();
+    // More lenient threshold for footnote markers
+    let confidence_threshold = if is_first_span && is_footnote_marker(text_trimmed) {
+        0.25 // Lower threshold for footnotes
+    } else {
+        COMPOSITE_SUBSCRIPT_CONFIDENCE_THRESHOLD // 0.3
+    };
+
+    // Require both confidence threshold AND smaller font
+    let has_smaller_font = current_span.font_size < base_font_size * FONT_SIZE_SCRIPT_THRESHOLD;
+    let is_likely_superscript = sup_confidence > confidence_threshold && has_smaller_font;
+
     let font_size_ratio = current_span.font_size / base_font_size;
     let relative_sequential_shift = sequential_diff / current_span.font_size;
 
     let decision_detail = if is_likely_superscript {
-        "REAL".to_string()
-    } else if rejection_reasons.is_empty() {
-        "? UNKNOWN_REJECT".to_string()
+        format!(
+            "COMPOSITE_REAL (v={:.3} s={:.3} conf={:.3})",
+            v, s, sup_confidence
+        )
+    } else if sup_confidence <= confidence_threshold {
+        format!(
+            "LOW_CONFIDENCE (conf={:.3}<{:.3})",
+            sup_confidence, confidence_threshold
+        )
+    } else if !has_smaller_font {
+        format!(
+            "FONT_TOO_LARGE (ratio={:.3}>={:.3})",
+            font_size_ratio, FONT_SIZE_SCRIPT_THRESHOLD
+        )
     } else {
-        format!("ARTIFACT ({})", rejection_reasons.join(", "))
+        "UNKNOWN_REJECT".to_string()
     };
 
     debug_print!(
@@ -544,26 +496,53 @@ fn is_real_subscript(
         return false;
     }
 
-    // Use common detection logic with subscript-specific limits
-    let (is_likely_subscript, rejection_reasons) = is_real_script_common(
-        current_span,
-        sequential_diff,
-        base_font_size,
-        "subscript",
-        SUBSCRIPT_UPWARD_LIMIT, // upward_limit: 12% of font size upward movement max
-        SCRIPT_DOWNWARD_LIMIT,  // downward_limit: 200% of font size downward movement max
-    );
-
     let text_trimmed = current_span.text.trim();
+    if text_trimmed.is_empty() {
+        return false;
+    }
+
+    // Apply composite scoring (ChatGPT approach)
+    // Normalize by BASE font size, not current span's font size
+    let v = sequential_diff / base_font_size; // Normalized vertical offset (positive for downward)
+    let s = if current_span.font_size < base_font_size {
+        1.0 - (current_span.font_size / base_font_size) // Font shrinkage
+    } else {
+        0.0
+    };
+
+    // Calculate subscript confidence
+    let raw_sub = VERTICAL_WEIGHT * v.max(0.0) + SIZE_WEIGHT * s;
+    let denom = VERTICAL_WEIGHT * VERTICAL_REF + SIZE_WEIGHT * SIZE_REF;
+    let sub_confidence =
+        (raw_sub / denom).clamp(CONFIDENCE_NORMALIZATION_MIN, CONFIDENCE_NORMALIZATION_MAX);
+
+    // Standard threshold for subscripts
+    let confidence_threshold = COMPOSITE_SUBSCRIPT_CONFIDENCE_THRESHOLD; // 0.3
+
+    // Require both confidence threshold AND smaller font
+    let has_smaller_font = current_span.font_size < base_font_size * FONT_SIZE_SCRIPT_THRESHOLD;
+    let is_likely_subscript = sub_confidence > confidence_threshold && has_smaller_font;
+
     let font_size_ratio = current_span.font_size / base_font_size;
     let relative_sequential_shift = sequential_diff / current_span.font_size;
 
     let decision_detail = if is_likely_subscript {
-        "✓ REAL_SUBSCRIPT".to_string()
-    } else if rejection_reasons.is_empty() {
-        "? UNKNOWN_REJECT".to_string()
+        format!(
+            "✓ COMPOSITE_REAL (v={:.3} s={:.3} conf={:.3})",
+            v, s, sub_confidence
+        )
+    } else if sub_confidence <= confidence_threshold {
+        format!(
+            "LOW_CONFIDENCE (conf={:.3}<{:.3})",
+            sub_confidence, confidence_threshold
+        )
+    } else if !has_smaller_font {
+        format!(
+            "FONT_TOO_LARGE (ratio={:.3}>={:.3})",
+            font_size_ratio, FONT_SIZE_SCRIPT_THRESHOLD
+        )
     } else {
-        format!("✗ ARTIFACT ({})", rejection_reasons.join(", "))
+        "UNKNOWN_REJECT".to_string()
     };
 
     debug_print!(
