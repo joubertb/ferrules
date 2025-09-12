@@ -1,7 +1,5 @@
 use std::collections::HashMap;
 
-use tracing::instrument;
-
 use crate::{
     blocks::{Block, BlockType, ImageBlock, List, TextBlock, Title, TitleLevel},
     correction, debug_print,
@@ -88,6 +86,43 @@ const LAYOUT_DISTANCE_Y_WEIGHT: f32 = 1.0;
 /// the nearest layout block exceeds this threshold, the line will not be assigned to any block.
 /// This helps prevent incorrect assignments of text lines that are too far from layout blocks.
 const MAXIMUM_ASSIGNMENT_DISTANCE: f32 = 20.0;
+
+/// Detects if text starts with a figure caption pattern
+/// TODO: WORKAROUND - The ONNX model should classify these as ElementType::Caption
+/// This should be removed once the model is retrained to properly identify captions
+fn is_figure_caption(text: &str) -> bool {
+    text.starts_with("Figure ") || text.starts_with("Fig. ") || text.starts_with("Image ")
+}
+
+/// Detects text blocks that are likely embedded within a figure
+/// TODO: WORKAROUND - The ONNX model should detect complete figure boundaries
+/// including embedded text, not just the formula/image portion
+fn is_likely_figure_embedded_text(element: &Element) -> bool {
+    // Check if text block is spatially between main columns (figure area)
+    // Main text columns typically at x ≈ 50-75 or x ≈ 314
+    // Figure text often at x ≈ 327-483
+    let block_x = element.bbox.x0;
+    let is_between_columns = block_x > 300.0 && block_x < 550.0;
+
+    // Check for attribution patterns
+    let text = &element.text_block.text;
+    let has_attribution = text.contains("(from ") || text.contains("(source:");
+
+    is_between_columns || has_attribution
+}
+
+/// Detects if a text block is likely embedded within a figure (works on Blocks)
+fn is_likely_figure_embedded_text_from_block(block: &Block) -> bool {
+    let block_x = block.bbox.x0;
+    let is_between_columns = block_x > 300.0 && block_x < 550.0;
+
+    if let crate::blocks::BlockType::TextBlock(text) = &block.kind {
+        let has_attribution = text.text.contains("(from ") || text.text.contains("(source:");
+        is_between_columns || has_attribution
+    } else {
+        false
+    }
+}
 
 fn merge_or_create_elements(
     elements: &mut Vec<Element>,
@@ -258,18 +293,110 @@ pub(crate) fn merge_remaining(
     }
 }
 
-#[instrument(skip_all)]
+/// Post-process blocks to create Figure blocks from Image blocks with nearby embedded text
+/// This handles cases where the ONNX model correctly identifies images but misses embedded text
+fn post_process_figure_blocks(blocks: &mut Vec<Block>) {
+    let mut indices_to_remove = Vec::new();
+    let mut figures_to_add = Vec::new();
+
+    // Find Image blocks and check for nearby embedded text
+    for (i, block) in blocks.iter().enumerate() {
+        if let crate::blocks::BlockType::Image(image_block) = &block.kind {
+            let mut figure_elements = Vec::new();
+            let mut figure_bbox = block.bbox.clone();
+            let mut embedded_indices = Vec::new();
+
+            // Look backwards for embedded text blocks
+            for j in (0..i).rev() {
+                if let crate::blocks::BlockType::TextBlock(text_block) = &blocks[j].kind {
+                    // Check if this text block should be part of the figure
+                    if is_likely_figure_embedded_text_from_block(&blocks[j]) {
+                        figure_elements.insert(0, text_block.text.clone());
+                        figure_bbox.merge(&blocks[j].bbox);
+                        embedded_indices.push(j);
+                    } else {
+                        // Stop when we hit regular text that's not in the figure area
+                        break;
+                    }
+                } else {
+                    // Stop at any other block type
+                    break;
+                }
+            }
+
+            // If we found embedded text, create a Figure block
+            if !figure_elements.is_empty() {
+                let figure_block = Block {
+                    id: block.id,
+                    kind: crate::blocks::BlockType::Figure(crate::blocks::FigureBlock {
+                        id: image_block.id,
+                        embedded_texts: figure_elements,
+                        image_bbox: Some(block.bbox.clone()),
+                        caption: image_block.caption.clone(),
+                    }),
+                    pages_id: block.pages_id.clone(),
+                    bbox: figure_bbox,
+                };
+
+                figures_to_add.push((i, figure_block));
+                indices_to_remove.push(i); // Remove the original Image block
+                indices_to_remove.extend(embedded_indices); // Remove the embedded text blocks
+            }
+        }
+    }
+
+    // Sort indices in reverse order for safe removal
+    indices_to_remove.sort_by(|a, b| b.cmp(a));
+    indices_to_remove.dedup();
+
+    // Remove blocks (in reverse order to maintain indices)
+    for &index in &indices_to_remove {
+        if index < blocks.len() {
+            blocks.remove(index);
+        }
+    }
+
+    // Add the Figure blocks
+    for (original_index, figure_block) in figures_to_add {
+        // Calculate where to insert (accounting for removed blocks)
+        let removed_before = indices_to_remove
+            .iter()
+            .filter(|&&idx| idx < original_index)
+            .count();
+        let insert_index = original_index.saturating_sub(removed_before);
+
+        if insert_index <= blocks.len() {
+            blocks.insert(insert_index, figure_block);
+        } else {
+            blocks.push(figure_block);
+        }
+    }
+}
+
 pub(crate) fn merge_elements_into_blocks(
     elements: Vec<Element>,
     title_level: HashMap<(PageID, ElementID), TitleLevel>,
 ) -> anyhow::Result<Vec<Block>> {
+    // FIXME: This function contains WORKAROUNDS for ONNX model limitations
+    // The layout detection model has two major issues:
+    // 1. It incorrectly classifies figure captions as "Text" instead of "Caption"
+    // 2. It fails to detect complete figure boundaries when figures contain embedded text
+    //
+    // Proper fix: Retrain the ONNX model to:
+    // - Correctly classify "Figure N:" patterns as Caption type
+    // - Detect complete figure boundaries including ALL embedded text
+    // - Properly associate captions with their corresponding images
+    //
+    // This heuristic-based workaround should be removed once the model is fixed
+    // Track at: https://github.com/[repo]/issues/[TODO: create issue]
+
     debug_print!(
         "🔧 merge_elements_into_blocks CALLED with {} elements",
         elements.len()
     );
     let mut element_it = elements.into_iter().peekable();
 
-    let mut blocks = Vec::new();
+    let mut blocks: Vec<Block> = Vec::new();
     let mut block_id = 0;
     let mut image_id = 0;
     while let Some(mut curr_el) = element_it.next() {
@@ -282,12 +409,117 @@ pub(crate) fn merge_elements_into_blocks(
             curr_el.line_spans.len()
         );
 
+        if matches!(curr_el.kind, crate::entities::ElementType::Image) {
+            debug_print!("🖼️ Found Image element!");
+        }
+
         match &mut curr_el.kind {
             ElementType::Text => {
                 debug_print!(
                     "📄 TEXT ELEMENT: {}",
                     curr_el.text_block.text.chars().take(50).collect::<String>()
                 );
+
+                // WORKAROUND: Enhanced figure detection logic
+                // Check if this is a figure caption, or if we should start collecting figure elements
+                if is_figure_caption(&curr_el.text_block.text) {
+                    debug_print!(
+                        "🖼️ DETECTED figure caption: {}",
+                        &curr_el.text_block.text.chars().take(80).collect::<String>()
+                    );
+
+                    // Look backward for elements that might be part of this figure
+                    let mut figure_elements = Vec::new();
+                    let mut figure_bbox = curr_el.bbox.clone();
+                    let mut figure_image_bbox = None;
+
+                    // Collect recent blocks that might be part of this figure
+                    let mut blocks_to_remove = Vec::new();
+                    for (i, existing_block) in blocks.iter().enumerate().rev() {
+                        match &existing_block.kind {
+                            crate::blocks::BlockType::Image(_) => {
+                                debug_print!("🖼️ Found Image block to include in figure");
+                                figure_image_bbox = Some(existing_block.bbox.clone());
+                                figure_bbox.merge(&existing_block.bbox);
+                                blocks_to_remove.push(i);
+                                break; // Stop after finding the image
+                            }
+                            crate::blocks::BlockType::TextBlock(text) => {
+                                // Check if this text block is in the figure area (using spatial heuristics)
+                                let text_x = existing_block.bbox.x0;
+                                let is_in_figure_area = text_x > 300.0 && text_x < 550.0;
+                                let has_attribution =
+                                    text.text.contains("(from ") || text.text.contains("(source:");
+
+                                if is_in_figure_area || has_attribution {
+                                    debug_print!(
+                                        "🖼️ Including text block in figure: {}",
+                                        text.text.chars().take(50).collect::<String>()
+                                    );
+                                    figure_elements.insert(0, text.text.clone()); // Insert at beginning to maintain order
+                                    figure_bbox.merge(&existing_block.bbox);
+                                    blocks_to_remove.push(i);
+                                } else {
+                                    // Stop when we hit regular text that's not in the figure area
+                                    break;
+                                }
+                            }
+                            _ => break, // Stop at any other block type
+                        }
+                    }
+
+                    // Remove the blocks that we're incorporating into the figure (in reverse order to maintain indices)
+                    for &i in blocks_to_remove.iter().rev() {
+                        blocks.remove(i);
+                    }
+
+                    // Process the figure caption text
+                    let caption_text = if !curr_el.line_spans.is_empty() {
+                        debug_print!(
+                            "🖼️ Processing figure caption with {} line_spans",
+                            curr_el.line_spans.len()
+                        );
+                        let original_text = curr_el
+                            .line_spans
+                            .iter()
+                            .map(|line_spans| concatenate_spans_with_spacing(line_spans))
+                            .collect::<Vec<String>>()
+                            .join(" ");
+                        crate::modtext::process_text_with_spans(&original_text, &curr_el.line_spans)
+                    } else {
+                        apply_corrections_to_text(curr_el.text_block.text.clone())
+                    };
+
+                    // Create a comprehensive Figure block
+                    let figure_block = Block {
+                        id: block_id,
+                        kind: crate::blocks::BlockType::Figure(crate::blocks::FigureBlock {
+                            id: image_id,
+                            embedded_texts: figure_elements,
+                            image_bbox: figure_image_bbox,
+                            caption: Some(caption_text),
+                        }),
+                        pages_id: vec![curr_el.page_id],
+                        bbox: figure_bbox,
+                    };
+
+                    debug_print!("🖼️ Created Figure block with {} embedded texts", {
+                        if let crate::blocks::BlockType::Figure(ref fig) = figure_block.kind {
+                            fig.embedded_texts.len()
+                        } else {
+                            0
+                        }
+                    });
+
+                    image_id += 1;
+                    block_id += 1;
+                    blocks.push(figure_block);
+                    continue;
+                } else if is_likely_figure_embedded_text(&curr_el) {
+                    // This might be embedded figure text, but we need to look ahead to see if there's a figure caption
+                    // For now, we'll process it as regular text and let the caption detection handle it
+                    debug_print!("🖼️ Potential figure embedded text detected (will be handled by caption detection)");
+                }
 
                 // Apply subscript detection to TEXT elements with line_spans (mathematical content)
                 // Get truly original text by reconstructing from raw CharSpans (before any HTML tag processing)
@@ -608,29 +840,265 @@ pub(crate) fn merge_elements_into_blocks(
                 }
             }
             ElementType::Image => {
+                debug_print!("🖼️ Processing Image element - checking for embedded text");
+                // Check if we should create a Figure block by looking for nearby embedded text
+                let mut figure_elements = Vec::new();
+                let mut figure_bbox = curr_el.bbox.clone();
+
+                // Look backward for elements that might be part of this figure
+                // We'll collect the indices but only remove them when we actually create a Figure block
+                let blocks_to_check: Vec<_> = blocks.iter().enumerate().rev().collect();
+                let mut blocks_to_remove = Vec::new();
+
+                for (i, existing_block) in blocks_to_check {
+                    debug_print!(
+                        "🖼️ Checking block {} ({}): {:?}",
+                        existing_block.id,
+                        i,
+                        &existing_block.kind
+                    );
+                    match &existing_block.kind {
+                        crate::blocks::BlockType::TextBlock(text) => {
+                            debug_print!(
+                                "🖼️ TextBlock {} at x={:.1}: {}",
+                                existing_block.id,
+                                existing_block.bbox.x0,
+                                text.text.chars().take(50).collect::<String>()
+                            );
+                            // Check if this text block is likely embedded in the figure
+                            if is_likely_figure_embedded_text_from_block(existing_block) {
+                                debug_print!(
+                                    "🖼️ ✅ MATCHED - Found embedded text for figure: {}",
+                                    text.text.chars().take(50).collect::<String>()
+                                );
+                                figure_elements.insert(0, text.text.clone()); // Insert at beginning to maintain order
+                                figure_bbox.merge(&existing_block.bbox);
+                                blocks_to_remove.push(i);
+                                debug_print!(
+                                    "🖼️ Added block {} to removal list at index {}",
+                                    existing_block.id,
+                                    i
+                                );
+                            } else {
+                                debug_print!("🖼️ ❌ NO MATCH - Not embedded text, stopping search");
+                                // Stop when we hit regular text that's not in the figure area
+                                break;
+                            }
+                        }
+                        _ => {
+                            debug_print!("🖼️ Non-TextBlock, stopping search");
+                            break; // Stop at any other block type
+                        }
+                    }
+                }
+
                 match element_it.peek() {
                     None => {
-                        let block = Block {
-                            id: block_id,
-                            kind: crate::blocks::BlockType::Image(ImageBlock {
-                                id: image_id,
-                                caption: None,
-                            }),
-                            pages_id: vec![curr_el.page_id],
-                            bbox: curr_el.bbox,
-                        };
-                        element_it.next();
-                        image_id += 1;
-                        block_id += 1;
-                        blocks.push(block);
+                        // Check if we found embedded text to create a Figure block
+                        if !figure_elements.is_empty() {
+                            debug_print!(
+                                "🖼️ Removing {} blocks: {:?}",
+                                blocks_to_remove.len(),
+                                blocks_to_remove
+                            );
+                            // Remove the blocks that we're incorporating into the figure (in reverse order)
+                            for &i in blocks_to_remove.iter().rev() {
+                                if i < blocks.len() {
+                                    debug_print!("🖼️ Removing block at index {}", i);
+                                    blocks.remove(i);
+                                } else {
+                                    debug_print!(
+                                        "🖼️ WARNING: Index {} out of bounds for removal",
+                                        i
+                                    );
+                                }
+                            }
+
+                            let embedded_count = figure_elements.len();
+                            debug_print!(
+                                "🖼️ Created Figure block with {} embedded texts",
+                                embedded_count
+                            );
+                            // Create Figure block with embedded texts
+                            let block = Block {
+                                id: block_id,
+                                kind: crate::blocks::BlockType::Figure(
+                                    crate::blocks::FigureBlock {
+                                        id: image_id,
+                                        embedded_texts: figure_elements,
+                                        image_bbox: Some(curr_el.bbox.clone()),
+                                        caption: None,
+                                    },
+                                ),
+                                pages_id: vec![curr_el.page_id],
+                                bbox: figure_bbox,
+                            };
+                            image_id += 1;
+                            block_id += 1;
+                            blocks.push(block);
+                        } else {
+                            // Regular Image block without embedded text
+                            let block = Block {
+                                id: block_id,
+                                kind: crate::blocks::BlockType::Image(ImageBlock {
+                                    id: image_id,
+                                    caption: None,
+                                }),
+                                pages_id: vec![curr_el.page_id],
+                                bbox: curr_el.bbox,
+                            };
+                            image_id += 1;
+                            block_id += 1;
+                            blocks.push(block);
+                        }
                     }
                     Some(next_el) => {
                         match &next_el.kind {
+                            // WORKAROUND: Check if next Text element is actually a figure caption
+                            crate::entities::ElementType::Text => {
+                                if is_figure_caption(&next_el.text_block.text) {
+                                    // This Text is actually a figure caption that was misclassified
+                                    let next_el = element_it.next().unwrap();
+                                    curr_el.bbox.merge(&next_el.bbox);
+                                    figure_bbox.merge(&next_el.bbox);
+
+                                    // Process the figure caption with script detection
+                                    let caption_text = if !next_el.line_spans.is_empty() {
+                                        debug_print!(
+                                            "🖼️ FIGURE CAPTION (misclassified Text): Processing caption with {} line_spans",
+                                            next_el.line_spans.len()
+                                        );
+                                        let original_text = next_el
+                                            .line_spans
+                                            .iter()
+                                            .map(|line_spans| {
+                                                concatenate_spans_with_spacing(line_spans)
+                                            })
+                                            .collect::<Vec<String>>()
+                                            .join(" ");
+                                        crate::modtext::process_text_with_spans(
+                                            &original_text,
+                                            &next_el.line_spans,
+                                        )
+                                    } else {
+                                        apply_corrections_to_text(next_el.text_block.text.clone())
+                                    };
+
+                                    // Check if we found embedded text to create a Figure block
+                                    let block = if !figure_elements.is_empty() {
+                                        // Remove the blocks that we're incorporating into the figure (in reverse order)
+                                        debug_print!(
+                                            "🖼️ Removing {} blocks, current blocks.len()={}",
+                                            blocks_to_remove.len(),
+                                            blocks.len()
+                                        );
+                                        for &i in blocks_to_remove.iter().rev() {
+                                            debug_print!(
+                                                "🖼️ Attempting to remove block at index {}",
+                                                i
+                                            );
+                                            if i < blocks.len() {
+                                                blocks.remove(i);
+                                            } else {
+                                                debug_print!("🖼️ WARNING: Index {} out of bounds for blocks.len()={}", i, blocks.len());
+                                            }
+                                        }
+
+                                        let embedded_count = figure_elements.len();
+                                        debug_print!("🖼️ Created Figure block with {} embedded texts and caption", embedded_count);
+                                        // Create Figure block with embedded texts and caption
+                                        Block {
+                                            id: block_id,
+                                            kind: crate::blocks::BlockType::Figure(
+                                                crate::blocks::FigureBlock {
+                                                    id: image_id,
+                                                    embedded_texts: figure_elements,
+                                                    image_bbox: Some(curr_el.bbox.clone()),
+                                                    caption: Some(caption_text),
+                                                },
+                                            ),
+                                            pages_id: vec![curr_el.page_id],
+                                            bbox: figure_bbox,
+                                        }
+                                    } else {
+                                        // Regular Image block with caption
+                                        Block {
+                                            id: block_id,
+                                            kind: crate::blocks::BlockType::Image(ImageBlock {
+                                                id: image_id,
+                                                caption: Some(caption_text),
+                                            }),
+                                            pages_id: vec![curr_el.page_id],
+                                            bbox: curr_el.bbox,
+                                        }
+                                    };
+
+                                    image_id += 1;
+                                    block_id += 1;
+                                    blocks.push(block);
+                                } else {
+                                    // Check if we found embedded text to create a Figure block
+                                    let block = if !figure_elements.is_empty() {
+                                        // Remove the blocks that we're incorporating into the figure (in reverse order)
+                                        debug_print!(
+                                            "🖼️ Removing {} blocks, current blocks.len()={}",
+                                            blocks_to_remove.len(),
+                                            blocks.len()
+                                        );
+                                        for &i in blocks_to_remove.iter().rev() {
+                                            debug_print!(
+                                                "🖼️ Attempting to remove block at index {}",
+                                                i
+                                            );
+                                            if i < blocks.len() {
+                                                blocks.remove(i);
+                                            } else {
+                                                debug_print!("🖼️ WARNING: Index {} out of bounds for blocks.len()={}", i, blocks.len());
+                                            }
+                                        }
+
+                                        let embedded_count = figure_elements.len();
+                                        debug_print!(
+                                            "🖼️ Created Figure block with {} embedded texts",
+                                            embedded_count
+                                        );
+                                        // Create Figure block with embedded texts
+                                        Block {
+                                            id: block_id,
+                                            kind: crate::blocks::BlockType::Figure(
+                                                crate::blocks::FigureBlock {
+                                                    id: image_id,
+                                                    embedded_texts: figure_elements,
+                                                    image_bbox: Some(curr_el.bbox.clone()),
+                                                    caption: None,
+                                                },
+                                            ),
+                                            pages_id: vec![curr_el.page_id],
+                                            bbox: figure_bbox,
+                                        }
+                                    } else {
+                                        // Regular Image block without embedded text
+                                        Block {
+                                            id: block_id,
+                                            kind: crate::blocks::BlockType::Image(ImageBlock {
+                                                id: image_id,
+                                                caption: None,
+                                            }),
+                                            pages_id: vec![curr_el.page_id],
+                                            bbox: curr_el.bbox,
+                                        }
+                                    };
+                                    image_id += 1;
+                                    block_id += 1;
+                                    blocks.push(block);
+                                }
+                            }
                             crate::entities::ElementType::FootNote
                             | crate::entities::ElementType::Caption => {
                                 // TODO: check if there is a case where there is multiple caption associated with the same image
                                 let next_el = element_it.next().unwrap();
                                 curr_el.bbox.merge(&next_el.bbox);
+                                figure_bbox.merge(&next_el.bbox);
 
                                 // FIXED: Apply script detection to Image caption (Image→Caption case)
                                 let caption_text = if !next_el.line_spans.is_empty() {
@@ -654,29 +1122,85 @@ pub(crate) fn merge_elements_into_blocks(
                                     apply_corrections_to_text(next_el.text_block.text.clone())
                                 };
 
-                                let block = Block {
-                                    id: block_id,
-                                    kind: crate::blocks::BlockType::Image(ImageBlock {
-                                        id: image_id,
-                                        caption: Some(caption_text),
-                                    }),
-                                    pages_id: vec![curr_el.page_id],
-                                    bbox: curr_el.bbox,
+                                // Check if we found embedded text to create a Figure block
+                                let block = if !figure_elements.is_empty() {
+                                    // Remove the blocks that we're incorporating into the figure (in reverse order)
+                                    for &i in blocks_to_remove.iter().rev() {
+                                        blocks.remove(i);
+                                    }
+
+                                    debug_print!("🖼️ Created Figure block with {} embedded texts and caption", figure_elements.len());
+                                    // Create Figure block with embedded texts and caption
+                                    Block {
+                                        id: block_id,
+                                        kind: crate::blocks::BlockType::Figure(
+                                            crate::blocks::FigureBlock {
+                                                id: image_id,
+                                                embedded_texts: figure_elements,
+                                                image_bbox: Some(curr_el.bbox.clone()),
+                                                caption: Some(caption_text),
+                                            },
+                                        ),
+                                        pages_id: vec![curr_el.page_id],
+                                        bbox: figure_bbox,
+                                    }
+                                } else {
+                                    // Regular Image block with caption
+                                    Block {
+                                        id: block_id,
+                                        kind: crate::blocks::BlockType::Image(ImageBlock {
+                                            id: image_id,
+                                            caption: Some(caption_text),
+                                        }),
+                                        pages_id: vec![curr_el.page_id],
+                                        bbox: curr_el.bbox,
+                                    }
                                 };
+
                                 image_id += 1;
                                 block_id += 1;
                                 blocks.push(block);
                             }
                             _ => {
-                                let block = Block {
-                                    id: block_id,
-                                    kind: crate::blocks::BlockType::Image(ImageBlock {
-                                        id: image_id,
-                                        caption: None,
-                                    }),
-                                    pages_id: vec![curr_el.page_id],
-                                    bbox: curr_el.bbox,
+                                // Check if we found embedded text to create a Figure block
+                                let block = if !figure_elements.is_empty() {
+                                    // Remove the blocks that we're incorporating into the figure (in reverse order)
+                                    for &i in blocks_to_remove.iter().rev() {
+                                        blocks.remove(i);
+                                    }
+
+                                    let embedded_count = figure_elements.len();
+                                    debug_print!(
+                                        "🖼️ Created Figure block with {} embedded texts",
+                                        embedded_count
+                                    );
+                                    // Create Figure block with embedded texts
+                                    Block {
+                                        id: block_id,
+                                        kind: crate::blocks::BlockType::Figure(
+                                            crate::blocks::FigureBlock {
+                                                id: image_id,
+                                                embedded_texts: figure_elements,
+                                                image_bbox: Some(curr_el.bbox.clone()),
+                                                caption: None,
+                                            },
+                                        ),
+                                        pages_id: vec![curr_el.page_id],
+                                        bbox: figure_bbox,
+                                    }
+                                } else {
+                                    // Regular Image block
+                                    Block {
+                                        id: block_id,
+                                        kind: crate::blocks::BlockType::Image(ImageBlock {
+                                            id: image_id,
+                                            caption: None,
+                                        }),
+                                        pages_id: vec![curr_el.page_id],
+                                        bbox: curr_el.bbox,
+                                    }
                                 };
+
                                 image_id += 1;
                                 block_id += 1;
                                 blocks.push(block);
@@ -741,23 +1265,6 @@ pub(crate) fn merge_elements_into_blocks(
                 blocks.push(header_block);
             }
             ElementType::Footer => {
-                println!(
-                    "DEBUG: Footer has {} line_spans, text: '{}'",
-                    curr_el.line_spans.len(),
-                    curr_el.text_block.text
-                );
-                if !curr_el.line_spans.is_empty() {
-                    for (i, line_spans) in curr_el.line_spans.iter().enumerate() {
-                        println!("DEBUG: Line {}: {} spans", i, line_spans.len());
-                        for (j, span) in line_spans.iter().enumerate() {
-                            println!(
-                                "DEBUG:   Span {}: '{}' font_size={:.1} y={:.1}",
-                                j, span.text, span.font_size, span.bbox.y0
-                            );
-                        }
-                    }
-                }
-
                 // Get truly original text by reconstructing from raw CharSpans (before any HTML tag processing)
                 let original_text = if !curr_el.line_spans.is_empty() {
                     // Reconstruct original text from CharSpans
@@ -775,18 +1282,8 @@ pub(crate) fn merge_elements_into_blocks(
                     curr_el.text_block.text.clone()
                 };
 
-                let processed_text = if !curr_el.line_spans.is_empty() {
-                    println!("DEBUG: Processing footer with spans: '{}'", original_text);
-                    let result = crate::modtext::process_text_with_spans(
-                        &original_text,
-                        &curr_el.line_spans,
-                    );
-                    println!("DEBUG: Footer processing result: '{}'", result);
-                    result
-                } else {
-                    println!("DEBUG: Footer has no spans, using basic processing");
-                    crate::modtext::process_text_with_spans(&original_text, &curr_el.line_spans)
-                };
+                let processed_text =
+                    crate::modtext::process_text_with_spans(&original_text, &curr_el.line_spans);
 
                 let mut footer_block = Block {
                     id: block_id,
@@ -868,6 +1365,49 @@ pub(crate) fn merge_elements_into_blocks(
                 continue;
             }
         }
+    }
+
+    // Post-process to create Figure blocks from Image blocks with nearby embedded text
+    post_process_figure_blocks(&mut blocks);
+
+    // Remove TextBlocks that have content matching embedded texts in Figure blocks
+    let mut text_blocks_to_remove = Vec::new();
+    for (i, block) in blocks.iter().enumerate() {
+        if let crate::blocks::BlockType::TextBlock(text_block) = &block.kind {
+            // Check if this text matches any embedded text in Figure blocks
+            for other_block in blocks.iter() {
+                if let crate::blocks::BlockType::Figure(figure) = &other_block.kind {
+                    for embedded_text in &figure.embedded_texts {
+                        // Normalize both texts for comparison
+                        let text_normalized =
+                            text_block.text.trim().replace(&['\r', '\n', '\t'][..], " ");
+                        let text_normalized = text_normalized
+                            .split_whitespace()
+                            .collect::<Vec<_>>()
+                            .join(" ");
+                        let embedded_normalized =
+                            embedded_text.trim().replace(&['\r', '\n', '\t'][..], " ");
+                        let embedded_normalized = embedded_normalized
+                            .split_whitespace()
+                            .collect::<Vec<_>>()
+                            .join(" ");
+
+                        if text_normalized == embedded_normalized {
+                            text_blocks_to_remove.push(i);
+                            break;
+                        }
+                    }
+                    if text_blocks_to_remove.contains(&i) {
+                        break;
+                    }
+                }
+            }
+        }
+    }
+
+    // Remove duplicate TextBlocks in reverse order
+    for &index in text_blocks_to_remove.iter().rev() {
+        blocks.remove(index);
     }
 
     // Apply text corrections to all blocks after assembly is complete

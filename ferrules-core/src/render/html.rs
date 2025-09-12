@@ -109,6 +109,38 @@ impl Renderer for HTMLRenderer {
                     self.root_element.add_child(figure.into());
                 }
             }
+            BlockType::Figure(figure_block) => {
+                let mut figure_element = HtmlElement::new(HtmlTag::Figure);
+
+                // Add embedded texts as paragraphs within the figure
+                for embedded_text in &figure_block.embedded_texts {
+                    let p = HtmlElement::new(HtmlTag::ParagraphText)
+                        .with_child(embedded_text.as_str().into())
+                        .into();
+                    figure_element.add_child(p);
+                }
+
+                // Add the image if we have an image source path
+                if let Some(img_src_path) = &self.img_src_path {
+                    let img_src = img_src_path
+                        .join(figure_block.path())
+                        .to_str()
+                        .unwrap()
+                        .to_owned();
+                    let img = HtmlElement::new(HtmlTag::Image).with_image(img_src, "");
+                    figure_element.add_child(img.into());
+                }
+
+                // Add caption if present
+                if let Some(caption) = &figure_block.caption {
+                    let figcaption = HtmlElement::new(HtmlTag::Figcaption)
+                        .with_child(caption.as_str().into())
+                        .into();
+                    figure_element.add_child(figcaption);
+                }
+
+                self.root_element.add_child(figure_element.into());
+            }
             _ => {
                 debug_print!("not implemented yet")
             }

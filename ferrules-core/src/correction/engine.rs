@@ -163,6 +163,26 @@ impl TextCorrector for FerrulesCorrectionEngine {
                     }
                 }
             }
+            BlockType::Figure(figure) => {
+                // Correct embedded texts
+                for text in &mut figure.embedded_texts {
+                    if !text.is_empty() {
+                        let corrected = self.correct_text(text);
+                        if corrected != *text {
+                            *text = corrected;
+                        }
+                    }
+                }
+                // Correct caption if present
+                if let Some(caption) = &mut figure.caption {
+                    if !caption.is_empty() {
+                        let corrected = self.correct_text(caption);
+                        if corrected != *caption {
+                            *caption = corrected;
+                        }
+                    }
+                }
+            }
             _ => {
                 // No text content to correct (Image, Table)
             }

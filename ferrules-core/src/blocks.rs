@@ -17,6 +17,20 @@ impl ImageBlock {
     }
 }
 
+#[derive(Debug, Default, Deserialize, Serialize)]
+pub struct FigureBlock {
+    pub(crate) id: usize,
+    pub(crate) embedded_texts: Vec<String>,
+    pub(crate) image_bbox: Option<BBox>,
+    pub(crate) caption: Option<String>,
+}
+
+impl FigureBlock {
+    pub(crate) fn path(&self) -> String {
+        format!("fig_{}.png", self.id)
+    }
+}
+
 impl TextBlock {
     /// Get the text content of the block
     pub fn text(&self) -> &str {
@@ -72,6 +86,7 @@ pub enum BlockType {
     ListBlock(List),
     TextBlock(TextBlock),
     Image(ImageBlock),
+    Figure(FigureBlock),
     Table,
 }
 
@@ -161,6 +176,7 @@ impl Block {
             }
             BlockType::Title(_title) => todo!(),
             BlockType::Image(_image_block) => todo!(),
+            BlockType::Figure(_figure_block) => todo!(),
             BlockType::Table => todo!(),
         }
     }
@@ -173,6 +189,7 @@ impl Block {
             BlockType::Title(_) => "TITLE",
             BlockType::ListBlock(_) => "LIST",
             BlockType::Image(_) => "IMAGE",
+            BlockType::Figure(_) => "FIGURE",
             BlockType::Table => "TABLE",
         }
     }
