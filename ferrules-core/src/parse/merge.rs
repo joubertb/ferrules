@@ -6,6 +6,7 @@ use crate::{
     entities::{Element, ElementID, ElementType, Line, PageID},
     layout::model::LayoutBBox,
 };
+use regex::Regex;
 
 /// Apply word-level font corrections to text
 fn apply_corrections_to_text(text: String) -> String {
@@ -91,7 +92,12 @@ const MAXIMUM_ASSIGNMENT_DISTANCE: f32 = 20.0;
 /// TODO: WORKAROUND - The ONNX model should classify these as ElementType::Caption
 /// This should be removed once the model is retrained to properly identify captions
 fn is_figure_caption(text: &str) -> bool {
-    text.starts_with("Figure ") || text.starts_with("Fig. ") || text.starts_with("Image ")
+    // Use regex to match actual figure captions (with colon or period after label)
+    // This prevents false positives like "Figure 1 presents..." which are text references
+    // Valid patterns: "Figure 1:", "Fig. A:", "Figure 2B.", "Image 3:", etc.
+    let caption_pattern =
+        Regex::new(r"^(?i)(Figure|Fig\.|Image)\s+[A-Za-z0-9]+[A-Za-z]?\s*[:.]").unwrap();
+    caption_pattern.is_match(text.trim())
 }
 
 /// Detects text blocks that are likely embedded within a figure
