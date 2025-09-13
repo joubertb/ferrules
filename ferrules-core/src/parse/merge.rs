@@ -443,12 +443,18 @@ pub(crate) fn merge_elements_into_blocks(
                     let mut blocks_to_remove = Vec::new();
                     for (i, existing_block) in blocks.iter().enumerate().rev() {
                         match &existing_block.kind {
-                            crate::blocks::BlockType::Image(_) => {
-                                debug_print!("🖼️ Found Image block to include in figure");
-                                figure_image_bbox = Some(existing_block.bbox.clone());
-                                figure_bbox.merge(&existing_block.bbox);
-                                blocks_to_remove.push(i);
-                                break; // Stop after finding the image
+                            crate::blocks::BlockType::Image(img_block) => {
+                                // Skip ImageBlocks that already have captions - they were processed by merge logic
+                                if img_block.caption.is_some() {
+                                    debug_print!("🖼️ Skipping Image block that already has caption - processed by merge logic");
+                                    break; // Stop search - don't include caption-complete ImageBlocks in Figure blocks
+                                } else {
+                                    debug_print!("🖼️ Found Image block to include in figure");
+                                    figure_image_bbox = Some(existing_block.bbox.clone());
+                                    figure_bbox.merge(&existing_block.bbox);
+                                    blocks_to_remove.push(i);
+                                    break; // Stop after finding the image
+                                }
                             }
                             crate::blocks::BlockType::TextBlock(text) => {
                                 // Check if this text block is in the figure area (using spatial heuristics)
@@ -847,6 +853,140 @@ pub(crate) fn merge_elements_into_blocks(
             }
             ElementType::Image => {
                 debug_print!("🖼️ Processing Image element - checking for embedded text");
+
+                // CAPTION→IMAGE MERGE: Check if there are any recent ImageBlocks with caption: None
+                // that should be updated with a caption, or if there's a Caption-created block nearby
+                let mut found_merge_target = false;
+
+                // Check the last few blocks for potential merge targets
+                for i in (0..blocks.len()).rev().take(3) {
+                    // Check last 3 blocks
+                    if let crate::blocks::BlockType::Image(img_block) = &blocks[i].kind {
+                        if img_block.caption.is_none() {
+                            // Check if this caption-less ImageBlock is close to current Image element
+                            let vertical_distance = (curr_el.bbox.y0 - blocks[i].bbox.y1).abs();
+                            if vertical_distance < 500.0 {
+                                // Allow large gap - same page figures can be far apart
+                                debug_print!(
+                                    "🖼️ MERGE TARGET: Found ImageBlock (id={}) with caption: None, checking for nearby caption",
+                                    blocks[i].id
+                                );
+
+                                // This Image element should replace the existing caption-less ImageBlock
+                                // but first check if there's a Caption element following this Image
+                                if let Some(next_el) = element_it.peek() {
+                                    if let crate::entities::ElementType::Caption = &next_el.kind {
+                                        if is_figure_caption(&next_el.text_block.text) {
+                                            debug_print!(
+                                                "🖼️ MERGE: Removing existing ImageBlock (id={}) and creating new one with caption",
+                                                blocks[i].id
+                                            );
+
+                                            // Consume the Caption element
+                                            let caption_el = element_it.next().unwrap();
+
+                                            // Process the caption text with script detection
+                                            let caption_text = if !caption_el.line_spans.is_empty()
+                                            {
+                                                debug_print!(
+                                                    "🖼️ MERGE COMPLETE: Processing caption with {} line_spans",
+                                                    caption_el.line_spans.len()
+                                                );
+                                                let original_text = caption_el
+                                                    .line_spans
+                                                    .iter()
+                                                    .map(|line_spans| {
+                                                        concatenate_spans_with_spacing(line_spans)
+                                                    })
+                                                    .collect::<Vec<String>>()
+                                                    .join(" ");
+                                                crate::modtext::process_text_with_spans(
+                                                    &original_text,
+                                                    &caption_el.line_spans,
+                                                )
+                                            } else {
+                                                apply_corrections_to_text(
+                                                    caption_el.text_block.text.clone(),
+                                                )
+                                            };
+
+                                            // Remove the caption-less ImageBlock
+                                            blocks.remove(i);
+
+                                            // Create new ImageBlock with both Image and Caption
+                                            let complete_block = Block {
+                                                id: block_id,
+                                                kind: crate::blocks::BlockType::Image(ImageBlock {
+                                                    id: image_id,
+                                                    caption: Some(caption_text),
+                                                }),
+                                                pages_id: vec![curr_el.page_id],
+                                                bbox: curr_el.bbox.clone(),
+                                            };
+
+                                            let merged_block_id = complete_block.id;
+                                            image_id += 1;
+                                            block_id += 1;
+                                            blocks.push(complete_block);
+
+                                            debug_print!(
+                                                "🖼️ MERGE COMPLETE: Created ImageBlock (id={}) with caption from removed block",
+                                                merged_block_id
+                                            );
+
+                                            found_merge_target = true;
+                                            break;
+                                        }
+                                    }
+                                }
+                            }
+                        } else if img_block.caption.is_some() {
+                            // Found Caption-created ImageBlock - merge logic as before
+                            let vertical_distance = (curr_el.bbox.y0 - blocks[i].bbox.y1).abs();
+                            if vertical_distance < 100.0 {
+                                debug_print!(
+                                    "🖼️ MERGE: Found Caption-created ImageBlock (id={}) with caption, merging with Image element",
+                                    blocks[i].id
+                                );
+
+                                // Extract the caption from the incomplete block
+                                let caption = img_block.caption.clone();
+
+                                // Remove the incomplete Caption-created block
+                                blocks.remove(i);
+
+                                // Create complete ImageBlock with both caption and image
+                                let complete_block = Block {
+                                    id: block_id,
+                                    kind: crate::blocks::BlockType::Image(ImageBlock {
+                                        id: image_id,
+                                        caption, // From Caption element
+                                    }),
+                                    pages_id: vec![curr_el.page_id],
+                                    bbox: curr_el.bbox.clone(), // From Image element (correct)
+                                };
+
+                                let merged_block_id = complete_block.id;
+                                image_id += 1;
+                                block_id += 1;
+                                blocks.push(complete_block);
+
+                                debug_print!(
+                                    "🖼️ MERGE COMPLETE: Created merged ImageBlock (id={}) with caption and correct bbox",
+                                    merged_block_id
+                                );
+
+                                found_merge_target = true;
+                                break;
+                            }
+                        }
+                    }
+                }
+
+                if found_merge_target {
+                    continue; // Skip normal Image processing
+                }
+
                 // Check if we should create a Figure block by looking for nearby embedded text
                 let mut figure_elements = Vec::new();
                 let mut figure_bbox = curr_el.bbox.clone();
