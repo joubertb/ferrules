@@ -270,19 +270,6 @@ pub fn correct_assembled_text(text: &str) -> String {
 /// assert_eq!(text, "with some text");
 /// ```
 pub fn apply_word_corrections(text: &mut String) {
-    // Debug: Log what text we're working with at the block level
-    if text.contains("n<sub>j</sub> i") || text.contains("<formula>") {
-        #[cfg(feature = "correction-engine")]
-        {
-            use crate::debug_print;
-            debug_print!("🔍 BLOCK DEBUG: apply_word_corrections called with text length {} containing target patterns", text.len());
-            debug_print!(
-                "🔍 BLOCK DEBUG: Text preview: {}",
-                text.chars().take(200).collect::<String>()
-            );
-        }
-    }
-
     let corrected = correct_assembled_text(text);
     if corrected != *text {
         *text = corrected;

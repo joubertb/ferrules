@@ -18,6 +18,7 @@ fn apply_corrections_to_text(text: String) -> String {
 /// Adds spaces between spans when there's a horizontal or vertical gap
 fn concatenate_spans_with_spacing(line_spans: &[crate::entities::CharSpan]) -> String {
     debug_print!("🔧 SPACING: Called with {} spans", line_spans.len());
+
     if line_spans.is_empty() {
         return String::new();
     }
@@ -400,6 +401,7 @@ pub(crate) fn merge_elements_into_blocks(
         "🔧 merge_elements_into_blocks CALLED with {} elements",
         elements.len()
     );
+    debug_print!("🔧 TEST: Debug is working in merge function");
     let mut element_it = elements.into_iter().peekable();
 
     let mut blocks: Vec<Block> = Vec::new();
@@ -1557,7 +1559,12 @@ pub(crate) fn merge_elements_into_blocks(
     }
 
     // Apply text corrections to all blocks after assembly is complete
+    debug_print!(
+        "🔧 MERGE OUTPUT: About to apply corrections to {} blocks",
+        blocks.len()
+    );
     crate::correction::correct_blocks(&mut blocks);
+    debug_print!("🔧 MERGE OUTPUT: After corrections applied");
 
     Ok(blocks)
 }

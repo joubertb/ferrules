@@ -80,6 +80,10 @@ const CONFIDENCE_NORMALIZATION_MIN: f32 = 0.0; // Minimum confidence value
 const CONFIDENCE_NORMALIZATION_MAX: f32 = 1.0; // Maximum confidence value
 const MATH_VARIABLE_MIN_LENGTH: usize = 2; // Minimum length for math variables
 const DEBUG_CHAR_LIMIT: usize = 100; // Character limit for debug output
+
+// === Footnote Detection Constants ===
+/// Maximum length for footnote references (single digits, symbols)
+const FOOTNOTE_MAX_LENGTH: usize = 2;
 const DEBUG_TEXT_LIMIT: usize = 50; // Text limit for debug display
 const DEBUG_CLUSTER_TEXT_LIMIT: usize = 20; // Text limit for cluster debug display
 
@@ -491,13 +495,23 @@ fn is_real_subscript(
     // 2. DOWNWARD movement from previous character (POSITIVE sequential_diff in PDF coordinates)
     // 3. Movement that's proportional to font size
 
-    // Early return: subscripts MUST move downward (positive sequential_diff)
-    if sequential_diff <= 0.0 {
+    let text_trimmed = current_span.text.trim();
+    if text_trimmed.is_empty() {
         return false;
     }
 
-    let text_trimmed = current_span.text.trim();
-    if text_trimmed.is_empty() {
+    // FOOTNOTE OVERRIDE: Check if this is a footnote reference BEFORE position checks
+    // Footnotes should be superscripts, never subscripts
+    if is_footnote_marker(text_trimmed) {
+        debug_print!(
+            "  📝 SEQUENTIAL FOOTNOTE DETECTED: '{}' should be superscript, not subscript",
+            text_trimmed
+        );
+        return false; // Footnotes should never be subscripts
+    }
+
+    // Early return: subscripts MUST move downward (positive sequential_diff)
+    if sequential_diff <= 0.0 {
         return false;
     }
 
@@ -849,7 +863,12 @@ fn apply_clustering_formatting(spans: &[CharSpan]) -> String {
 /// This approach is content-independent and purely based on positioning/font changes.
 /// Works for both mathematical formulas AND regular text content with proper tag nesting.
 pub(crate) fn apply_text_formatting(spans: &[CharSpan]) -> String {
-    debug_print!("⚡ STACK-BASED detection called with {} spans", spans.len());
+    let combined_text: String = spans.iter().map(|s| s.text.as_str()).collect();
+    debug_print!(
+        "⚡ STACK-BASED detection called with {} spans: '{}'",
+        spans.len(),
+        combined_text.chars().take(100).collect::<String>()
+    );
 
     if spans.is_empty() {
         return String::new();
@@ -863,11 +882,32 @@ pub(crate) fn apply_text_formatting(spans: &[CharSpan]) -> String {
     }
     debug_print!("🔀 HYBRID: Using sequential approach for simple text");
 
-    let full_text: String = spans
-        .iter()
-        .map(|s| s.text.as_str())
-        .collect::<Vec<&str>>()
-        .join("");
+    let full_text: String = {
+        let mut result = String::new();
+        for (i, span) in spans.iter().enumerate() {
+            if i == 0 {
+                result.push_str(&span.text);
+            } else {
+                let prev_span = &spans[i - 1];
+
+                // Check horizontal gap between spans (same logic as concatenate_spans_with_spacing)
+                let x_gap = span.bbox.x0 - prev_span.bbox.x1;
+                let y_diff = (span.bbox.y0 - prev_span.bbox.y0).abs();
+
+                // Add space if there's horizontal gap, vertical difference, or line wrapping
+                // Line wrapping case: negative x_gap with small y_diff suggests text continuation
+                let needs_space = (x_gap > 2.0 || y_diff > 5.0 || (x_gap < -10.0 && y_diff < 3.0))
+                    && !prev_span.text.ends_with(' ')
+                    && !span.text.starts_with(' ');
+
+                if needs_space {
+                    result.push(' ');
+                }
+                result.push_str(&span.text);
+            }
+        }
+        result
+    };
     debug_print!(
         "⚡ SEQUENTIAL: Processing text='{}'",
         full_text.chars().take(DEBUG_TEXT_LIMIT).collect::<String>()
@@ -1245,8 +1285,11 @@ pub(crate) fn apply_text_formatting(spans: &[CharSpan]) -> String {
             // Add space if:
             // 1. Significant horizontal gap (>2 points) indicating word boundary
             // 2. Vertical difference (>5 points) indicating line wrap
-            // 3. Previous text doesn't end with space and current doesn't start with one
-            let needs_space = (x_gap > SPAN_SPACING_THRESHOLD || y_diff > CLUSTERING_Y_THRESHOLD)
+            // 3. Line wrapping case: negative x_gap with small y_diff suggests text continuation
+            // 4. Previous text doesn't end with space and current doesn't start with one
+            let needs_space = (x_gap > SPAN_SPACING_THRESHOLD
+                || y_diff > CLUSTERING_Y_THRESHOLD
+                || (x_gap < -10.0 && y_diff < 3.0))
                 && !result.ends_with(' ')
                 && !cleaned_text.starts_with(' ');
 
@@ -1388,6 +1431,32 @@ fn cluster_baselines(spans: &[CharSpan], y_threshold: f32) -> Vec<Vec<usize>> {
     clusters
 }
 
+/// Detect if a character span is likely a footnote reference
+/// Footnote references are typically:
+/// - Single digits (1, 2, 3) or symbols (*, †, ‡, §)  
+/// - Smaller font size than the main text
+/// - Located after text content (more permissive approach)
+fn is_footnote_reference(
+    span: &CharSpan,
+    _span_idx: usize,
+    _spans: &[CharSpan],
+    cluster_base_font_size: f32,
+) -> bool {
+    let text = span.text.trim();
+
+    // 1. Check if content looks like a footnote reference (primary criteria)
+    let is_footnote_content = text.len() <= FOOTNOTE_MAX_LENGTH
+        && (text.chars().all(|c| c.is_ascii_digit())
+            || matches!(text, "*" | "†" | "‡" | "§" | "**" | "††"));
+
+    // 2. Check if font is smaller than the base font (typical for footnotes)
+    let has_smaller_font = span.font_size < cluster_base_font_size * FONT_SIZE_SCRIPT_THRESHOLD;
+
+    // For now, use simpler logic: if it looks like footnote content and has smaller font
+    // The positioning check was too restrictive
+    is_footnote_content && has_smaller_font
+}
+
 // Removed unused function detect_subscripts_in_cluster
 
 /// Apply subscript detection within a baseline cluster using GLOBAL baseline
@@ -1452,7 +1521,16 @@ fn detect_subscripts_in_cluster_with_global_baseline(
         let sup_confidence =
             (raw_sup / denom).clamp(CONFIDENCE_NORMALIZATION_MIN, CONFIDENCE_NORMALIZATION_MAX);
 
-        let (is_subscript, is_superscript) = if s > FONT_SIZE_STRONG_SHRINKAGE_THRESHOLD {
+        // Check for footnote reference patterns FIRST (highest priority)
+        let is_potential_footnote =
+            is_footnote_reference(span, span_idx, spans, cluster_base_font_size);
+
+        let (is_subscript, is_superscript) = if is_potential_footnote {
+            // HIGHEST PRIORITY: Footnote references → superscript (ignore baseline positioning)
+            debug_print!("  📝 FOOTNOTE SUPERSCRIPT: '{}' detected as footnote reference baseline_diff={:.1}", 
+                         span.text.trim(), baseline_diff);
+            (false, true)
+        } else if s > FONT_SIZE_STRONG_SHRINKAGE_THRESHOLD {
             // Strong font size reduction (>25%) → likely subscript regardless of baseline positioning
             // This handles PDF rendering issues where subscripts are positioned inconsistently
             debug_print!("  🔬 FONT SIZE OVERRIDE: '{}' strong_shrinkage={:.3} baseline={:.3} → treating as subscript", 

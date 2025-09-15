@@ -68,7 +68,12 @@ pub fn process_mathematical_notation(spans: &[crate::entities::CharSpan]) -> Str
 /// let enhanced = modtext::add_tags(&char_spans);
 /// ```
 pub fn add_tags(spans: &[crate::entities::CharSpan]) -> String {
-    debug_print!("🏷️ add_tags CALLED with {} spans", spans.len());
+    let combined_text: String = spans.iter().map(|s| s.text.as_str()).collect();
+    debug_print!(
+        "🏷️ add_tags CALLED with {} spans: '{}'",
+        spans.len(),
+        combined_text.chars().take(100).collect::<String>()
+    );
     #[cfg(feature = "modtext")]
     {
         script_notation::apply_tags_recursive(spans, 0)
