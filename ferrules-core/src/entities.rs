@@ -425,9 +425,13 @@ impl CharSpan {
     }
     pub fn append(&mut self, char: &PdfPageTextChar, page_bbox: &BBox) -> Option<()> {
         let char_rotation = char.get_rotation_clockwise_degrees();
-        if char.unscaled_font_size().value != self.font_size
-            || char.font_name() != self.font_name
-            || char.font_weight() != self.font_weight
+        let char_font_size = char.unscaled_font_size().value;
+        let char_font_name = char.font_name();
+        let char_font_weight = char.font_weight();
+
+        if char_font_size != self.font_size
+            || char_font_name != self.font_name
+            || char_font_weight != self.font_weight
             || char_rotation != self.rotation
         {
             None
@@ -560,22 +564,11 @@ impl Line {
 
         // Strong indicators of new line (spatial positioning takes priority)
         if y_diff.abs() > SIGNIFICANT_Y_JUMP {
-            debug_print!(
-                "📍 NEW LINE: Significant Y jump {:.1} > {:.1} threshold",
-                y_diff.abs(),
-                SIGNIFICANT_Y_JUMP
-            );
             return true;
         }
 
         // Text wrapping: X resets to left margin with small Y change
         if x_diff < X_RESET_THRESHOLD && y_diff.abs() > SAME_LINE_Y_TOLERANCE {
-            debug_print!(
-                "📍 NEW LINE: X reset {:.1} < {:.1} with Y change {:.1}",
-                x_diff,
-                X_RESET_THRESHOLD,
-                y_diff.abs()
-            );
             return true;
         }
 
@@ -583,20 +576,11 @@ impl Line {
         if y_diff.abs() <= SAME_LINE_Y_TOLERANCE {
             // For very close Y coordinates, ignore text control characters
             // This fixes the footer footnote case where "1\n" and "https://..." should be same line
-            debug_print!(
-                "📍 SAME LINE: Y diff {:.1} <= {:.1} tolerance, ignoring text control chars",
-                y_diff.abs(),
-                SAME_LINE_Y_TOLERANCE
-            );
             return false;
         }
 
         // Ambiguous spatial positioning - use text control characters as hints
         if new_span.text.ends_with("\n") || new_span.text.ends_with("\x02") {
-            debug_print!(
-                "📍 NEW LINE: Text control character with ambiguous spatial positioning (Y diff: {:.1})",
-                y_diff.abs()
-            );
             return true;
         }
 
@@ -639,6 +623,7 @@ impl Line {
             } else {
                 self.bbox.merge(&span.bbox);
             }
+
             // CharSpan text is already cleaned in CharSpan::new_from_char() and CharSpan::append()
             self.text.push_str(&span.text);
             self.spans.push(span);

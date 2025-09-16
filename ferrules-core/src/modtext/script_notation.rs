@@ -29,9 +29,6 @@ const ABSOLUTE_BASELINE_THRESHOLD: f32 = 3.0; // 3 points of Y variation
 /// Tiny movement threshold - movements smaller than this are handled specially
 const TINY_MOVEMENT_THRESHOLD: f32 = 1.0; // 1 point
 
-/// Spacing threshold - minimum gap between spans to add space
-const SPAN_SPACING_THRESHOLD: f32 = 2.0; // 2 points
-
 /// Clustering Y threshold - maximum Y difference to group into same baseline cluster
 const CLUSTERING_Y_THRESHOLD: f32 = 5.0; // 5 points
 
@@ -813,9 +810,15 @@ fn apply_clustering_formatting(spans: &[CharSpan]) -> String {
             let x_gap = span.bbox.x0 - prev_span.bbox.x1;
             let y_diff = (span.bbox.y0 - prev_span.bbox.y0).abs();
 
-            let needs_space = (x_gap > SPAN_SPACING_THRESHOLD || y_diff > CLUSTERING_Y_THRESHOLD)
-                && !result.ends_with(' ')
-                && !text_trimmed.starts_with(' ');
+            // Use common font-aware spacing logic
+            let needs_space = crate::spacing::should_add_space_simple(
+                &result,
+                text_trimmed,
+                x_gap,
+                y_diff,
+                prev_span.font_size,
+                CLUSTERING_Y_THRESHOLD,
+            );
 
             if needs_space {
                 result.push(' ');
@@ -890,15 +893,9 @@ pub(crate) fn apply_text_formatting(spans: &[CharSpan]) -> String {
             } else {
                 let prev_span = &spans[i - 1];
 
-                // Check horizontal gap between spans (same logic as concatenate_spans_with_spacing)
-                let x_gap = span.bbox.x0 - prev_span.bbox.x1;
-                let y_diff = (span.bbox.y0 - prev_span.bbox.y0).abs();
-
-                // Add space if there's horizontal gap, vertical difference, or line wrapping
-                // Line wrapping case: negative x_gap with small y_diff suggests text continuation
-                let needs_space = (x_gap > 2.0 || y_diff > 5.0 || (x_gap < -10.0 && y_diff < 3.0))
-                    && !prev_span.text.ends_with(' ')
-                    && !span.text.starts_with(' ');
+                // Use common font-aware spacing logic
+                let needs_space =
+                    crate::spacing::should_add_space_between_spans(prev_span, span, 5.0);
 
                 if needs_space {
                     result.push(' ');
@@ -1282,16 +1279,15 @@ pub(crate) fn apply_text_formatting(spans: &[CharSpan]) -> String {
             // Check vertical gap (wrapped text)
             let y_diff = (span.bbox.y0 - prev_span.bbox.y0).abs();
 
-            // Add space if:
-            // 1. Significant horizontal gap (>2 points) indicating word boundary
-            // 2. Vertical difference (>5 points) indicating line wrap
-            // 3. Line wrapping case: negative x_gap with small y_diff suggests text continuation
-            // 4. Previous text doesn't end with space and current doesn't start with one
-            let needs_space = (x_gap > SPAN_SPACING_THRESHOLD
-                || y_diff > CLUSTERING_Y_THRESHOLD
-                || (x_gap < -10.0 && y_diff < 3.0))
-                && !result.ends_with(' ')
-                && !cleaned_text.starts_with(' ');
+            // Use common font-aware spacing logic
+            let needs_space = crate::spacing::should_add_space_simple(
+                &result,
+                &cleaned_text,
+                x_gap,
+                y_diff,
+                prev_span.font_size,
+                CLUSTERING_Y_THRESHOLD,
+            );
 
             if needs_space {
                 result.push(' ');
@@ -1456,8 +1452,6 @@ fn is_footnote_reference(
     // The positioning check was too restrictive
     is_footnote_content && has_smaller_font
 }
-
-// Removed unused function detect_subscripts_in_cluster
 
 /// Apply subscript detection within a baseline cluster using GLOBAL baseline
 /// This fixes the issue where subscripts form their own cluster and appear normal relative to cluster baseline

@@ -37,26 +37,21 @@ fn concatenate_spans_with_spacing(line_spans: &[crate::entities::CharSpan]) -> S
             // Check vertical gap (wrapped text)
             let y_diff = (span.bbox.y0 - prev_span.bbox.y0).abs();
 
-            // Check if we need to add a space between spans
-            let needs_space = {
-                // Add space if:
-                // 1. Significant horizontal gap (>2 points) indicating word boundary
-                // 2. Vertical difference (>5 points) indicating line wrap
-                // 3. Previous text doesn't end with space and current doesn't start with one
-                (x_gap > 2.0 || y_diff > 5.0)
-                    && !prev_span.text.ends_with(' ')
-                    && !span.text.starts_with(' ')
-            };
+            // Use common font-aware spacing logic
+            let needs_space = crate::spacing::should_add_space_between_spans(prev_span, span, 5.0);
 
             // Debug every span transition to understand the logic
             if line_spans.len() > 1 {
+                let avg_char_width = prev_span.font_size * 0.55;
+                let font_aware_threshold = avg_char_width * 0.16;
                 debug_print!(
-                    "🔧 SPACING DEBUG[{}/{}]: '{}' -> '{}' | x_gap={:.1} y_diff={:.1} needs_space={}",
+                    "🔧 SPACING DEBUG[{}/{}]: '{}' -> '{}' | x_gap={:.1} y_diff={:.1} threshold={:.1} needs_space={}",
                     i-1, i,
                     prev_span.text.trim().chars().rev().take(20).collect::<String>().chars().rev().collect::<String>(),
                     span.text.trim().chars().take(20).collect::<String>(),
                     x_gap,
                     y_diff,
+                    font_aware_threshold,
                     needs_space
                 );
             }

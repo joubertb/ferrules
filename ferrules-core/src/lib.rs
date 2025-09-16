@@ -92,6 +92,7 @@ pub mod layout;
 mod modtext;
 pub mod ocr;
 pub mod render;
+pub mod spacing;
 pub mod utils;
 
 mod parse;
