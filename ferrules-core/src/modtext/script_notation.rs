@@ -247,7 +247,9 @@ fn should_convert_superscript_to_subscript_in_math_context(
         .collect();
 
     // Specific set notation patterns that should use subscripts
-    let has_set_notation = context_text.contains('{') && context_text.contains('}');
+    // Check for parentheses notation like ( 𝑡1 , 𝑡2 , . . . , 𝑡𝑘 )
+    let has_set_notation = (context_text.contains('{') && context_text.contains('}'))
+        || (context_text.contains('(') && context_text.contains(')'));
     let has_equals_sign = context_text.contains('=');
 
     // Look for mathematical variables (Unicode mathematical symbols are strong indicators)
@@ -1278,7 +1280,6 @@ pub(crate) fn apply_text_formatting(spans: &[CharSpan]) -> String {
                     && should_be_superscript
                     && font_ratio < OPTICAL_ALIGNMENT_FONT_THRESHOLD;
 
-                // FIXED: Use sequential movement direction to determine priority
                 if should_be_superscript
                     && sequential_diff < 0.0
                     && !in_superscript
@@ -1389,7 +1390,7 @@ pub(crate) fn apply_text_formatting(spans: &[CharSpan]) -> String {
                 }
             }
 
-            // FIXED: Check if we should start a new subscript after exiting one
+            // Check if we should start a new subscript after exiting one
             // This handles cases where "N" exits subscript mode but "mask" should re-enter it
             // Use proportional threshold for consistency
             let relative_sequential_shift_for_restart = sequential_diff.abs() / span.font_size;
