@@ -208,6 +208,104 @@ fn is_footnote_marker(text: &str) -> bool {
     false
 }
 
+/// Detect if superscript characters should be converted to subscripts in mathematical context
+/// This handles cases like D = {d1, d2} which should become D = {d<sub>1</sub>, d<sub>2</sub>}
+fn should_convert_superscript_to_subscript_in_math_context(
+    current_span: &CharSpan,
+    span_index: usize,
+    spans: &[CharSpan],
+) -> bool {
+    let text_trimmed = current_span.text.trim();
+
+    // Check if this contains digits or single characters that might be mathematical indices
+    let has_potential_index = text_trimmed.len() <= 2
+        && (
+            text_trimmed.chars().all(|c| c.is_ascii_digit()) ||  // Regular digits: 1, 2, 3
+        text_trimmed.chars().any(|c| matches!(c,
+            '¹' | '²' | '³' | '⁴' | '⁵' | '⁶' | '⁷' | '⁸' | '⁹' | '⁰'  // Unicode superscripts
+        )) ||
+        (text_trimmed.len() == 1 && text_trimmed.chars().next().unwrap().is_ascii_lowercase())
+            // Single letters: i, j, k, n
+        );
+
+    debug_print!(
+        "🔍 MATH INDEX CHECK: '{}' has_potential_index={}",
+        text_trimmed,
+        has_potential_index
+    );
+
+    if !has_potential_index {
+        return false;
+    }
+
+    // Look for mathematical context in a wider window (±8 spans to catch full context)
+    let window_start = span_index.saturating_sub(8);
+    let window_end = (span_index + 9).min(spans.len());
+    let context_text: String = spans[window_start..window_end]
+        .iter()
+        .map(|s| s.text.as_str())
+        .collect();
+
+    // Specific set notation patterns that should use subscripts
+    let has_set_notation = context_text.contains('{') && context_text.contains('}');
+    let has_equals_sign = context_text.contains('=');
+
+    // Look for mathematical variables (Unicode mathematical symbols are strong indicators)
+    let has_mathematical_variable = context_text.chars().any(|c|
+        // Unicode mathematical script characters are definitive
+        matches!(c, '𝑑' | '𝑥' | '𝑦' | '𝑧' | '𝑛' | '𝑚' | '𝑞' | '𝑟' | '𝐀'..='𝑍' | '𝒂'..='𝒛'));
+
+    // Check for academic/mathematical context keywords
+    let has_academic_context = context_text.to_lowercase().contains("document")
+        || context_text.to_lowercase().contains("dataset")
+        || context_text.contains("...")
+        || context_text.contains(". . .");
+
+    // Look for set notation with indexed elements pattern
+    // Patterns:
+    // - DX = { dx1, dx2, ...}
+    // - QR = { qr1, qr2, ... qrn }
+    // - Any = { prefix1, prefix2, ..., prefixN }
+    let has_indexed_variables = if has_set_notation {
+        // Count digits in the context (likely subscripts in set notation)
+        let digit_count = context_text.chars().filter(|c| c.is_ascii_digit()).count();
+
+        // Look for ellipsis patterns (various forms)
+        let has_ellipsis = context_text.contains("...") || context_text.contains(". . .");
+
+        // Multiple digits in a set context strongly suggests indexing
+        let has_multiple_indices = digit_count >= 2;
+
+        // Look for comma-separated pattern which is typical in sets
+        let has_comma_separation = context_text.contains(',') && has_multiple_indices;
+
+        has_ellipsis || has_multiple_indices || has_comma_separation
+    } else {
+        false
+    };
+
+    let is_mathematical_context = has_set_notation
+        && has_equals_sign
+        && (has_mathematical_variable || has_academic_context || has_indexed_variables);
+
+    debug_print!(
+        "🧮 SET NOTATION CHECK: '{}' | set={} equals={} var={} academic={} indexed={} → convert={}",
+        text_trimmed,
+        has_set_notation,
+        has_equals_sign,
+        has_mathematical_variable,
+        has_academic_context,
+        has_indexed_variables,
+        is_mathematical_context
+    );
+    debug_print!(
+        "📝 Context: '{}'",
+        context_text.chars().take(80).collect::<String>()
+    );
+
+    is_mathematical_context
+}
+
 /// Check if this baseline/font change represents a real superscript based on positioning and font metrics
 fn is_real_superscript(
     current_span: &CharSpan,
@@ -707,20 +805,36 @@ fn requires_baseline_clustering(spans: &[CharSpan]) -> bool {
     // Check for multiple distinct baseline groups (high Y variance)
     let has_multiple_baselines = std_dev > ABSOLUTE_BASELINE_THRESHOLD; // 3+ points of Y variation suggests multiple baselines
 
-    // Check for mathematical content indicators
+    // Enhanced mathematical content detection
     let full_text: String = spans.iter().map(|s| s.text.as_str()).collect();
-    let has_math_symbols = full_text.contains('∑')
+
+    // Complex mathematical symbols
+    let has_complex_math_symbols = full_text.contains('∑')
         || full_text.contains('∈')
         || full_text.contains('∪')
         || full_text.contains('∩');
 
-    let should_cluster = has_multiple_baselines && has_math_symbols;
+    // Basic mathematical notation patterns - simplified and more reliable
+    let has_basic_math_notation =
+        // Set notation with braces and equals: D = {...}
+        (full_text.contains('{') && full_text.contains('}') && full_text.contains('=')) ||
+        // Mathematical ellipsis indicating a pattern
+        full_text.contains("...") || full_text.contains(". . .") ||
+        // Common mathematical variable patterns (both Unicode and ASCII)
+        (full_text.contains('d') && (full_text.contains('1') || full_text.contains('2'))) ||
+        (full_text.contains('q') && (full_text.contains('1') || full_text.contains('2'))) ||
+        (full_text.contains('r') && (full_text.contains('1') || full_text.contains('2')));
+
+    let has_math_symbols = has_complex_math_symbols || has_basic_math_notation;
+
+    let should_cluster = has_multiple_baselines || (has_math_symbols && spans.len() >= 8); // Lower threshold for math notation
 
     debug_print!(
-        "🔍 COMPLEXITY CHECK: {} spans, std_dev={:.1}, math_symbols={}, cluster={}",
+        "🔍 COMPLEXITY CHECK: {} spans, std_dev={:.1}, complex_math={}, basic_math={}, cluster={}",
         spans.len(),
         std_dev,
-        has_math_symbols,
+        has_complex_math_symbols,
+        has_basic_math_notation,
         should_cluster
     );
     debug_print!("📊 Y-positions: {:?}", y_positions);
@@ -872,6 +986,25 @@ pub(crate) fn apply_text_formatting(spans: &[CharSpan]) -> String {
         spans.len(),
         combined_text.chars().take(100).collect::<String>()
     );
+
+    // Check if this text contains digits that might be misclassified
+    if combined_text.contains("1") || combined_text.contains("2") {
+        debug_print!(
+            "🔍 TEXT WITH DIGITS: '{}'",
+            combined_text.chars().take(200).collect::<String>()
+        );
+        for (i, span) in spans.iter().enumerate() {
+            if span.text.trim() == "1" || span.text.trim() == "2" {
+                debug_print!(
+                    "  🎯 DIGIT SPAN[{}]: '{}' y={:.1} size={:.1}",
+                    i,
+                    span.text.trim(),
+                    span.bbox.y0,
+                    span.font_size
+                );
+            }
+        }
+    }
 
     if spans.is_empty() {
         return String::new();
@@ -1100,7 +1233,7 @@ pub(crate) fn apply_text_formatting(spans: &[CharSpan]) -> String {
             if relative_sequential_shift > PROPORTIONAL_SCRIPT_THRESHOLD {
                 // ENHANCED CONTEXT-AWARE SUBSCRIPT DETECTION
                 // Use sequential character comparison for script detection
-                let should_be_subscript =
+                let mut should_be_subscript =
                     is_real_subscript(span, sequential_diff, base_font_size, spans, i);
 
                 let mut should_be_superscript =
@@ -1124,6 +1257,18 @@ pub(crate) fn apply_text_formatting(spans: &[CharSpan]) -> String {
                         "📄 REFERENCE OVERRIDE: Treating '{}' after '{}' as superscript",
                         text_trimmed,
                         prev_text
+                    );
+                }
+
+                // MATHEMATICAL CONTEXT OVERRIDE: Convert superscripts to subscripts in mathematical notation
+                if should_be_superscript
+                    && should_convert_superscript_to_subscript_in_math_context(span, i, spans)
+                {
+                    should_be_superscript = false;
+                    should_be_subscript = true;
+                    debug_print!(
+                        "🧮 MATHEMATICAL CONTEXT OVERRIDE: Converting Unicode superscript '{}' to subscript in mathematical notation",
+                        text_trimmed
                     );
                 }
 
@@ -1561,6 +1706,17 @@ fn detect_subscripts_in_cluster_with_global_baseline(
                 COMPOSITE_SUBSCRIPT_CONFIDENCE_THRESHOLD
             );
             (false, false)
+        };
+
+        // MATHEMATICAL CONTEXT OVERRIDE: Convert superscripts to subscripts in mathematical notation
+        let (is_subscript, is_superscript) = if is_superscript
+            && should_convert_superscript_to_subscript_in_math_context(span, span_idx, spans)
+        {
+            debug_print!("  🧮 CLUSTERING MATHEMATICAL CONTEXT OVERRIDE: Converting Unicode superscript '{}' to subscript in mathematical notation",
+                         span.text.trim());
+            (true, false)
+        } else {
+            (is_subscript, is_superscript)
         };
 
         debug_print!("  📍 GLOBAL SPAN[{}]: '{}' global_baseline_diff={:.1} font_ratio={:.2} → sub={} sup={}", 
