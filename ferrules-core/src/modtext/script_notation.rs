@@ -26,9 +26,6 @@ const FONT_SIZE_SCRIPT_THRESHOLD: f32 = 0.85; // 85% of base font size
 /// Absolute baseline threshold for complex detection - minimum absolute shift in points
 const ABSOLUTE_BASELINE_THRESHOLD: f32 = 3.0; // 3 points of Y variation
 
-/// Tiny movement threshold - movements smaller than this are handled specially
-const TINY_MOVEMENT_THRESHOLD: f32 = 1.0; // 1 point
-
 /// Clustering Y threshold - maximum Y difference to group into same baseline cluster
 const CLUSTERING_Y_THRESHOLD: f32 = 5.0; // 5 points
 
@@ -39,11 +36,14 @@ const CLUSTERING_Y_THRESHOLD: f32 = 5.0; // 5 points
 /// Very small font threshold - fonts smaller than this get special handling
 const VERY_SMALL_FONT_THRESHOLD: f32 = 0.65; // 65% of base font
 
-/// Minimum font size protection - don't let cluster base font get smaller than this
-const MIN_FONT_SIZE_RATIO: f32 = 0.5; // 50% of global base font
-
 /// Local baseline detection threshold - fonts this size or larger qualify as baseline
 const LOCAL_BASELINE_FONT_RATIO: f32 = 0.9; // 90% of global base font
+
+/// Font-aware clustering: minimum font ratio difference to be considered significant
+const CLUSTERING_FONT_DIFFERENCE_THRESHOLD: f32 = 0.9; // One font must be <90% of the other
+
+/// Font-aware clustering: Y-threshold multiplier for spans with significant font differences
+const CLUSTERING_EXTENDED_Y_THRESHOLD_MULTIPLIER: f32 = 1.5; // Allow 50% more Y difference
 
 /// Relative baseline shift threshold - minimum shift as fraction of font size for script detection
 const RELATIVE_BASELINE_THRESHOLD: f32 = 0.3; // 30% of font size
@@ -67,7 +67,6 @@ const SIZE_REF: f32 = 0.35; // 35% font size reduction
 
 // Additional thresholds for script detection
 const PROPORTIONAL_RETURN_THRESHOLD: f32 = 0.04; // 4% of font size to determine return to baseline
-const FONT_SIZE_STRONG_SHRINKAGE_THRESHOLD: f32 = 0.25; // 25% font size reduction for strong shrinkage
 const OPTICAL_ALIGNMENT_FONT_THRESHOLD: f32 = 0.75; // 75% font size for optical alignment cases
 const HARDCODED_BASELINE_THRESHOLD: f32 = 3.0; // 3 points for baseline difference threshold
 const HARDCODED_DOWNWARD_LIMIT: f32 = -2.0; // -2.0 for downward movement limit
@@ -79,8 +78,6 @@ const MATH_VARIABLE_MIN_LENGTH: usize = 2; // Minimum length for math variables
 const DEBUG_CHAR_LIMIT: usize = 100; // Character limit for debug output
 
 // === Footnote Detection Constants ===
-/// Maximum length for footnote references (single digits, symbols)
-const FOOTNOTE_MAX_LENGTH: usize = 2;
 const DEBUG_TEXT_LIMIT: usize = 50; // Text limit for debug display
 const DEBUG_CLUSTER_TEXT_LIMIT: usize = 20; // Text limit for cluster debug display
 
@@ -810,11 +807,13 @@ fn requires_baseline_clustering(spans: &[CharSpan]) -> bool {
     // Enhanced mathematical content detection
     let full_text: String = spans.iter().map(|s| s.text.as_str()).collect();
 
-    // Complex mathematical symbols
+    // Complex mathematical symbols - added subset/superset symbols
     let has_complex_math_symbols = full_text.contains('∑')
         || full_text.contains('∈')
         || full_text.contains('∪')
-        || full_text.contains('∩');
+        || full_text.contains('∩')
+        || full_text.contains('⊂')  // subset
+        || full_text.contains('⊃'); // superset
 
     // Basic mathematical notation patterns - simplified and more reliable
     let has_basic_math_notation =
@@ -829,14 +828,33 @@ fn requires_baseline_clustering(spans: &[CharSpan]) -> bool {
 
     let has_math_symbols = has_complex_math_symbols || has_basic_math_notation;
 
-    let should_cluster = has_multiple_baselines || (has_math_symbols && spans.len() >= 8); // Lower threshold for math notation
+    // LOWERED THRESHOLD: For mathematical content with subscripts, use lower threshold
+    // Check if text contains Mathematical Italic Unicode characters (like 𝑠) that commonly need subscript detection
+    let has_math_italic_chars = full_text.chars().any(|c| {
+        let code = c as u32;
+        // Mathematical Italic Small Letters (U+1D44E-U+1D467) and others
+        (0x1D44E..=0x1D467).contains(&code) ||
+        (0x1D482..=0x1D4B5).contains(&code) ||  // Mathematical Script Letters
+        (0x1D4D0..=0x1D503).contains(&code) // Mathematical Bold Italic Letters
+    });
+
+    // Lower threshold for mathematical content that likely contains subscripts
+    let math_span_threshold = if has_math_italic_chars || has_complex_math_symbols {
+        2
+    } else {
+        8
+    };
+    let should_cluster =
+        has_multiple_baselines || (has_math_symbols && spans.len() >= math_span_threshold);
 
     debug_print!(
-        "🔍 COMPLEXITY CHECK: {} spans, std_dev={:.1}, complex_math={}, basic_math={}, cluster={}",
+        "🔍 COMPLEXITY CHECK: {} spans, std_dev={:.1}, complex_math={}, basic_math={}, math_italic={}, threshold={}, cluster={}",
         spans.len(),
         std_dev,
         has_complex_math_symbols,
         has_basic_math_notation,
+        has_math_italic_chars,
+        math_span_threshold,
         should_cluster
     );
     debug_print!("📊 Y-positions: {:?}", y_positions);
@@ -1527,11 +1545,54 @@ fn cluster_baselines(spans: &[CharSpan], y_threshold: f32) -> Vec<Vec<usize>> {
     let mut current_baseline = indexed_spans[0].1;
 
     for (span_idx, y_pos) in indexed_spans.iter().skip(1) {
-        if (y_pos - current_baseline).abs() <= y_threshold {
-            // Close enough to current baseline - add to cluster
-            current_cluster.push(*span_idx);
+        let current_span = &spans[*span_idx];
+
+        // Check if this span should be grouped with the current cluster
+        // based on both Y-position AND font size relationships
+        let y_diff = (y_pos - current_baseline).abs();
+        let should_cluster = if y_diff <= y_threshold {
+            // Within normal Y threshold - always cluster
+            true
         } else {
-            // Too far - start new cluster
+            // Outside Y threshold - check if font size suggests subscript/superscript relationship
+            // Look at the last span in current cluster to compare font sizes
+            let last_span_idx = *current_cluster.last().unwrap();
+            let last_span = &spans[last_span_idx];
+
+            let font_ratio = (current_span.font_size / last_span.font_size)
+                .min(last_span.font_size / current_span.font_size);
+            let has_significant_font_difference = font_ratio < CLUSTERING_FONT_DIFFERENCE_THRESHOLD;
+
+            // Allow slightly larger Y differences for potential subscript/superscript relationships
+            let extended_threshold = y_threshold * CLUSTERING_EXTENDED_Y_THRESHOLD_MULTIPLIER;
+            let within_extended_threshold = y_diff <= extended_threshold;
+
+            // Cluster if fonts suggest script relationship AND within extended threshold
+            has_significant_font_difference && within_extended_threshold
+        };
+
+        if should_cluster {
+            // Add to current cluster
+            current_cluster.push(*span_idx);
+            // Update baseline to be more inclusive (use the span that's closer to the middle)
+            if current_cluster.len() > 1 {
+                // Keep the baseline as the median of all spans in cluster
+                let cluster_y_positions: Vec<f32> = current_cluster
+                    .iter()
+                    .map(|&idx| spans[idx].bbox.y0)
+                    .collect();
+                let mut sorted_positions = cluster_y_positions.clone();
+                sorted_positions.sort_by(|a, b| a.partial_cmp(b).unwrap());
+                current_baseline = if sorted_positions.len().is_multiple_of(2) {
+                    (sorted_positions[sorted_positions.len() / 2 - 1]
+                        + sorted_positions[sorted_positions.len() / 2])
+                        / 2.0
+                } else {
+                    sorted_positions[sorted_positions.len() / 2]
+                };
+            }
+        } else {
+            // Start new cluster
             clusters.push(current_cluster);
             current_cluster = vec![*span_idx];
             current_baseline = *y_pos;
@@ -1578,150 +1639,59 @@ fn cluster_baselines(spans: &[CharSpan], y_threshold: f32) -> Vec<Vec<usize>> {
 /// - Single digits (1, 2, 3) or symbols (*, †, ‡, §)  
 /// - Smaller font size than the main text
 /// - Located after text content (more permissive approach)
-fn is_footnote_reference(
-    span: &CharSpan,
-    _span_idx: usize,
-    _spans: &[CharSpan],
-    cluster_base_font_size: f32,
-) -> bool {
-    let text = span.text.trim();
-
-    // 1. Check if content looks like a footnote reference (primary criteria)
-    let is_footnote_content = text.len() <= FOOTNOTE_MAX_LENGTH
-        && (text.chars().all(|c| c.is_ascii_digit())
-            || matches!(text, "*" | "†" | "‡" | "§" | "**" | "††"));
-
-    // 2. Check if font is smaller than the base font (typical for footnotes)
-    let has_smaller_font = span.font_size < cluster_base_font_size * FONT_SIZE_SCRIPT_THRESHOLD;
-
-    // For now, use simpler logic: if it looks like footnote content and has smaller font
-    // The positioning check was too restrictive
-    is_footnote_content && has_smaller_font
-}
-
-/// Apply subscript detection within a baseline cluster using GLOBAL baseline
-/// This fixes the issue where subscripts form their own cluster and appear normal relative to cluster baseline
-fn detect_subscripts_in_cluster_with_global_baseline(
+///
+/// Detect subscripts within a cluster using cluster-local analysis.
+/// This analyzes character relationships within the cluster, using the same
+/// font-aware logic as the clustering algorithm.
+fn detect_subscripts_in_cluster_with_local_analysis(
     spans: &[CharSpan],
     cluster_indices: &[usize],
-    global_base_font_size: f32,
-    global_baseline: f32,
 ) -> Vec<(usize, bool, bool)> {
-    // (span_index, is_subscript, is_superscript)
-    if cluster_indices.is_empty() {
-        return Vec::new();
+    if cluster_indices.len() < 2 {
+        return cluster_indices
+            .iter()
+            .map(|&idx| (idx, false, false))
+            .collect();
     }
 
-    // Calculate cluster base font size as maximum font size in cluster
-    let cluster_base_font_size = cluster_indices
-        .iter()
-        .map(|&idx| spans[idx].font_size)
-        .fold(0.0, f32::max)
-        .max(global_base_font_size * MIN_FONT_SIZE_RATIO); // Don't let it get too small
+    // Calculate cluster-local baseline from the largest font sizes in the cluster
+    let cluster_spans: Vec<&CharSpan> = cluster_indices.iter().map(|&idx| &spans[idx]).collect();
 
-    debug_print!(
-        "📐 GLOBAL CLUSTER ANALYSIS: global_baseline={:.1}, cluster_base_font={:.1}",
-        global_baseline,
-        cluster_base_font_size
-    );
+    // Find the maximum font size in the cluster
+    let max_font_size = cluster_spans
+        .iter()
+        .map(|span| span.font_size)
+        .fold(0.0f32, |a, b| a.max(b));
+
+    // Use spans with font size >= 95% of max as baseline reference
+    let baseline_candidates: Vec<f32> = cluster_spans
+        .iter()
+        .filter(|span| span.font_size >= max_font_size * 0.95)
+        .map(|span| span.bbox.y0)
+        .collect();
+
+    let cluster_baseline = if !baseline_candidates.is_empty() {
+        baseline_candidates.iter().sum::<f32>() / baseline_candidates.len() as f32
+    } else {
+        cluster_spans[0].bbox.y0 // Fallback
+    };
 
     let mut results = Vec::new();
 
     for &span_idx in cluster_indices {
-        let span = &spans[span_idx];
-        let baseline_diff = span.bbox.y0 - global_baseline; // Compare to GLOBAL baseline
-        let font_ratio = span.font_size / cluster_base_font_size;
+        let current_span = &spans[span_idx];
 
-        // Apply research-based thresholds using global baseline comparison
-        let has_smaller_font = font_ratio < FONT_SIZE_SCRIPT_THRESHOLD;
+        // Calculate Y position difference from cluster baseline
+        let y_diff = current_span.bbox.y0 - cluster_baseline;
+        let font_size_ratio = current_span.font_size / max_font_size;
 
-        // For very small movements (< 1pt), be more tolerant if font is small
-        let abs_baseline_diff = baseline_diff.abs();
-        let is_tiny_movement = abs_baseline_diff < TINY_MOVEMENT_THRESHOLD;
+        // Require both positional AND size criteria for sub/superscript detection
+        // This prevents font transitions in normal text from being misclassified
+        let has_size_reduction = font_size_ratio < 0.85; // Font must be <85% of baseline
+        let has_significant_movement = y_diff.abs() > 1.5; // Must move >1.5pt from baseline
 
-        // ChatGPT's normalized composite scoring approach
-        // 1. Normalized vertical offset (positive = below baseline = subscript candidate)
-        let v = baseline_diff / cluster_base_font_size; // Normalized by font size
-
-        // 2. Font size shrinkage (0 = normal size, >0 = smaller than average)
-        let s = if span.font_size < cluster_base_font_size {
-            1.0 - (span.font_size / cluster_base_font_size)
-        } else {
-            0.0
-        };
-
-        // 3. Directional confidence scores [0,1]
-        let raw_sub = VERTICAL_WEIGHT * v.max(0.0) + SIZE_WEIGHT * s;
-        let raw_sup = VERTICAL_WEIGHT * (-v).max(0.0) + SIZE_WEIGHT * s;
-
-        // 4. Normalize to [0,1] using reference values
-        let denom = VERTICAL_WEIGHT * VERTICAL_REF + SIZE_WEIGHT * SIZE_REF;
-        let sub_confidence =
-            (raw_sub / denom).clamp(CONFIDENCE_NORMALIZATION_MIN, CONFIDENCE_NORMALIZATION_MAX);
-        let sup_confidence =
-            (raw_sup / denom).clamp(CONFIDENCE_NORMALIZATION_MIN, CONFIDENCE_NORMALIZATION_MAX);
-
-        // Check for footnote reference patterns FIRST (highest priority)
-        let is_potential_footnote =
-            is_footnote_reference(span, span_idx, spans, cluster_base_font_size);
-
-        let (is_subscript, is_superscript) = if is_potential_footnote {
-            // HIGHEST PRIORITY: Footnote references → superscript (ignore baseline positioning)
-            debug_print!("  📝 FOOTNOTE SUPERSCRIPT: '{}' detected as footnote reference baseline_diff={:.1}", 
-                         span.text.trim(), baseline_diff);
-            (false, true)
-        } else if s > FONT_SIZE_STRONG_SHRINKAGE_THRESHOLD {
-            // Strong font size reduction (>25%) → likely subscript regardless of baseline positioning
-            // This handles PDF rendering issues where subscripts are positioned inconsistently
-            debug_print!("  🔬 FONT SIZE OVERRIDE: '{}' strong_shrinkage={:.3} baseline={:.3} → treating as subscript", 
-                         span.text.trim(), s, v);
-            (true, false)
-        } else if sub_confidence > COMPOSITE_SUBSCRIPT_CONFIDENCE_THRESHOLD
-            && sub_confidence > sup_confidence
-            && has_smaller_font
-        {
-            // High subscript confidence AND smaller font
-            debug_print!("  🔬 COMPOSITE SUBSCRIPT: '{}' sub_conf={:.3} sup_conf={:.3} (v={:.3} s={:.3}) baseline_diff={:.1}", 
-                         span.text.trim(), sub_confidence, sup_confidence, v, s, baseline_diff);
-            (true, false)
-        } else if sup_confidence > COMPOSITE_SUBSCRIPT_CONFIDENCE_THRESHOLD
-            && sup_confidence > sub_confidence
-            && has_smaller_font
-        {
-            // High superscript confidence AND smaller font
-            debug_print!("  🔬 COMPOSITE SUPERSCRIPT: '{}' sub_conf={:.3} sup_conf={:.3} (v={:.3} s={:.3}) baseline_diff={:.1}", 
-                         span.text.trim(), sub_confidence, sup_confidence, v, s, baseline_diff);
-            (false, true)
-        } else if is_tiny_movement && has_smaller_font {
-            // For tiny movements with small fonts, default to subscript (most mathematical subscripts)
-            debug_print!("  🔬 TINY MOVEMENT OVERRIDE: '{}' baseline_diff={:.1} font_ratio={:.2} → treating as subscript", 
-                         span.text.trim(), baseline_diff, font_ratio);
-            (true, false)
-        } else {
-            // Low confidence for both
-            debug_print!(
-                "  🔬 NO SCRIPT: '{}' sub_conf={:.3} sup_conf={:.3} < threshold={:.3}",
-                span.text.trim(),
-                sub_confidence,
-                sup_confidence,
-                COMPOSITE_SUBSCRIPT_CONFIDENCE_THRESHOLD
-            );
-            (false, false)
-        };
-
-        // MATHEMATICAL CONTEXT OVERRIDE: Convert superscripts to subscripts in mathematical notation
-        let (is_subscript, is_superscript) = if is_superscript
-            && should_convert_superscript_to_subscript_in_math_context(span, span_idx, spans)
-        {
-            debug_print!("  🧮 CLUSTERING MATHEMATICAL CONTEXT OVERRIDE: Converting Unicode superscript '{}' to subscript in mathematical notation",
-                         span.text.trim());
-            (true, false)
-        } else {
-            (is_subscript, is_superscript)
-        };
-
-        debug_print!("  📍 GLOBAL SPAN[{}]: '{}' global_baseline_diff={:.1} font_ratio={:.2} → sub={} sup={}", 
-                     span_idx, span.text.trim(), baseline_diff, font_ratio, is_subscript, is_superscript);
+        let is_subscript = has_size_reduction && has_significant_movement && y_diff > 0.0;
+        let is_superscript = has_size_reduction && has_significant_movement && y_diff < 0.0;
 
         results.push((span_idx, is_subscript, is_superscript));
     }
@@ -1742,7 +1712,7 @@ pub(crate) fn detect_subscripts_clustered(spans: &[CharSpan]) -> Vec<(usize, boo
     let clusters = cluster_baselines(spans, CLUSTERING_Y_THRESHOLD);
 
     // Step 2: Calculate global base font size
-    let global_base_font_size = spans
+    let _global_base_font_size = spans
         .iter()
         .map(|s| s.font_size)
         .filter(|&size| size > MIN_FONT_SIZE_FILTER)
@@ -1780,17 +1750,13 @@ pub(crate) fn detect_subscripts_clustered(spans: &[CharSpan]) -> Vec<(usize, boo
             .unwrap_or(0)
     );
 
-    // Step 4: Detect subscripts within each cluster using GLOBAL baseline
+    // Step 4: Detect subscripts within each cluster using CLUSTER-LOCAL analysis
     let mut all_results = Vec::new();
 
     for (cluster_idx, cluster_indices) in clusters.iter().enumerate() {
         debug_print!("🎯 Processing cluster {}", cluster_idx);
-        let cluster_results = detect_subscripts_in_cluster_with_global_baseline(
-            spans,
-            cluster_indices,
-            global_base_font_size,
-            global_baseline,
-        );
+        let cluster_results =
+            detect_subscripts_in_cluster_with_local_analysis(spans, cluster_indices);
         all_results.extend(cluster_results);
     }
 
@@ -1802,4 +1768,135 @@ pub(crate) fn detect_subscripts_clustered(spans: &[CharSpan]) -> Vec<(usize, boo
         all_results.len()
     );
     all_results
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::entities::BBox;
+
+    fn create_test_span(text: &str, x: f32, y: f32, font_size: f32) -> CharSpan {
+        CharSpan {
+            text: text.to_string(),
+            bbox: BBox {
+                x0: x,
+                y0: y,
+                x1: x + 10.0,
+                y1: y + font_size,
+            },
+            font_size,
+            font_name: "Arial".to_string(),
+            rotation: 0.0,
+            font_weight: None,
+            char_start_idx: 0,
+            char_end_idx: text.len(),
+            original_unicode: None,
+            has_corruption: false,
+        }
+    }
+
+    #[test]
+    fn test_cluster_baselines_basic_grouping() {
+        // Test that spans with similar Y positions get clustered together
+        let spans = vec![
+            create_test_span("A", 0.0, 100.0, 12.0),
+            create_test_span("B", 10.0, 101.0, 12.0), // 1pt difference - should cluster
+            create_test_span("C", 20.0, 102.0, 12.0), // 2pt difference - should cluster
+        ];
+
+        let clusters = cluster_baselines(&spans, 5.0);
+        assert_eq!(clusters.len(), 1, "All spans should be in one cluster");
+        assert_eq!(clusters[0].len(), 3, "Cluster should contain all spans");
+    }
+
+    #[test]
+    fn test_cluster_baselines_font_aware_subscript_grouping() {
+        // Test the key fix: D and subscript s should cluster despite Y difference > threshold
+        let spans = vec![
+            create_test_span("D", 0.0, 100.0, 9.0),  // Main character
+            create_test_span("𝑠", 10.0, 104.2, 7.3), // Subscript - 4.2pt Y diff, smaller font
+        ];
+
+        let clusters = cluster_baselines(&spans, 5.0);
+        assert_eq!(
+            clusters.len(),
+            1,
+            "D and subscript s should be clustered together due to font size relationship"
+        );
+        assert_eq!(
+            clusters[0],
+            vec![0, 1],
+            "Both spans should be in the same cluster"
+        );
+    }
+
+    #[test]
+    fn test_cluster_baselines_similar_fonts_separate() {
+        // Test that spans with similar fonts but large Y difference stay separate
+        let spans = vec![
+            create_test_span("A", 0.0, 100.0, 12.0),
+            create_test_span("B", 10.0, 110.0, 12.0), // 10pt Y difference, same font size
+        ];
+
+        let clusters = cluster_baselines(&spans, 5.0);
+        assert_eq!(
+            clusters.len(),
+            2,
+            "Spans with large Y difference and similar fonts should be separate"
+        );
+    }
+
+    #[test]
+    fn test_cluster_baselines_superscript_grouping() {
+        // Test superscript grouping with font awareness
+        let spans = vec![
+            create_test_span("x", 0.0, 100.0, 12.0), // Main character
+            create_test_span("²", 10.0, 96.0, 8.0),  // Superscript - above baseline, smaller font
+        ];
+
+        let clusters = cluster_baselines(&spans, 5.0);
+        assert_eq!(
+            clusters.len(),
+            1,
+            "x and superscript ² should be clustered together"
+        );
+    }
+
+    #[test]
+    fn test_cluster_baselines_complex_mathematical_expression() {
+        // Test complex expression: "E = mc²" where characters have different relationships
+        let spans = vec![
+            create_test_span("E", 0.0, 100.0, 12.0),  // Main text
+            create_test_span("=", 15.0, 100.0, 12.0), // Same baseline
+            create_test_span("m", 30.0, 100.0, 12.0), // Same baseline
+            create_test_span("c", 40.0, 100.0, 12.0), // Same baseline
+            create_test_span("²", 50.0, 96.0, 8.0),   // Superscript
+        ];
+
+        let clusters = cluster_baselines(&spans, 5.0);
+        assert_eq!(
+            clusters.len(),
+            1,
+            "All characters in E=mc² should cluster together"
+        );
+        assert_eq!(
+            clusters[0].len(),
+            5,
+            "All spans should be in the same cluster"
+        );
+    }
+
+    #[test]
+    fn test_cluster_baselines_no_font_awareness_needed() {
+        // Test that normal clustering still works when font awareness isn't needed
+        let spans = vec![
+            create_test_span("Hello", 0.0, 100.0, 12.0),
+            create_test_span(" ", 50.0, 100.0, 12.0),
+            create_test_span("World", 55.0, 100.0, 12.0),
+        ];
+
+        let clusters = cluster_baselines(&spans, 5.0);
+        assert_eq!(clusters.len(), 1, "Normal text should cluster together");
+        assert_eq!(clusters[0].len(), 3, "All spans should be in one cluster");
+    }
 }

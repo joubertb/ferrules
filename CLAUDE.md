@@ -921,4 +921,5 @@ const FONT_SIZE_STRONG_SHRINKAGE_THRESHOLD: f32 = 0.25; // 25% strong shrinkage
     4. Compare - If original Unicode ≠ our Unicode, use ours
 - when running target/debug/ferrules and want to look for multiple things in the output, redirect the output of the command to a file and then grep for what you are looking for in the file
 - in rust code, variables must be used directly in the `format!`
+- Do not add "FIXED" or "REMOVED" in comments. Or anything about fixing or removing it. Only add a comment if it explains something that is now happening because of the FIXED or REMOVED code.
 - **Subscript Detection**: Uses research-validated proportional baseline thresholds (99.89% accuracy)
