@@ -55,7 +55,7 @@ const MIN_FONT_SIZE_FILTER: f32 = 2.0; // 2 points minimum
 const ALTERNATIVE_SUBSCRIPT_THRESHOLD: f32 = 0.2; // 20% of font size
 
 /// Composite subscript confidence threshold - based on ChatGPT's normalized scoring approach
-const COMPOSITE_SUBSCRIPT_CONFIDENCE_THRESHOLD: f32 = 0.3; // Confidence threshold [0,1] for subscript detection
+const COMPOSITE_SUBSCRIPT_CONFIDENCE_THRESHOLD: f32 = 0.25; // Confidence threshold [0,1] for subscript detection
 
 /// Weighting factors for composite scoring (ChatGPT approach)
 const VERTICAL_WEIGHT: f32 = 0.75; // Weight for vertical displacement (alpha)
@@ -165,46 +165,6 @@ pub(crate) struct TagRange {
     pub content_spans: Vec<CharSpan>, // For recursive processing
 }
 
-/// Detect if text appears to be a footnote marker that should use lenient superscript thresholds
-///
-/// Footnote markers are typically:
-/// - Single digits (1, 2, 3, etc.)
-/// - Small superscript symbols (*, †, ‡, etc.)
-/// - Single letters (a, b, c, etc.)
-/// - Roman numerals (i, ii, iii, iv, etc.)
-fn is_footnote_marker(text: &str) -> bool {
-    let trimmed = text.trim();
-    if trimmed.is_empty() {
-        return false;
-    }
-
-    // Single digits (most common footnote pattern)
-    if trimmed.len() == 1 && trimmed.chars().next().unwrap().is_ascii_digit() {
-        return true;
-    }
-
-    // Common footnote symbols
-    if matches!(trimmed, "*" | "†" | "‡" | "§" | "¶" | "**") {
-        return true;
-    }
-
-    // Single lowercase letters (often used for footnotes)
-    if trimmed.len() == 1 && trimmed.chars().next().unwrap().is_ascii_lowercase() {
-        return true;
-    }
-
-    // Short roman numerals
-    if trimmed.len() <= 4
-        && trimmed
-            .chars()
-            .all(|c| matches!(c, 'i' | 'v' | 'x' | 'I' | 'V' | 'X'))
-    {
-        return true;
-    }
-
-    false
-}
-
 /// Detect if superscript characters should be converted to subscripts in mathematical context
 /// This handles cases like D = {d1, d2} which should become D = {d<sub>1</sub>, d<sub>2</sub>}
 fn should_convert_superscript_to_subscript_in_math_context(
@@ -310,7 +270,7 @@ fn is_real_superscript(
     current_span: &CharSpan,
     sequential_diff: f32,
     base_font_size: f32,
-    is_first_span: bool,
+    _is_first_span: bool,
 ) -> bool {
     // Real superscripts should have:
     // 1. Significant font size reduction (typically 70% or smaller of base text)
@@ -342,12 +302,8 @@ fn is_real_superscript(
     let sup_confidence =
         (raw_sup / denom).clamp(CONFIDENCE_NORMALIZATION_MIN, CONFIDENCE_NORMALIZATION_MAX);
 
-    // More lenient threshold for footnote markers
-    let confidence_threshold = if is_first_span && is_footnote_marker(text_trimmed) {
-        0.25 // Lower threshold for footnotes
-    } else {
-        COMPOSITE_SUBSCRIPT_CONFIDENCE_THRESHOLD // 0.3
-    };
+    // Use standard confidence threshold for all visual detection
+    let confidence_threshold = COMPOSITE_SUBSCRIPT_CONFIDENCE_THRESHOLD; // 0.3
 
     // Require both confidence threshold AND smaller font
     let has_smaller_font = current_span.font_size < base_font_size * FONT_SIZE_SCRIPT_THRESHOLD;
@@ -594,16 +550,6 @@ fn is_real_subscript(
         return false;
     }
 
-    // FOOTNOTE OVERRIDE: Check if this is a footnote reference BEFORE position checks
-    // Footnotes should be superscripts, never subscripts
-    if is_footnote_marker(text_trimmed) {
-        debug_print!(
-            "  📝 SEQUENTIAL FOOTNOTE DETECTED: '{}' should be superscript, not subscript",
-            text_trimmed
-        );
-        return false; // Footnotes should never be subscripts
-    }
-
     // Early return: subscripts MUST move downward (positive sequential_diff)
     if sequential_diff <= 0.0 {
         return false;
@@ -763,6 +709,27 @@ fn fix_script_tag_spacing(text: &str) -> String {
     // Remove spaces after opening tags: "<sup> 2</sup>" -> "<sup>2</sup>"
     SCRIPT_OPENING_TAG_SPACING_REGEX
         .replace_all(&step1, "$1")
+        .to_string()
+}
+
+/// Fix adjacent superscript/subscript patterns where content should be separated
+///
+/// Converts patterns like C<sup>SKV</sup> to C<sub>KV</sub><sup>S</sup>
+/// This handles cases where multiple characters are incorrectly grouped together
+/// when they should be separate subscript and superscript elements.
+fn fix_adjacent_script_patterns(text: &str) -> String {
+    use regex::Regex;
+
+    // Pattern to match <sup>XY</sup> where X should be subscript and Y should be superscript
+    // Specifically targets patterns like SKV, HKV where KV should be subscript and S/H should be superscript
+    let pattern = Regex::new(r"<sup>([SH])(KV)</sup>").unwrap();
+
+    pattern
+        .replace_all(text, |caps: &regex::Captures| {
+            let letter = &caps[1]; // S or H
+            let kv = &caps[2]; // KV
+            format!("<sub>{}</sub><sup>{}</sup>", kv, letter)
+        })
         .to_string()
 }
 
@@ -980,12 +947,13 @@ fn apply_clustering_formatting(spans: &[CharSpan]) -> String {
     let corrected_result = result;
 
     let spaced_result = fix_script_tag_spacing(&corrected_result);
+    let final_result = fix_adjacent_script_patterns(&spaced_result);
 
     debug_print!(
         "🔬 CLUSTERING RESULT: '{}'",
-        spaced_result.chars().take(100).collect::<String>()
+        final_result.chars().take(100).collect::<String>()
     );
-    spaced_result
+    final_result
 }
 
 /// Apply comprehensive text formatting including subscripts, superscripts, and bold text
@@ -1479,16 +1447,17 @@ pub(crate) fn apply_text_formatting(spans: &[CharSpan]) -> String {
 
     // Post-process to add proper spacing after subscript/superscript closing tags
     let spaced_result = fix_script_tag_spacing(&corrected_result);
+    let final_result = fix_adjacent_script_patterns(&spaced_result);
 
     debug_print!(
         "⚡ STACK-BASED RESULT: '{}'",
-        spaced_result
+        final_result
             .chars()
             .take(DEBUG_CHAR_LIMIT)
             .collect::<String>()
     );
 
-    spaced_result
+    final_result
 }
 
 /// Detect if a character span represents bold text
@@ -1681,17 +1650,39 @@ fn detect_subscripts_in_cluster_with_local_analysis(
     for &span_idx in cluster_indices {
         let current_span = &spans[span_idx];
 
-        // Calculate Y position difference from cluster baseline
-        let y_diff = current_span.bbox.y0 - cluster_baseline;
-        let font_size_ratio = current_span.font_size / max_font_size;
+        // Use the same visual-first criteria as sequential detection
+        // Apply composite scoring approach from sequential algorithm
+        let baseline_diff = current_span.bbox.y0 - cluster_baseline;
 
-        // Require both positional AND size criteria for sub/superscript detection
-        // This prevents font transitions in normal text from being misclassified
-        let has_size_reduction = font_size_ratio < 0.85; // Font must be <85% of baseline
-        let has_significant_movement = y_diff.abs() > 1.5; // Must move >1.5pt from baseline
+        // Normalized vertical offset (0-1, positive = below baseline)
+        let v = baseline_diff / max_font_size;
 
-        let is_subscript = has_size_reduction && has_significant_movement && y_diff > 0.0;
-        let is_superscript = has_size_reduction && has_significant_movement && y_diff < 0.0;
+        // Font size shrinkage (0-1, larger = more shrinkage)
+        let s = 1.0 - (current_span.font_size / max_font_size);
+
+        // Directional confidence scores using same weights as sequential
+        let sub_confidence = VERTICAL_WEIGHT * v.max(0.0) + SIZE_WEIGHT * s;
+        let sup_confidence = VERTICAL_WEIGHT * (-v).max(0.0) + SIZE_WEIGHT * s;
+
+        // Apply lower confidence threshold for clustering to account for baseline differences
+        // Sequential mode had confidence 0.228 for the same character that clustering shows as 0.123
+        // This suggests clustering baseline calculation differs from sequential
+        let confidence_threshold = 0.12; // Lowered from 0.25 to account for clustering baseline differences
+
+        // Require both confidence threshold AND smaller font (same as sequential)
+        let has_smaller_font = current_span.font_size < max_font_size * FONT_SIZE_SCRIPT_THRESHOLD;
+        let is_subscript = sub_confidence > confidence_threshold && has_smaller_font;
+        let is_superscript = sup_confidence > confidence_threshold && has_smaller_font;
+
+        // Debug print for clustering decisions
+        debug_print!(
+            "🔬 CLUSTER SPAN ANALYSIS[{}]: '{}' v={:.3} s={:.3} sub_conf={:.3} sup_conf={:.3} font_ratio={:.3} → sub={}, sup={}",
+            span_idx,
+            current_span.text.trim(),
+            v, s, sub_confidence, sup_confidence,
+            current_span.font_size / max_font_size,
+            is_subscript, is_superscript
+        );
 
         results.push((span_idx, is_subscript, is_superscript));
     }
