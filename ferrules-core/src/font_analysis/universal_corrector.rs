@@ -542,6 +542,28 @@ impl UniversalFontCorrector {
             synthetic_mappings.entry(code).or_insert(code); // ASCII identity mapping
         }
 
+        // ===================================================================
+        // MATHEMATICAL SYMBOL MAPPINGS
+        // ===================================================================
+        // Common mathematical symbols that may be corrupted in subset fonts
+
+        // Prime symbols - handle various character codes that should map to prime
+        synthetic_mappings.insert(0x0027, 0x0027); // ASCII apostrophe/prime
+        synthetic_mappings.insert(0x2032, 0x0027); // Mathematical prime → apostrophe
+        synthetic_mappings.insert(0x00B4, 0x0027); // Acute accent → apostrophe
+        synthetic_mappings.insert(0x0060, 0x0027); // Grave accent → apostrophe
+
+        // Note: Cannot globally map 0x0030 ("0") to prime as it would corrupt all "0" digits
+        // The character code misinterpretation needs font-specific handling
+
+        // Small font size characters that appear as empty strings
+        synthetic_mappings.insert(0x0001, 0x0027); // Low control character → prime
+        synthetic_mappings.insert(0x0002, 0x0027); // Low control character → prime
+
+        // Double/triple prime symbols
+        synthetic_mappings.insert(0x2033, 0x2033); // Double prime
+        synthetic_mappings.insert(0x2034, 0x2034); // Triple prime
+
         // Synthetic mapping generation complete
 
         Some(synthetic_mappings)
