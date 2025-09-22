@@ -635,7 +635,9 @@ grep "mass.*speed.*light" test-output/mathbert-results/mathbert.json
 docker stats ferrules-api
 
 # Enable debug logging to identify bottlenecks
-RUST_LOG=debug ./target/debug/ferrules large-document.pdf --output-dir debug-output
+RUST_LOG=debug ./target/debug/ferrules large-document.pdf --output-dir debug-output --debug-output file
+
+# the debug output will be in debug-output/large-document-results/large-document-debug.txt
 
 # Check for memory leaks
 ps aux | grep ferrules
@@ -676,6 +678,7 @@ grep "UNIVERSAL" ferrules-api.log
 # Debug the specific font analysis
 RUST_LOG=debug ./target/debug/ferrules problem.pdf --debug-output file
 # Check debug output for font analysis details
+# The debug output will be in problem-results/problem-debug.txt
 ```
 
 #### Container Issues
@@ -715,6 +718,7 @@ curl http://localhost:3002/health
 RUST_LOG=debug ./target/debug/ferrules document.pdf --debug-output file
 
 # Check debug output for:
+# - The debug output will be in document-results/document-debug.txt
 # - Font detection: "UNIVERSAL CORRECTOR: Analyzing PDF"
 # - Subset detection: "Font subset detected"  
 # - Mapping generation: "Enhanced font with N synthetic mappings"
