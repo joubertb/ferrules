@@ -1269,7 +1269,11 @@ pub(crate) fn merge_elements_into_blocks(
                                 let block = if !figure_elements.is_empty() {
                                     // Remove the blocks that we're incorporating into the figure (in reverse order)
                                     for &i in blocks_to_remove.iter().rev() {
-                                        blocks.remove(i);
+                                        if i < blocks.len() {
+                                            blocks.remove(i);
+                                        } else {
+                                            debug_print!("🖼️ WARNING: Index {} out of bounds for blocks.len()={}", i, blocks.len());
+                                        }
                                     }
 
                                     debug_print!("🖼️ Created Figure block with {} embedded texts and caption", figure_elements.len());
@@ -1309,7 +1313,11 @@ pub(crate) fn merge_elements_into_blocks(
                                 let block = if !figure_elements.is_empty() {
                                     // Remove the blocks that we're incorporating into the figure (in reverse order)
                                     for &i in blocks_to_remove.iter().rev() {
-                                        blocks.remove(i);
+                                        if i < blocks.len() {
+                                            blocks.remove(i);
+                                        } else {
+                                            debug_print!("🖼️ WARNING: Index {} out of bounds for blocks.len()={}", i, blocks.len());
+                                        }
                                     }
 
                                     let embedded_count = figure_elements.len();
