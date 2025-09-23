@@ -39,6 +39,13 @@ pub fn correct_character_with_universal_corrector(char_code: u32, font_name: &st
     guard.as_ref()?.correct_character(char_code, font_name)
 }
 
+/// Get character correction using encoding differences (primary method with Adobe Glyph List)
+pub fn correct_character_with_encoding_differences(char_code: u32, font_name: &str) -> Option<char> {
+    let corrector = GLOBAL_CORRECTOR.get()?;
+    let guard = corrector.lock().ok()?;
+    guard.as_ref()?.correct_character_with_encoding_differences(char_code, font_name)
+}
+
 // ============================================================================
 // Wrapper Functions for Compatibility with Previous Correction Module
 // ============================================================================

@@ -28,9 +28,26 @@ fn apply_character_corrections(
     #[cfg(feature = "correction-engine")]
     {
         use crate::debug_println;
-        use crate::font_analysis::correct_character_with_universal_corrector;
+        use crate::font_analysis::{correct_character_with_encoding_differences, correct_character_with_universal_corrector};
 
-        // Use UniversalFontCorrector - direct PDF glyph extraction approach
+        // PRIMARY: Try encoding differences + Adobe Glyph List approach first
+        if let Some(corrected_char) =
+            correct_character_with_encoding_differences(unicode_value, font_name)
+        {
+            if corrected_char == '\0' {
+                debug_println!(
+                    "🔧 ENCODING CORRECTION: Font '{font_name}' - 0x{unicode_value:04X} '{original_char}' → [SUPPRESSED]"
+                );
+                return (String::new(), true); // Return empty string to suppress character
+            } else {
+                debug_println!(
+                    "🔧 ENCODING CORRECTION: Font '{font_name}' - 0x{unicode_value:04X} '{original_char}' → '{corrected_char}'"
+                );
+                return (corrected_char.to_string(), true);
+            }
+        }
+
+        // FALLBACK: Use UniversalFontCorrector - synthetic mappings approach
         if let Some(corrected_char) =
             correct_character_with_universal_corrector(unicode_value, font_name)
         {
