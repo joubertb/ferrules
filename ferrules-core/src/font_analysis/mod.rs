@@ -142,15 +142,6 @@ pub fn initialize() -> Result<(), Box<dyn std::error::Error>> {
     Ok(())
 }
 
-/// Check if the correction system is available
-///
-/// This is a compatibility wrapper that provides the same API as the previous
-/// correction module's is_available function.
-pub fn is_available() -> bool {
-    // Font analysis correction system is always available when the feature is enabled
-    true
-}
-
 /// Fix character encoding corruption (legacy compatibility function)
 ///
 /// This function provides backwards compatibility for existing code that calls
