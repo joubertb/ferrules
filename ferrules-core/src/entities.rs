@@ -359,7 +359,7 @@ impl CharSpan {
         // Apply control character corrections (handles \u0012, \u0013, \u0000, \u0001, \u0002)
         #[cfg(feature = "correction-engine")]
         let final_text = {
-            use crate::correction::character::apply_character_corrections;
+            use crate::font_analysis::apply_character_corrections;
             let corrected = apply_character_corrections(&glyph_corrected_text);
 
             // Debug control character corrections at CharSpan level
@@ -452,7 +452,7 @@ impl CharSpan {
             // Apply control character corrections (handles \u0012, \u0013, \u0000, \u0001, \u0002)
             #[cfg(feature = "correction-engine")]
             let char_text = {
-                use crate::correction::character::apply_character_corrections;
+                use crate::font_analysis::apply_character_corrections;
                 let corrected = apply_character_corrections(&glyph_corrected_text);
 
                 // Debug control character corrections in append method
@@ -656,7 +656,7 @@ impl Line {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::correction::{
+    use crate::font_analysis::{
         correct_characters, fix_character_encoding_corruption,
         fix_character_encoding_corruption_with_font,
     };

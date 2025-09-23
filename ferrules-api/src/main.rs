@@ -12,11 +12,11 @@ use axum_tracing_opentelemetry::middleware::OtelAxumLayer;
 use clap::Parser;
 use ferrules_api::init_tracing;
 use ferrules_core::{
-    correction::initialize_for_cli,
     debug::{
         cleanup_old_debug_files, clear_debug_context, delete_debug_file, init_debug_config,
         read_debug_file, set_debug_context, DebugOutput,
     },
+    font_analysis::initialize_for_cli,
     layout::model::{ORTConfig, OrtExecutionProvider},
     render::markdown::to_markdown,
     FerrulesParseConfig, FerrulesParser,

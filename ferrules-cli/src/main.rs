@@ -1,6 +1,6 @@
 use clap::Parser;
 
-use ferrules_core::correction::{display_cli_config_info, initialize_for_cli};
+use ferrules_core::font_analysis::{display_cli_config_info, initialize_for_cli};
 use ferrules_core::{
     debug::{init_debug_config, set_debug_context_with_dir, DebugOutput},
     layout::model::{ORTConfig, OrtExecutionProvider},

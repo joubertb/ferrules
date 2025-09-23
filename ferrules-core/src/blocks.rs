@@ -1,5 +1,5 @@
-use crate::correction;
 use crate::entities::{BBox, Element, ElementType, PageID};
+use crate::font_analysis as correction;
 use anyhow::bail;
 use serde::{Deserialize, Serialize};
 

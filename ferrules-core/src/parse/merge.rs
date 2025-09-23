@@ -2,7 +2,7 @@ use std::collections::HashMap;
 
 use crate::{
     blocks::{Block, BlockType, ImageBlock, List, TextBlock, Title, TitleLevel},
-    correction, debug_print,
+    debug_print,
     entities::{Element, ElementID, ElementType, Line, PageID},
     layout::model::LayoutBBox,
 };
@@ -11,7 +11,7 @@ use regex::Regex;
 /// Apply word-level font corrections to text
 fn apply_corrections_to_text(text: String) -> String {
     // Apply font corrections first
-    correction::correct_assembled_text(&text)
+    crate::font_analysis::correct_assembled_text(&text)
 }
 
 /// Concatenate CharSpans within a line with proper spacing
@@ -1566,7 +1566,7 @@ pub(crate) fn merge_elements_into_blocks(
         "🔧 MERGE OUTPUT: About to apply corrections to {} blocks",
         blocks.len()
     );
-    crate::correction::correct_blocks(&mut blocks);
+    crate::font_analysis::correct_blocks(&mut blocks);
     debug_print!("🔧 MERGE OUTPUT: After corrections applied");
 
     Ok(blocks)

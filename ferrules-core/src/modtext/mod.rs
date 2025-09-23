@@ -141,7 +141,7 @@ pub fn format_formula_text(text: &str) -> String {
     // Control character corrections are now applied at CharSpan level
     #[cfg(feature = "correction-engine")]
     let corrected_text = {
-        use crate::correction::character::fix_math_symbol_corruptions;
+        use crate::font_analysis::text_corrections::fix_math_symbol_corruptions;
         let fixed = fix_math_symbol_corruptions(&standardized_text);
         debug_print!(
             "📋 FORMULA STEP 4 (Symbol corrections): '{}' → '{}'",
@@ -319,7 +319,7 @@ pub fn format_formula_with_spans(
     // Step 4: Apply mathematical symbol corrections to the processed text
     #[cfg(feature = "correction-engine")]
     let corrected_text = {
-        use crate::correction::character::fix_math_symbol_corruptions;
+        use crate::font_analysis::text_corrections::fix_math_symbol_corruptions;
         let fixed = fix_math_symbol_corruptions(&standardized_text);
         debug_print!(
             "📋 FORMULA WITH SPANS STEP 4 (Symbol corrections): '{}' → '{}'",
@@ -386,7 +386,7 @@ pub fn process_text_with_spans(
     );
 
     // Apply corrections using the unified correction API
-    let corrected_text = crate::correction::correct_assembled_text(&script_processed);
+    let corrected_text = crate::font_analysis::correct_assembled_text(&script_processed);
 
     // Clean up substitute characters
     let cleaned_text = corrected_text.replace('\u{001a}', "");

@@ -752,7 +752,7 @@ fn apply_clustering_formatting(spans: &[CharSpan]) -> String {
     // Apply post-processing
     #[cfg(feature = "correction-engine")]
     let corrected_result = {
-        use crate::correction::character::fix_math_symbol_corruptions;
+        use crate::font_analysis::text_corrections::fix_math_symbol_corruptions;
         fix_math_symbol_corruptions(&result)
     };
 
@@ -1253,7 +1253,7 @@ pub(crate) fn apply_text_formatting(spans: &[CharSpan]) -> String {
     // Apply mathematical symbol corrections to fix patterns like "6=" → "≠", "∈/" → "∉"
     #[cfg(feature = "correction-engine")]
     let corrected_result = {
-        use crate::correction::character::fix_math_symbol_corruptions;
+        use crate::font_analysis::text_corrections::fix_math_symbol_corruptions;
         fix_math_symbol_corruptions(&result)
     };
 
@@ -1682,10 +1682,7 @@ fn is_footnote_reference_in_context(
 }
 
 /// Check if a span is part of matrix notation like M(i,j) where indices should be subscripts
-fn is_matrix_notation_index(
-    spans: &[CharSpan],
-    span_idx: usize,
-) -> bool {
+fn is_matrix_notation_index(spans: &[CharSpan], span_idx: usize) -> bool {
     let current_span = &spans[span_idx];
     let text = current_span.text.trim();
 
@@ -1720,7 +1717,9 @@ fn is_matrix_notation_index(
                     let matrix_span = &spans[i - 1];
                     let matrix_text = matrix_span.text.trim();
 
-                    if matrix_text.len() == 1 && matrix_text.chars().next().unwrap().is_ascii_uppercase() {
+                    if matrix_text.len() == 1
+                        && matrix_text.chars().next().unwrap().is_ascii_uppercase()
+                    {
                         debug_print!(
                             "🔢 MATRIX NOTATION: Closing ')' in matrix notation {}(...) → forcing subscript context",
                             matrix_text
@@ -1739,7 +1738,10 @@ fn is_matrix_notation_index(
     }
 
     // Case 3: Current span contains indices (letters/numbers/commas) inside parentheses
-    if text.chars().all(|c| c.is_ascii_alphanumeric() || c == ',' || c == ' ') {
+    if text
+        .chars()
+        .all(|c| c.is_ascii_alphanumeric() || c == ',' || c == ' ')
+    {
         // Look backward for opening parenthesis and matrix variable
         for i in (0..span_idx).rev() {
             let check_span = &spans[i];
@@ -1751,7 +1753,9 @@ fn is_matrix_notation_index(
                     let matrix_span = &spans[i - 1];
                     let matrix_text = matrix_span.text.trim();
 
-                    if matrix_text.len() == 1 && matrix_text.chars().next().unwrap().is_ascii_uppercase() {
+                    if matrix_text.len() == 1
+                        && matrix_text.chars().next().unwrap().is_ascii_uppercase()
+                    {
                         debug_print!(
                             "🔢 MATRIX NOTATION: Index content '{}' in matrix notation {}(...) → forcing subscript",
                             text, matrix_text

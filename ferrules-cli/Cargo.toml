@@ -30,6 +30,7 @@ lopdf = "0.34.0"
 adobe-cmap-parser = "0.4.1"
 flate2 = "1.0"
 
-[[bin]]
-name = "font-debug"
-path = "../ferrules-core/src/correction/font_debug.rs"
+# Font debug binary removed as part of correction module consolidation
+# [[bin]]
+# name = "font-debug"
+# path = "../ferrules-core/src/correction/font_debug.rs"

@@ -3,8 +3,12 @@
 //! This module provides automatic detection and correction of font corruption
 //! in PDF documents by analyzing glyph names and mapping them to correct
 //! Unicode characters using the Adobe Glyph List standard.
+//!
+//! This module also provides text-level corrections that complement the
+//! font-level corrections, offering a complete text correction solution.
 
 pub mod adobe_glyph_list;
+pub mod text_corrections;
 pub mod universal_corrector;
 
 pub use universal_corrector::UniversalFontCorrector;
@@ -33,4 +37,177 @@ pub fn correct_character_with_universal_corrector(char_code: u32, font_name: &st
     let corrector = GLOBAL_CORRECTOR.get()?;
     let guard = corrector.lock().ok()?;
     guard.as_ref()?.correct_character(char_code, font_name)
+}
+
+// ============================================================================
+// Wrapper Functions for Compatibility with Previous Correction Module
+// ============================================================================
+
+/// Apply text corrections to assembled text
+///
+/// This is a compatibility wrapper that provides the same API as the previous
+/// correction module's correct_assembled_text function.
+pub fn correct_assembled_text(text: &str) -> String {
+    text_corrections::correct_assembled_text(text)
+}
+
+/// Apply word-level corrections to assembled text (in-place)
+///
+/// This is a compatibility wrapper that provides the same API as the previous
+/// correction module's apply_word_corrections function.
+pub fn apply_word_corrections(text: &mut String) {
+    let corrected = correct_assembled_text(text);
+    if corrected != *text {
+        *text = corrected;
+    }
+}
+
+/// Apply all text corrections to a block
+///
+/// This is a compatibility wrapper that provides the same API as the previous
+/// correction module's correct_block function.
+pub fn correct_block(block: &mut crate::blocks::Block) {
+    use crate::blocks::BlockType;
+
+    match &mut block.kind {
+        BlockType::TextBlock(text_block) => {
+            apply_word_corrections(&mut text_block.text);
+        }
+        BlockType::ListBlock(list_block) => {
+            for item in &mut list_block.items {
+                apply_word_corrections(item);
+            }
+        }
+        BlockType::Title(title) => {
+            apply_word_corrections(&mut title.text);
+        }
+        BlockType::Header(header) => {
+            apply_word_corrections(&mut header.text);
+        }
+        BlockType::Footer(footer) => {
+            apply_word_corrections(&mut footer.text);
+        }
+        BlockType::Image(_) => {
+            // No text to correct in image blocks
+        }
+        BlockType::Table => {
+            // Table structure is not directly accessible from Block
+            // Table text is handled during merge operations
+        }
+        BlockType::Figure(_) => {
+            // No text to correct in figure blocks
+        }
+    }
+}
+
+/// Apply text corrections to multiple blocks efficiently
+///
+/// This is a compatibility wrapper that provides the same API as the previous
+/// correction module's correct_blocks function.
+pub fn correct_blocks(blocks: &mut [crate::blocks::Block]) {
+    if blocks.is_empty() {
+        return;
+    }
+
+    tracing::debug!("🔤 Applying text corrections to {} blocks", blocks.len());
+
+    for block in blocks {
+        correct_block(block);
+    }
+}
+
+/// Apply character-level corrections to text
+///
+/// This is a compatibility wrapper that provides the same API as the previous
+/// correction module's correct_characters function.
+pub fn correct_characters(text: &str) -> String {
+    text_corrections::filter_control_characters(text)
+}
+
+/// Apply character-level corrections using the default corrector
+///
+/// This is a compatibility wrapper that provides the same API as the previous
+/// correction module's apply_character_corrections function.
+pub fn apply_character_corrections(text: &str) -> String {
+    text_corrections::apply_character_corrections(text)
+}
+
+/// Initialize the correction system
+///
+/// This is a compatibility wrapper that provides the same API as the previous
+/// correction module's initialize function.
+pub fn initialize() -> Result<(), Box<dyn std::error::Error>> {
+    // Font analysis correction system doesn't require explicit initialization
+    // beyond what happens during PDF processing
+    Ok(())
+}
+
+/// Check if the correction system is available
+///
+/// This is a compatibility wrapper that provides the same API as the previous
+/// correction module's is_available function.
+pub fn is_available() -> bool {
+    // Font analysis correction system is always available when the feature is enabled
+    true
+}
+
+/// Fix character encoding corruption (legacy compatibility function)
+///
+/// This function provides backwards compatibility for existing code that calls
+/// fix_character_encoding_corruption. It delegates to the text correction system.
+pub fn fix_character_encoding_corruption(text: &str) -> String {
+    text_corrections::filter_control_characters(text)
+}
+
+/// Fix character encoding corruption with font information (legacy compatibility)
+///
+/// This function provides backwards compatibility for existing code.
+/// Font-specific corrections are now handled internally by the unified correction system.
+pub fn fix_character_encoding_corruption_with_font(text: &str, _font_name: Option<&str>) -> String {
+    fix_character_encoding_corruption(text)
+}
+
+/// Sets up document context for font corruption analysis (legacy compatibility)
+///
+/// This is now handled automatically by the universal corrector during PDF processing.
+pub fn set_document_context(_pdf_data: std::sync::Arc<[u8]>) {
+    // Universal corrector handles document context automatically
+}
+
+/// Clears document context after parsing is complete (legacy compatibility)
+///
+/// This is now handled automatically by the universal corrector.
+pub fn clear_document_context() {
+    // Universal corrector handles cleanup automatically
+}
+
+/// Initialize correction engine with proper error handling for CLI applications
+///
+/// This provides a CLI-friendly interface for initialization with proper error reporting.
+/// Returns an error that can be displayed to users if initialization fails.
+pub fn initialize_for_cli() -> Result<(), Box<dyn std::error::Error>> {
+    // Font analysis correction system doesn't require explicit initialization
+    // beyond what happens during PDF processing
+    Ok(())
+}
+
+/// Display correction configuration information for CLI verbose mode
+///
+/// Shows cache configuration and correction engine status for CLI applications.
+/// This replaces the feature flag duplication in CLI main.rs files.
+pub fn display_cli_config_info() {
+    #[cfg(feature = "correction-engine")]
+    {
+        println!("📋 Font Analysis Correction Settings");
+        println!("  Universal font corrector: enabled");
+        println!("  Mathematical symbol corrections: enabled");
+        println!("  Character filtering: enabled");
+        println!();
+    }
+
+    #[cfg(not(feature = "correction-engine"))]
+    {
+        println!("🔧 Font analysis correction engine disabled at compile time");
+        println!();
+    }
 }
