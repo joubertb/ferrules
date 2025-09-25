@@ -274,19 +274,26 @@ fn is_real_superscript(
     sequential_diff: f32,
     base_font_size: f32,
     _is_first_span: bool,
+    confidence_threshold: f32,
 ) -> bool {
     // Real superscripts should have:
     // 1. Significant font size reduction (typically 70% or smaller of base text)
     // 2. UPWARD movement from previous character (NEGATIVE sequential_diff in PDF coordinates)
     // 3. Movement that's proportional to character's font size
 
-    // Early return: superscripts MUST move upward (negative sequential_diff)
-    if sequential_diff >= 0.0 {
+    let text_trimmed = current_span.text.trim();
+    if text_trimmed.is_empty() {
         return false;
     }
 
-    let text_trimmed = current_span.text.trim();
-    if text_trimmed.is_empty() {
+    // Special case: Prime symbols should always be superscripts regardless of positioning
+    if text_trimmed == "'" || text_trimmed == "′" || text_trimmed == "″" || text_trimmed == "‴"
+    {
+        return true;
+    }
+
+    // Early return: superscripts MUST move upward (negative sequential_diff)
+    if sequential_diff >= 0.0 {
         return false;
     }
 
@@ -305,8 +312,7 @@ fn is_real_superscript(
     let sup_confidence =
         (raw_sup / denom).clamp(CONFIDENCE_NORMALIZATION_MIN, CONFIDENCE_NORMALIZATION_MAX);
 
-    // Use standard confidence threshold for all visual detection
-    let confidence_threshold = COMPOSITE_SUBSCRIPT_CONFIDENCE_THRESHOLD; // 0.3
+    // Use passed confidence threshold parameter
 
     // Require both confidence threshold AND smaller font
     let has_smaller_font = current_span.font_size < base_font_size * FONT_SIZE_SCRIPT_THRESHOLD;
@@ -354,6 +360,7 @@ fn is_real_subscript(
     base_font_size: f32,
     _spans: &[CharSpan],
     _current_index: usize,
+    confidence_threshold: f32,
 ) -> bool {
     // Real subscripts should have:
     // 1. Significant font size reduction (typically 70% or smaller of base text)
@@ -362,6 +369,12 @@ fn is_real_subscript(
 
     let text_trimmed = current_span.text.trim();
     if text_trimmed.is_empty() {
+        return false;
+    }
+
+    // Special case: Prime symbols should never be subscripts (they are always superscripts)
+    if text_trimmed == "'" || text_trimmed == "′" || text_trimmed == "″" || text_trimmed == "‴"
+    {
         return false;
     }
 
@@ -385,8 +398,7 @@ fn is_real_subscript(
     let sub_confidence =
         (raw_sub / denom).clamp(CONFIDENCE_NORMALIZATION_MIN, CONFIDENCE_NORMALIZATION_MAX);
 
-    // Standard threshold for subscripts
-    let confidence_threshold = COMPOSITE_SUBSCRIPT_CONFIDENCE_THRESHOLD; // 0.3
+    // Use passed confidence threshold parameter
 
     // Require both confidence threshold AND smaller font
     let has_smaller_font = current_span.font_size < base_font_size * FONT_SIZE_SCRIPT_THRESHOLD;
@@ -552,10 +564,6 @@ fn fix_adjacent_script_patterns(text: &str) -> String {
 /// Returns true if the text has complex mathematical structure that would benefit from clustering
 fn requires_baseline_clustering(spans: &[CharSpan]) -> bool {
     if spans.len() < MIN_SPANS_FOR_CLUSTERING {
-        debug_print!(
-            "🔍 COMPLEXITY CHECK: Only {} spans, too short for clustering",
-            spans.len()
-        );
         return false; // Too short for complex formulas
     }
 
@@ -567,10 +575,6 @@ fn requires_baseline_clustering(spans: &[CharSpan]) -> bool {
         .collect();
 
     if y_positions.len() < 4 {
-        debug_print!(
-            "🔍 COMPLEXITY CHECK: Only {} non-empty spans, too few for clustering",
-            y_positions.len()
-        );
         return false;
     }
 
@@ -626,21 +630,7 @@ fn requires_baseline_clustering(spans: &[CharSpan]) -> bool {
     } else {
         8
     };
-    let should_cluster =
-        has_multiple_baselines || (has_math_symbols && spans.len() >= math_span_threshold);
-
-    debug_print!(
-        "🔍 COMPLEXITY CHECK: {} spans, std_dev={:.1}, complex_math={}, basic_math={}, math_italic={}, threshold={}, cluster={}",
-        spans.len(),
-        std_dev,
-        has_complex_math_symbols,
-        has_basic_math_notation,
-        has_math_italic_chars,
-        math_span_threshold,
-        should_cluster
-    );
-
-    should_cluster
+    has_multiple_baselines || (has_math_symbols && spans.len() >= math_span_threshold)
 }
 
 /// Apply clustering-based formatting for complex mathematical formulas
@@ -672,14 +662,6 @@ fn apply_clustering_formatting(spans: &[CharSpan]) -> String {
             .find(|(idx, _, _)| *idx == i)
             .copied()
             .unwrap_or((i, false, false));
-
-        debug_print!(
-            "🔬 CLUSTERING SPAN[{}]: '{}' → sub={}, sup={}",
-            i,
-            text_trimmed,
-            is_sub,
-            is_sup
-        );
 
         // Handle bold changes
         let is_bold_now = is_bold_text(span);
@@ -814,12 +796,9 @@ pub(crate) fn apply_text_formatting(spans: &[CharSpan]) -> String {
     // HYBRID APPROACH: Check if we need clustering for complex formulas
     // Debug output for the specific problematic text
 
-    debug_print!("🔀 HYBRID: Checking if clustering is needed...");
     if requires_baseline_clustering(spans) {
-        debug_print!("🔀 HYBRID: Using clustering approach for complex formula");
         return apply_clustering_formatting(spans);
     }
-    debug_print!("🔀 HYBRID: Using sequential approach for simple text");
 
     let full_text: String = {
         let mut result = String::new();
@@ -990,8 +969,14 @@ pub(crate) fn apply_text_formatting(spans: &[CharSpan]) -> String {
             // When we're already in subscript mode, check for continuity based purely on positioning
             if in_subscript {
                 // Check if current character is also a subscript based on sequential movement
-                let should_be_subscript =
-                    is_real_subscript(span, sequential_diff, base_font_size, spans, i);
+                let should_be_subscript = is_real_subscript(
+                    span,
+                    sequential_diff,
+                    base_font_size,
+                    spans,
+                    i,
+                    COMPOSITE_SUBSCRIPT_CONFIDENCE_THRESHOLD,
+                );
 
                 // Continue subscript only if:
                 // 1. Current character would be detected as subscript OR
@@ -1036,11 +1021,22 @@ pub(crate) fn apply_text_formatting(spans: &[CharSpan]) -> String {
             if relative_sequential_shift > PROPORTIONAL_SCRIPT_THRESHOLD {
                 // ENHANCED CONTEXT-AWARE SUBSCRIPT DETECTION
                 // Use sequential character comparison for script detection
-                let mut should_be_subscript =
-                    is_real_subscript(span, sequential_diff, base_font_size, spans, i);
+                let mut should_be_subscript = is_real_subscript(
+                    span,
+                    sequential_diff,
+                    base_font_size,
+                    spans,
+                    i,
+                    COMPOSITE_SUBSCRIPT_CONFIDENCE_THRESHOLD,
+                );
 
-                let mut should_be_superscript =
-                    is_real_superscript(span, sequential_diff, base_font_size, i == 0);
+                let mut should_be_superscript = is_real_superscript(
+                    span,
+                    sequential_diff,
+                    base_font_size,
+                    i == 0,
+                    COMPOSITE_SUBSCRIPT_CONFIDENCE_THRESHOLD,
+                );
 
                 // Calculate font ratio for reference detection
                 let font_ratio = span.font_size / base_font_size;
@@ -1159,10 +1155,21 @@ pub(crate) fn apply_text_formatting(spans: &[CharSpan]) -> String {
                 // But only if we're not just processing whitespace/punctuation
                 // AND the current character is not itself a subscript/superscript
                 let text_trimmed = span.text.trim();
-                let is_current_subscript =
-                    is_real_subscript(span, sequential_diff, base_font_size, spans, i);
-                let is_current_superscript =
-                    is_real_superscript(span, sequential_diff, base_font_size, i == 0);
+                let is_current_subscript = is_real_subscript(
+                    span,
+                    sequential_diff,
+                    base_font_size,
+                    spans,
+                    i,
+                    COMPOSITE_SUBSCRIPT_CONFIDENCE_THRESHOLD,
+                );
+                let is_current_superscript = is_real_superscript(
+                    span,
+                    sequential_diff,
+                    base_font_size,
+                    i == 0,
+                    COMPOSITE_SUBSCRIPT_CONFIDENCE_THRESHOLD,
+                );
 
                 if !text_trimmed.is_empty()
                     && !text_trimmed
@@ -1199,8 +1206,14 @@ pub(crate) fn apply_text_formatting(spans: &[CharSpan]) -> String {
                 && !in_superscript
                 && relative_sequential_shift_for_restart <= PROPORTIONAL_SCRIPT_THRESHOLD
             {
-                let should_be_subscript =
-                    is_real_subscript(span, sequential_diff, base_font_size, spans, i);
+                let should_be_subscript = is_real_subscript(
+                    span,
+                    sequential_diff,
+                    base_font_size,
+                    spans,
+                    i,
+                    COMPOSITE_SUBSCRIPT_CONFIDENCE_THRESHOLD,
+                );
 
                 if should_be_subscript {
                     result.push_str("<sub>");
@@ -1383,12 +1396,6 @@ fn cluster_baselines(spans: &[CharSpan], y_threshold: f32) -> Vec<Vec<usize>> {
         }
     }
     clusters.push(current_cluster);
-
-    debug_print!(
-        "🗂️ BASELINE CLUSTERING: Created {} clusters with threshold {:.1}pt",
-        clusters.len(),
-        y_threshold
-    );
 
     for (i, cluster) in clusters.iter().enumerate() {
         let cluster_y_positions: Vec<f32> = cluster.iter().map(|&idx| spans[idx].bbox.y0).collect();
@@ -1600,8 +1607,8 @@ fn detect_using_sequential_comparison(
             let curr = &spans[idx];
             let diff = calculate_baseline_difference(curr, prev.bbox.y1);
 
-            let is_sub = is_real_subscript(curr, diff, prev.font_size, spans, idx);
-            let is_sup = is_real_superscript(curr, diff, prev.font_size, false);
+            let is_sub = is_real_subscript(curr, diff, prev.font_size, spans, idx, COMPOSITE_SUBSCRIPT_CONFIDENCE_THRESHOLD);
+            let is_sup = is_real_superscript(curr, diff, prev.font_size, false, COMPOSITE_SUBSCRIPT_CONFIDENCE_THRESHOLD);
 
             // Enhanced debug for i, j, n characters
             if curr.text.trim() == "i" || curr.text.trim() == "j" || curr.text.trim() == "n" {
@@ -1937,29 +1944,29 @@ fn detect_subscripts_in_cluster_with_local_analysis(
             }
         };
 
-        // Apply existing composite scoring logic
-        let v = baseline_diff / base_font_size;
-        let s = 1.0 - (current_span.font_size / base_font_size);
+        // Use shared detection functions with clustering-specific confidence threshold
+        let is_subscript = is_real_subscript(
+            current_span,
+            baseline_diff,
+            base_font_size,
+            spans,
+            span_idx,
+            CLUSTERING_CONFIDENCE_THRESHOLD,
+        );
+        let is_superscript = is_real_superscript(
+            current_span,
+            baseline_diff,
+            base_font_size,
+            false,
+            CLUSTERING_CONFIDENCE_THRESHOLD,
+        );
 
-        // Directional confidence scores using same weights as sequential
-        let sub_confidence = VERTICAL_WEIGHT * v.max(0.0) + SIZE_WEIGHT * s;
-        let sup_confidence = VERTICAL_WEIGHT * (-v).max(0.0) + SIZE_WEIGHT * s;
-
-        // Use standard confidence threshold for clustering
-        let confidence_threshold = CLUSTERING_CONFIDENCE_THRESHOLD; // 0.12
-
-        // Require both confidence threshold AND smaller font (same as sequential)
-        let has_smaller_font = current_span.font_size < base_font_size * FONT_SIZE_SCRIPT_THRESHOLD;
-        let is_subscript = sub_confidence > confidence_threshold && has_smaller_font;
-        let is_superscript = sup_confidence > confidence_threshold && has_smaller_font;
-
-        // Debug print for clustering decisions
+        // Debug print for clustering decisions (simplified - detailed scoring now in shared functions)
         debug_print!(
-            "🔬 CLUSTER SPAN ANALYSIS[{}]: '{}' baseline_diff={:.1} v={:.3} s={:.3} sub_conf={:.3} sup_conf={:.3} font_ratio={:.3} → sub={}, sup={}",
+            "🔬 CLUSTER SPAN ANALYSIS[{}]: '{}' baseline_diff={:.1} font_ratio={:.3} → sub={}, sup={}",
             span_idx,
             current_span.text.trim(),
             baseline_diff,
-            v, s, sub_confidence, sup_confidence,
             current_span.font_size / base_font_size,
             is_subscript, is_superscript
         );
@@ -1976,8 +1983,6 @@ pub(crate) fn detect_subscripts_clustered(spans: &[CharSpan]) -> Vec<(usize, boo
     if spans.is_empty() {
         return Vec::new();
     }
-
-    debug_print!("🔬 CLUSTERED DETECTION: Processing {} spans", spans.len());
 
     // Step 1: Cluster spans by baseline proximity (5pt threshold based on typical font sizes)
     let clusters = cluster_baselines(spans, CLUSTERING_Y_THRESHOLD);
@@ -2025,8 +2030,7 @@ pub(crate) fn detect_subscripts_clustered(spans: &[CharSpan]) -> Vec<(usize, boo
     let mut all_results = Vec::new();
     let mut previous_baseline: Option<f32> = None;
 
-    for (cluster_idx, cluster_indices) in clusters.iter().enumerate() {
-        debug_print!("🎯 Processing cluster {}", cluster_idx);
+    for cluster_indices in clusters.iter() {
         let cluster_results = detect_subscripts_in_cluster_with_local_analysis(
             spans,
             cluster_indices,

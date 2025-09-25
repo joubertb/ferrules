@@ -17,8 +17,6 @@ fn apply_corrections_to_text(text: String) -> String {
 /// Concatenate CharSpans within a line with proper spacing
 /// Adds spaces between spans when there's a horizontal or vertical gap
 fn concatenate_spans_with_spacing(line_spans: &[crate::entities::CharSpan]) -> String {
-    debug_print!("🔧 SPACING: Called with {} spans", line_spans.len());
-
     if line_spans.is_empty() {
         return String::new();
     }
@@ -33,28 +31,12 @@ fn concatenate_spans_with_spacing(line_spans: &[crate::entities::CharSpan]) -> S
             let prev_span = &line_spans[i - 1];
 
             // Check horizontal gap (words on same line)
-            let x_gap = span.bbox.x0 - prev_span.bbox.x1;
+            let _x_gap = span.bbox.x0 - prev_span.bbox.x1;
             // Check vertical gap (wrapped text)
-            let y_diff = (span.bbox.y0 - prev_span.bbox.y0).abs();
+            let _y_diff = (span.bbox.y0 - prev_span.bbox.y0).abs();
 
             // Use common font-aware spacing logic
             let needs_space = crate::spacing::should_add_space_between_spans(prev_span, span, 5.0);
-
-            // Debug every span transition to understand the logic
-            if line_spans.len() > 1 {
-                let avg_char_width = prev_span.font_size * 0.55;
-                let font_aware_threshold = avg_char_width * 0.16;
-                debug_print!(
-                    "🔧 SPACING DEBUG[{}/{}]: '{}' -> '{}' | x_gap={:.1} y_diff={:.1} threshold={:.1} needs_space={}",
-                    i-1, i,
-                    prev_span.text.trim().chars().rev().take(20).collect::<String>().chars().rev().collect::<String>(),
-                    span.text.trim().chars().take(20).collect::<String>(),
-                    x_gap,
-                    y_diff,
-                    font_aware_threshold,
-                    needs_space
-                );
-            }
 
             if needs_space {
                 result.push(' ');

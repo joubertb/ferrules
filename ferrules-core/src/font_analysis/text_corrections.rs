@@ -3,6 +3,29 @@
 //! This module provides text corrections that work at the assembled text level,
 //! complementing the font-level corrections provided by the universal corrector.
 
+/// Fix common character positioning corruptions
+///
+/// This handles character insertion/positioning issues where characters from
+/// nearby text get incorrectly inserted into words during PDF text extraction.
+/// Uses sophisticated dictionary-based validation with caching and fuzzy matching.
+pub fn fix_character_positioning_corruptions(text: &str) -> String {
+    #[cfg(feature = "correction-engine")]
+    {
+        use crate::font_analysis::dictionary::SmartCorrector;
+
+        // Use global corrector instance for efficiency
+        let corrector = SmartCorrector::global()
+            .expect("Failed to initialize SmartCorrector - dictionary files missing or corrupted");
+
+        corrector.correct_text_sync(text)
+    }
+
+    #[cfg(not(feature = "correction-engine"))]
+    {
+        panic!("Dictionary correction is not available - correction-engine feature is disabled");
+    }
+}
+
 /// Fix common mathematical symbol corruptions
 ///
 /// This handles specific mathematical symbol corruption patterns observed
@@ -25,6 +48,17 @@ pub fn fix_math_symbol_corruptions(text: &str) -> String {
     // Fix any double spaces around equals
     result = result.replace("  =", " =");
     result = result.replace("=  ", "= ");
+
+    // Convert em-dashes to double hyphens with spaces for better readability and TTS compatibility
+    // Handle both spaced and unspaced em-dashes to avoid double spacing
+    // NOTE: Only convert em-dashes (—), preserve en-dashes (–) for ranges like "37–50%"
+    result = result.replace(" — ", " -- "); // Already spaced em-dash
+    result = result.replace("—", " -- "); // Unspaced em-dash
+
+    // Clean up any potential double spaces created
+    result = result.replace("  --  ", " -- ");
+    result = result.replace("  -- ", " -- ");
+    result = result.replace(" --  ", " -- ");
 
     result
 }
@@ -58,15 +92,94 @@ pub fn apply_character_corrections(text: &str) -> String {
 
 /// Apply comprehensive text corrections to assembled text
 ///
-/// This combines mathematical symbol corrections with character filtering.
+/// This combines mathematical symbol corrections, character positioning fixes, and character filtering.
+/// Ligature corrections are now handled at the font analysis level via Adobe Glyph List.
 pub fn correct_assembled_text(text: &str) -> String {
-    let math_corrected = fix_math_symbol_corruptions(text);
+    let positioning_corrected = fix_character_positioning_corruptions(text);
+    let math_corrected = fix_math_symbol_corruptions(&positioning_corrected);
     filter_control_characters(&math_corrected)
+}
+
+/// Apply dictionary corrections directly to spans (modifies span text in place)
+///
+/// This fixes character insertion issues like 'sysfitems' → 'systems' at the span level
+/// before HTML processing occurs, ensuring corrections are preserved.
+pub fn correct_spans_with_dictionary(spans: &mut [crate::entities::CharSpan]) {
+    #[cfg(feature = "correction-engine")]
+    {
+        use crate::font_analysis::dictionary::SmartCorrector;
+
+        // Use global corrector instance for efficiency
+        if let Ok(corrector) = SmartCorrector::global() {
+            corrector.correct_spans_sync(spans);
+        } else {
+            eprintln!("Warning: Failed to initialize SmartCorrector - dictionary files missing or corrupted");
+        }
+    }
+
+    #[cfg(not(feature = "correction-engine"))]
+    {
+        // No-op when correction engine is disabled
+        let _ = spans;
+    }
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn test_character_positioning_corrections() {
+        // Test the specific case from the PDF
+        assert_eq!(
+            fix_character_positioning_corruptions("sysfitems"),
+            "systems"
+        );
+        assert_eq!(
+            fix_character_positioning_corruptions("processing sysfitems are"),
+            "processing systems are"
+        );
+
+        // Test that valid words are not changed
+        assert_eq!(fix_character_positioning_corruptions("systems"), "systems");
+        assert_eq!(
+            fix_character_positioning_corruptions("information processing"),
+            "information processing"
+        );
+
+        // Test that unknown words are left unchanged
+        assert_eq!(fix_character_positioning_corruptions("unknown"), "unknown");
+    }
+
+    #[test]
+    fn test_word_character_insertion_fixing() {
+        // Test specific character insertion patterns
+        assert_eq!(fix_word_character_insertion("sysfitems"), "systems");
+
+        // Test valid words are not changed
+        assert_eq!(fix_word_character_insertion("systems"), "systems");
+        assert_eq!(fix_word_character_insertion("information"), "information");
+
+        // Test short words are not processed
+        assert_eq!(fix_word_character_insertion("fi"), "fi");
+        assert_eq!(fix_word_character_insertion("a"), "a");
+    }
+
+    #[test]
+    fn test_word_validation() {
+        // Test common words
+        assert!(is_likely_valid_word("systems"));
+        assert!(is_likely_valid_word("information"));
+        assert!(is_likely_valid_word("the"));
+
+        // Test invalid words
+        assert!(!is_likely_valid_word("sysfitems"));
+        assert!(!is_likely_valid_word("xyz123"));
+
+        // Test edge cases
+        assert!(!is_likely_valid_word("a")); // Too short
+        assert!(!is_likely_valid_word("")); // Empty
+    }
 
     #[test]
     fn test_math_symbol_corrections() {
@@ -76,6 +189,15 @@ mod tests {
         assert_eq!(fix_math_symbol_corruptions("6[=]"), "≠");
         assert_eq!(fix_math_symbol_corruptions("[=]"), " =");
         assert_eq!(fix_math_symbol_corruptions("< =>"), " =");
+        // Test dash conversions for better TTS compatibility
+        assert_eq!(
+            fix_math_symbol_corruptions("categories—direct jailbreak—into"),
+            "categories -- direct jailbreak -- into"
+        );
+        assert_eq!(
+            fix_math_symbol_corruptions("en-dash–test"),
+            "en-dash -- test"
+        );
     }
 
     #[test]
@@ -89,5 +211,7 @@ mod tests {
     fn test_assembled_text_correction() {
         assert_eq!(correct_assembled_text("∈/\u{0002}"), "∉");
         assert_eq!(correct_assembled_text("6=\ntest"), "≠\ntest");
+        assert_eq!(correct_assembled_text("sysfitems\u{0002}"), "systems");
+        // Note: Ligature corrections are now handled at the font analysis level via Adobe Glyph List
     }
 }
