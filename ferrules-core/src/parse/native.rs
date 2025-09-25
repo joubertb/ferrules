@@ -19,20 +19,175 @@ pub(crate) fn parse_text_spans<'a>(
     page_bbox: &BBox,
 ) -> Vec<CharSpan> {
     let mut spans: Vec<CharSpan> = Vec::new();
+    let mut char_iter = chars.peekable();
 
-    for char in chars {
+    while let Some(char) = char_iter.next() {
+        let char_text = char.unicode_char().unwrap_or_default().to_string();
+
+        // Debug specific character sequences for Vifijil analysis
+        if char_text == "V"
+            || char_text == "i"
+            || char_text == "f"
+            || char_text == "j"
+            || char_text == "l"
+            || char_text == "-"
+            || char_text == "‐"
+        {
+            let char_y = char
+                .tight_bounds()
+                .map(|b| page_bbox.height() - b.bottom.value)
+                .unwrap_or(0.0);
+            debug_print!(
+                "🔍 CHAR: '{}' (U+{:04X}) at y={:.1}",
+                char_text,
+                char.unicode_value(),
+                char_y
+            );
+        }
+
+        // Check for line-ending hyphen pattern: only regular hyphens should be removed
+        // Em-dashes (—) and en-dashes (–) are legitimate punctuation and should be preserved
+        if char_text == "-" || char_text == "‐" {
+            // Only regular hyphens and soft hyphens
+            debug_print!(
+                "🔍 HYPHEN CHECK: Found '{}' (U+{:04X})",
+                char_text,
+                char.unicode_value()
+            );
+
+            if let Some(next_char) = char_iter.peek() {
+                let next_char_text = next_char.unicode_char().unwrap_or_default().to_string();
+                let next_char_code = next_char.unicode_value();
+
+                debug_print!(
+                    "🔍 HYPHEN CHECK: Found '{}' (U+{:04X}), next char '{}' (U+{:04X})",
+                    char_text,
+                    char.unicode_value(),
+                    next_char_text,
+                    next_char_code
+                );
+
+                // Check if next character is a line break or whitespace that suggests line continuation
+                // This includes: newlines, carriage returns, form feeds, and other whitespace
+                let is_line_break = next_char_text == "\n" || next_char_text == "\r" ||
+                                  next_char_text == "\r\n" || next_char_code == 0x0C || // Form feed
+                                  next_char_code == 0x0B || // Vertical tab
+                                  (next_char_text.chars().next().map(|c| c.is_whitespace()).unwrap_or(false) &&
+                                   next_char_text != " " && next_char_text != "\t");
+
+                // Also check for the case where hyphen is directly followed by word characters
+                // which might indicate the hyphen was incorrectly inserted instead of removed
+                let next_is_word_char = next_char_text
+                    .chars()
+                    .next()
+                    .map(|c| c.is_alphabetic())
+                    .unwrap_or(false);
+
+                if is_line_break {
+                    debug_print!("🔍 HYPHEN SKIP: Found hyphen '{}' followed by line break '{}', skipping both",
+                        char_text, next_char_text.chars().next().map(|c| format!("U+{:04X}", c as u32)).unwrap_or_default());
+
+                    // Skip the line break character
+                    char_iter.next();
+
+                    // Continue to the next character without adding the hyphen or line break
+                    continue;
+                } else if next_is_word_char && !spans.is_empty() {
+                    // Check if current span ends with a word character - this could be a broken hyphenation
+                    // BUT preserve compound words like "state-of-the-art"
+                    let current_span = &spans[spans.len() - 1];
+                    let last_char_in_span = current_span.text.chars().last();
+                    if let Some(last_char) = last_char_in_span {
+                        if last_char.is_alphabetic() {
+                            // Simple position-based approach: DON'T remove hyphens in mid-text
+                            // Only the logic above (lines 48-66) handles '-\n' cases
+                            // All other hyphens (including compound words) are preserved
+                            debug_print!(
+                                "🔍 HYPHEN KEEP: Preserving hyphen in compound word '{}'-'{}'",
+                                current_span.text.trim(),
+                                next_char_text
+                            );
+                        }
+                    }
+                }
+            }
+        }
+
         if spans.is_empty() {
             let span = CharSpan::new_from_char(&char, page_bbox);
+            debug_print!("🔍 NEW SPAN[0]: '{}' at y={:.1}", span.text, span.bbox.y0);
             spans.push(span);
         } else {
-            let span = spans.last_mut().unwrap();
-            match span.append(&char, page_bbox) {
-                Some(_) => {}
-                None => {
-                    let span = CharSpan::new_from_char(&char, page_bbox);
-                    spans.push(span);
-                }
+            let current_y = spans.last().unwrap().bbox.y0;
+            let can_append = {
+                let span = spans.last_mut().unwrap();
+                span.append(&char, page_bbox).is_some()
             };
+
+            if can_append {
+                let span = spans.last().unwrap();
+                let new_y = span.bbox.y0;
+                if (current_y - new_y).abs() > 5.0 {
+                    debug_print!(
+                        "🔍 CROSS-LINE SUCCESS: Added '{}' to span across lines, span now: '{}'",
+                        char_text,
+                        span.text.chars().take(20).collect::<String>()
+                    );
+                }
+            } else {
+                let prev_span = spans.last().unwrap();
+                let prev_span_text = prev_span.text.chars().take(10).collect::<String>();
+
+                // Check for potential Vi/jil patterns
+                if (prev_span.text.contains("Vi") && char_text == "j")
+                    || (prev_span.text.ends_with("-")
+                        && char_text
+                            .chars()
+                            .next()
+                            .map(|c| c.is_alphabetic())
+                            .unwrap_or(false))
+                {
+                    debug_print!("🔍 POTENTIAL BREAK: Previous span '{}' next char '{}' - could be hyphen break",
+                        prev_span_text, char_text);
+                }
+
+                let new_span = CharSpan::new_from_char(&char, page_bbox);
+                debug_print!(
+                    "🔍 NEW SPAN[{}]: '{}' at y={:.1} (prev was y={:.1}) - diff={:.1}pt",
+                    spans.len(),
+                    new_span.text,
+                    new_span.bbox.y0,
+                    current_y,
+                    (current_y - new_span.bbox.y0).abs()
+                );
+
+                spans.push(new_span);
+            }
+        }
+    }
+
+    // Debug: Look for Vi-/Vifijil patterns in spans after creation
+    debug_print!("🔍 SPAN ANALYSIS: Created {} spans total", spans.len());
+    for (i, span) in spans.iter().enumerate() {
+        if span.text.contains("Vi") {
+            debug_print!("🔍 SPAN DEBUG[{}]: Found 'Vi' span: '{}'", i, span.text);
+        }
+        if span.text.contains("jil") {
+            debug_print!("🔍 SPAN DEBUG[{}]: Found 'jil' span: '{}'", i, span.text);
+        }
+        if span.text.contains("Vifijil") {
+            debug_print!(
+                "🔍 SPAN DEBUG[{}]: Found 'Vifijil' span: '{}'",
+                i,
+                span.text
+            );
+        }
+        if span.text.contains("Prompt Injection") {
+            debug_print!(
+                "🔍 SPAN DEBUG[{}]: Found 'Prompt Injection' span: '{}'",
+                i,
+                span.text
+            );
         }
     }
 

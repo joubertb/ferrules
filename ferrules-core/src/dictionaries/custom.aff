@@ -1,0 +1,19 @@
+SET UTF-8
+TRY esianrtolcdugmphbyfvkwjkqxz-ëçïâêîôûàä
+
+# Basic rules for technical terms
+SFX A Y 1
+SFX A   0     s         .
+
+# Plural forms
+SFX B Y 2
+SFX B   0     s         [^sxzh]
+SFX B   0     es        [sxzh]
+
+# Past tense for verbs
+SFX C Y 1
+SFX C   0     ed        [^e]
+
+# Present participle
+SFX D Y 1
+SFX D   0     ing       .

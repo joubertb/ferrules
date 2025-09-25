@@ -28,13 +28,15 @@ fn apply_character_corrections(
     #[cfg(feature = "correction-engine")]
     {
         use crate::debug_println;
-        use crate::font_analysis::{correct_character_with_encoding_differences, correct_character_with_universal_corrector};
+        use crate::font_analysis::{
+            correct_character_with_encoding_differences, correct_character_with_universal_corrector,
+        };
 
         // PRIMARY: Try encoding differences + Adobe Glyph List approach first
         if let Some(corrected_char) =
             correct_character_with_encoding_differences(unicode_value, font_name)
         {
-            if corrected_char == '\0' {
+            if corrected_char.is_empty() || corrected_char == "\0" {
                 debug_println!(
                     "🔧 ENCODING CORRECTION: Font '{font_name}' - 0x{unicode_value:04X} '{original_char}' → [SUPPRESSED]"
                 );
@@ -43,7 +45,7 @@ fn apply_character_corrections(
                 debug_println!(
                     "🔧 ENCODING CORRECTION: Font '{font_name}' - 0x{unicode_value:04X} '{original_char}' → '{corrected_char}'"
                 );
-                return (corrected_char.to_string(), true);
+                return (corrected_char, true);
             }
         }
 
@@ -51,7 +53,7 @@ fn apply_character_corrections(
         if let Some(corrected_char) =
             correct_character_with_universal_corrector(unicode_value, font_name)
         {
-            if corrected_char == '\0' {
+            if corrected_char.is_empty() || corrected_char == "\0" {
                 debug_println!(
                     "🔧 APPLY CORRECTION: Font '{font_name}' - 0x{unicode_value:04X} '{original_char}' → [SUPPRESSED]"
                 );
@@ -60,7 +62,7 @@ fn apply_character_corrections(
                 debug_println!(
                     "🔧 APPLY CORRECTION: Font '{font_name}' - 0x{unicode_value:04X} '{original_char}' → '{corrected_char}'"
                 );
-                return (corrected_char.to_string(), true);
+                return (corrected_char, true);
             }
         }
     }
@@ -221,8 +223,25 @@ impl ElementText {
         self.text.push_str(txt);
     }
     pub fn append_line(&mut self, txt: &str) {
-        self.text.push(' ');
-        self.text.push_str(txt);
+        // HYPHEN FIX: Handle end-of-line hyphenation when combining lines
+
+        // If current text ends with hyphen and next line starts with letter, remove hyphen
+        if self.text.ends_with('-')
+            && !txt.is_empty()
+            && txt.chars().next().unwrap().is_alphabetic()
+        {
+            // Remove the trailing hyphen and join directly (no space)
+            self.text.pop(); // Remove the '-'
+            self.text.push_str(txt);
+            debug_print!(
+                "🔗 CROSS-LINE HYPHEN REMOVED: text ending with '-' + '{}' → joined without hyphen",
+                &txt[..txt.len().min(20)]
+            );
+        } else {
+            // Normal case: add space and append text
+            self.text.push(' ');
+            self.text.push_str(txt);
+        }
     }
 }
 

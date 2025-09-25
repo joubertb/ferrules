@@ -21,6 +21,148 @@
 
 use crate::debug_print;
 
+/// Remove end-of-line hyphens from span text
+///
+/// This function handles hyphenated words that span across line breaks by:
+/// 1. Detecting spans that end with "-" (hyphen)
+/// 2. Checking if the next span starts with a letter
+/// 3. Removing the hyphen to properly rejoin the word
+///
+/// Example: "Vi-" + "jil" → "Vijil"
+fn remove_end_of_line_hyphens(spans: &[crate::entities::CharSpan]) -> String {
+    if spans.is_empty() {
+        return String::new();
+    }
+
+    let mut result = String::new();
+
+    for (i, span) in spans.iter().enumerate() {
+        let span_text = &span.text;
+
+        // Check if this span ends with hyphen and there's a next span
+        if span_text.ends_with('-') && i + 1 < spans.len() {
+            let next_span = &spans[i + 1];
+            let next_text = &next_span.text;
+
+            // If next span starts with a letter, remove the hyphen (end-of-line hyphenation)
+            if !next_text.is_empty() && next_text.chars().next().unwrap().is_alphabetic() {
+                // Remove the trailing hyphen
+                let without_hyphen = &span_text[..span_text.len() - 1];
+                result.push_str(without_hyphen);
+                debug_print!(
+                    "🔗 HYPHEN REMOVED: '{}' + '{}' → '{}{}'",
+                    span_text,
+                    &next_text[..next_text.len().min(10)],
+                    without_hyphen,
+                    &next_text[..next_text.len().min(10)]
+                );
+            } else {
+                // Keep the hyphen - not end-of-line hyphenation
+                result.push_str(span_text);
+            }
+        } else {
+            // Normal span - just add it
+            result.push_str(span_text);
+        }
+    }
+
+    result
+}
+
+/// Remove line-ending hyphens at the span level
+///
+/// This function identifies spans that end with "word-" and the next span starts with "word"
+/// and combines them into a single "wordword" span, which is the proper way to handle
+/// line-ending hyphenation artifacts from PDF text extraction.
+fn remove_line_ending_hyphens(spans: &mut Vec<crate::entities::CharSpan>) {
+    debug_print!("🔍 HYPHEN REMOVAL: Processing {} spans", spans.len());
+
+    let mut i = 0;
+    while i < spans.len().saturating_sub(1) {
+        let current_span = &spans[i];
+        let next_span = &spans[i + 1];
+
+        // Debug log spans that contain "Vi" or end with hyphens
+        if current_span.text.contains("Vi") || current_span.text.ends_with('-') {
+            debug_print!(
+                "🔍 SPAN {}: '{}' (next: '{}')",
+                i,
+                current_span.text,
+                next_span.text
+            );
+        }
+
+        // Check if current span ends with line-ending hyphen pattern
+        // Only process regular hyphens (U+002D), not em-dashes (U+2014) or en-dashes (U+2013)
+        if current_span.text.len() > 1
+            && current_span.text.ends_with('-')  // Regular hyphen only
+            && !current_span.text.ends_with('—') // Not em-dash
+            && !current_span.text.ends_with('–') // Not en-dash
+            && current_span.text.chars().rev().nth(1).map(|c| c.is_alphabetic()).unwrap_or(false)
+        {
+            debug_print!(
+                "🔍 FOUND HYPHEN CANDIDATE: '{}' + '{}'",
+                current_span.text,
+                next_span.text
+            );
+
+            // Check if next span starts with word characters
+            if !next_span.text.is_empty()
+                && next_span
+                    .text
+                    .chars()
+                    .next()
+                    .map(|c| c.is_alphabetic())
+                    .unwrap_or(false)
+            {
+                // Skip hyphen removal for likely compound words
+                // Common compound word patterns that should be preserved
+                let word_before = current_span.text.trim_end_matches('-');
+                let word_after = &next_span.text;
+
+                // Check for common compound word patterns
+                let likely_compound = is_likely_compound_word(word_before, word_after);
+
+                if likely_compound {
+                    debug_print!(
+                        "🔍 COMPOUND WORD: Preserving hyphen in '{}-{}' (likely compound word)",
+                        word_before,
+                        word_after
+                    );
+                    i += 1;
+                    continue;
+                }
+
+                // Combine: remove hyphen and join with next span
+                let combined_text = format!("{}{}", word_before, next_span.text);
+
+                debug_print!(
+                    "🔗 HYPHEN REMOVAL: '{}' + '{}' → '{}'",
+                    current_span.text,
+                    next_span.text,
+                    combined_text
+                );
+
+                // Update current span with combined text
+                spans[i].text = combined_text;
+
+                // Remove the next span since it's now combined
+                spans.remove(i + 1);
+
+                // Don't increment i since we removed a span
+                continue;
+            } else {
+                debug_print!(
+                    "🔍 HYPHEN SKIPPED: Next span doesn't start with word char: '{}'",
+                    next_span.text
+                );
+            }
+        }
+
+        i += 1;
+    }
+}
+
 #[cfg(feature = "modtext")]
 pub mod mathematical;
 
@@ -68,21 +210,34 @@ pub fn process_mathematical_notation(spans: &[crate::entities::CharSpan]) -> Str
 /// let enhanced = modtext::add_tags(&char_spans);
 /// ```
 pub fn add_tags(spans: &[crate::entities::CharSpan]) -> String {
-    let combined_text: String = spans.iter().map(|s| s.text.as_str()).collect();
+    // HYPHEN FIX: Handle end-of-line hyphenation before text assembly
+    // This fixes cases like "Vi-" + "jil" → "Vijil" (not "Vifijil")
+    let hyphen_processed_text = remove_end_of_line_hyphens(spans);
+
     debug_print!(
-        "🏷️ add_tags CALLED with {} spans: '{}'",
+        "🏷️ add_tags CALLED with {} spans: '{}' → after hyphen removal: '{}'",
         spans.len(),
-        combined_text.chars().take(100).collect::<String>()
+        spans
+            .iter()
+            .map(|s| s.text.as_str())
+            .collect::<String>()
+            .chars()
+            .take(50)
+            .collect::<String>(),
+        hyphen_processed_text.chars().take(50).collect::<String>()
     );
+
     #[cfg(feature = "modtext")]
     {
+        // Hyphen removal is now handled at span level before HTML processing
+        // Just apply the HTML formatting to the already-processed spans
         script_notation::apply_tags_recursive(spans, 0)
     }
 
     #[cfg(not(feature = "modtext"))]
     {
-        // When feature is disabled, just concatenate the text without processing
-        spans.iter().map(|s| s.text.as_str()).collect()
+        // When feature is disabled, return the hyphen-processed text
+        hyphen_processed_text
     }
 }
 
@@ -369,15 +524,31 @@ pub fn process_text_with_spans(
         text.chars().take(100).collect::<String>()
     );
 
+    // Apply dictionary correction to clean text FIRST, before any HTML processing
+    let corrected_text = crate::font_analysis::correct_assembled_text(text);
+    debug_print!(
+        "📋 TEXT WITH SPANS: Dictionary corrected: '{}' → '{}'",
+        text.chars().take(50).collect::<String>(),
+        corrected_text.chars().take(50).collect::<String>()
+    );
+
     // Use shared span processing with simple line break detection for text
-    let all_spans = process_spans_with_line_breaks(line_spans, false);
+    let mut all_spans = process_spans_with_line_breaks(line_spans, false);
 
     debug_print!(
         "📋 TEXT WITH SPANS: Flattened to {} total spans",
         all_spans.len()
     );
 
-    // Apply subscript/superscript detection using the actual CharSpans
+    // Apply hyphen removal at span level BEFORE dictionary corrections and HTML processing
+    // This fixes line-ending hyphens like "Vi-" + "jil" → "Vijil" at the source
+    remove_line_ending_hyphens(&mut all_spans);
+
+    // Apply dictionary corrections to spans BEFORE HTML processing
+    // This ensures corrections like 'sysfitems' → 'systems' are preserved in the final output
+    crate::font_analysis::correct_spans_with_dictionary(&mut all_spans);
+
+    // Apply subscript/superscript detection using the corrected CharSpans
     let script_processed = script_notation::apply_text_formatting(&all_spans);
 
     debug_print!(
@@ -385,11 +556,11 @@ pub fn process_text_with_spans(
         script_processed.chars().take(100).collect::<String>()
     );
 
-    // Apply corrections using the unified correction API
-    let corrected_text = crate::font_analysis::correct_assembled_text(&script_processed);
+    // Dictionary correction already applied to input text - use processed result
+    let final_text = script_processed;
 
     // Clean up substitute characters
-    let cleaned_text = corrected_text.replace('\u{001a}', "");
+    let cleaned_text = final_text.replace('\u{001a}', "");
 
     debug_print!(
         "📋 TEXT WITH SPANS FINAL: '{}'",
@@ -509,4 +680,109 @@ fn handle_mathematical_x_operators(text: &str) -> String {
 /// Helper function to check if character is part of HTML tag
 fn is_tag_char(c: char) -> bool {
     c == '<' || c == '>' || c == '/'
+}
+
+/// Determine if two word parts likely form a compound word that should keep its hyphen
+///
+/// This function identifies common compound word patterns to prevent incorrect hyphen removal.
+/// Returns true if the hyphen should be preserved, false if it's likely a line-ending artifact.
+fn is_likely_compound_word(word_before: &str, word_after: &str) -> bool {
+    let before_lower = word_before.to_lowercase();
+    let after_lower = word_after.to_lowercase();
+
+    // Common compound word patterns
+    let compound_patterns = [
+        // Technical/academic compounds
+        ("state", "of"),
+        ("art", "of"),
+        ("up", "to"),
+        ("well", "known"),
+        ("well", "established"),
+        ("high", "quality"),
+        ("high", "performance"),
+        ("low", "level"),
+        ("high", "level"),
+        ("real", "time"),
+        ("real", "world"),
+        ("large", "scale"),
+        ("small", "scale"),
+        ("fine", "tuned"),
+        ("pre", "trained"),
+        ("multi", "layer"),
+        ("multi", "head"),
+        ("cross", "attention"),
+        ("self", "attention"),
+        ("end", "to"),
+        ("to", "end"),
+        // Common prefixes that form compounds
+        ("non", ""),
+        ("pre", ""),
+        ("post", ""),
+        ("anti", ""),
+        ("pro", ""),
+        ("semi", ""),
+        ("multi", ""),
+        ("inter", ""),
+        ("intra", ""),
+        ("extra", ""),
+        ("ultra", ""),
+        ("super", ""),
+        ("sub", ""),
+        ("over", ""),
+        ("under", ""),
+        ("out", ""),
+        // Common academic/technical suffixes
+        ("", "based"),
+        ("", "driven"),
+        ("", "aware"),
+        ("", "specific"),
+        ("", "related"),
+        ("", "oriented"),
+        ("", "focused"),
+        ("", "free"),
+        ("", "like"),
+        ("", "wide"),
+    ];
+
+    // Check exact pattern matches
+    for (first, second) in compound_patterns.iter() {
+        if (first.is_empty() || before_lower.ends_with(first))
+            && (second.is_empty() || after_lower.starts_with(second))
+        {
+            return true;
+        }
+    }
+
+    // Additional heuristics for compound words:
+
+    // 1. Both parts are short (likely compound elements)
+    if word_before.len() <= 4 && word_after.len() <= 4 {
+        return true;
+    }
+
+    // 2. Pattern like "X-of-Y" compounds (state-of-the-art)
+    if after_lower.starts_with("of")
+        || after_lower.starts_with("the")
+        || after_lower.starts_with("a")
+    {
+        return true;
+    }
+
+    // 3. Technical prefixes
+    let tech_prefixes = [
+        "AI", "ML", "NLP", "LLM", "API", "GUI", "CLI", "HTTP", "HTTPS", "JSON", "XML",
+    ];
+    if tech_prefixes
+        .iter()
+        .any(|&prefix| before_lower == prefix.to_lowercase())
+    {
+        return true;
+    }
+
+    // 4. Numbers followed by units or descriptors (not usually line breaks)
+    if word_before.chars().any(|c| c.is_numeric()) && word_after.len() <= 8 {
+        return true;
+    }
+
+    false
 }

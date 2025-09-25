@@ -8,6 +8,7 @@
 //! font-level corrections, offering a complete text correction solution.
 
 pub mod adobe_glyph_list;
+pub mod dictionary;
 pub mod text_corrections;
 pub mod universal_corrector;
 
@@ -33,17 +34,25 @@ pub fn initialize_universal_corrector(pdf_data: &[u8]) -> Result<(), Box<dyn std
 }
 
 /// Get access to the global universal corrector for character correction
-pub fn correct_character_with_universal_corrector(char_code: u32, font_name: &str) -> Option<char> {
+pub fn correct_character_with_universal_corrector(
+    char_code: u32,
+    font_name: &str,
+) -> Option<String> {
     let corrector = GLOBAL_CORRECTOR.get()?;
     let guard = corrector.lock().ok()?;
     guard.as_ref()?.correct_character(char_code, font_name)
 }
 
 /// Get character correction using encoding differences (primary method with Adobe Glyph List)
-pub fn correct_character_with_encoding_differences(char_code: u32, font_name: &str) -> Option<char> {
+pub fn correct_character_with_encoding_differences(
+    char_code: u32,
+    font_name: &str,
+) -> Option<String> {
     let corrector = GLOBAL_CORRECTOR.get()?;
     let guard = corrector.lock().ok()?;
-    guard.as_ref()?.correct_character_with_encoding_differences(char_code, font_name)
+    guard
+        .as_ref()?
+        .correct_character_with_encoding_differences(char_code, font_name)
 }
 
 // ============================================================================
@@ -69,6 +78,14 @@ pub fn apply_word_corrections(text: &mut String) {
     }
 }
 
+/// Apply dictionary corrections directly to spans (modifies span text in place)
+///
+/// This fixes character insertion issues like 'sysfitems' → 'systems' at the span level
+/// before HTML processing occurs, ensuring corrections are preserved in the final output.
+pub fn correct_spans_with_dictionary(spans: &mut [crate::entities::CharSpan]) {
+    text_corrections::correct_spans_with_dictionary(spans)
+}
+
 /// Apply all text corrections to a block
 ///
 /// This is a compatibility wrapper that provides the same API as the previous
@@ -79,6 +96,9 @@ pub fn correct_block(block: &mut crate::blocks::Block) {
     match &mut block.kind {
         BlockType::TextBlock(text_block) => {
             apply_word_corrections(&mut text_block.text);
+            if let Some(ref mut fertext) = text_block.fertext {
+                apply_word_corrections(fertext);
+            }
         }
         BlockType::ListBlock(list_block) => {
             for item in &mut list_block.items {
@@ -87,6 +107,9 @@ pub fn correct_block(block: &mut crate::blocks::Block) {
         }
         BlockType::Title(title) => {
             apply_word_corrections(&mut title.text);
+            if let Some(ref mut fertext) = title.fertext {
+                apply_word_corrections(fertext);
+            }
         }
         BlockType::Header(header) => {
             apply_word_corrections(&mut header.text);

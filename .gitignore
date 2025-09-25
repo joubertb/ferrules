@@ -11,10 +11,6 @@ models/
 
 **/.env
 
-# Dictionary files are now stored in source tree (ferrules-core/src/correction/dictionaries/)
-# Ignore the extracted dictionaries/ folder that might be created during local builds
-dictionaries/
-
 # Test files and output directories
 *.pdf
 *-results/
