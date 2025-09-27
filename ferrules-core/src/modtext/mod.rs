@@ -540,15 +540,11 @@ pub fn process_text_with_spans(
         all_spans.len()
     );
 
-    // Apply hyphen removal at span level BEFORE dictionary corrections and HTML processing
+    // Apply hyphen removal at span level BEFORE HTML processing
     // This fixes line-ending hyphens like "Vi-" + "jil" → "Vijil" at the source
     remove_line_ending_hyphens(&mut all_spans);
 
-    // Apply dictionary corrections to spans BEFORE HTML processing
-    // This ensures corrections like 'sysfitems' → 'systems' are preserved in the final output
-    crate::font_analysis::correct_spans_with_dictionary(&mut all_spans);
-
-    // Apply subscript/superscript detection using the corrected CharSpans
+    // Apply subscript/superscript detection using the spans (dictionary correction already applied to text)
     let script_processed = script_notation::apply_text_formatting(&all_spans);
 
     debug_print!(

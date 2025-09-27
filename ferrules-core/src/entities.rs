@@ -6,7 +6,7 @@ use std::{path::PathBuf, time::Duration};
 
 use pdfium_render::prelude::{PdfFontWeight, PdfPageTextChar, PdfRect};
 
-use crate::{blocks::Block, debug_print, layout::model::LayoutBBox};
+use crate::{blocks::Block, debug_print, debug_println, layout::model::LayoutBBox};
 
 pub type PageID = usize;
 pub type ElementID = usize;
@@ -24,6 +24,21 @@ fn apply_character_corrections(
 ) -> (String, bool) {
     // Get the original character for comparison
     let original_char = original_text.chars().next().unwrap_or('\0');
+
+    // Debug parentheses specifically to find ')' -> 'ml' issue and ( -> h, ) -> i issue
+    if original_text.contains(')')
+        || original_text.contains("ml")
+        || unicode_value == 41
+        || original_text.contains('(')
+        || unicode_value == 40
+        || original_text == "h"
+        || original_text == "i"
+    {
+        eprintln!(
+            "🚨 CHAR DEBUG: text='{}' unicode=0x{:04X} char='{}' font='{}'",
+            original_text, unicode_value, original_char, font_name
+        );
+    }
 
     #[cfg(feature = "correction-engine")]
     {

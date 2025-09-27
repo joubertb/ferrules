@@ -13,6 +13,11 @@ pub fn fix_character_positioning_corruptions(text: &str) -> String {
     {
         use crate::font_analysis::dictionary::SmartCorrector;
 
+        // Skip dictionary correction for HTML-tagged text to avoid corrupting markup
+        if text.contains("<sub>") || text.contains("<sup>") || text.contains("<formula>") {
+            return text.to_string();
+        }
+
         // Use global corrector instance for efficiency
         let corrector = SmartCorrector::global()
             .expect("Failed to initialize SmartCorrector - dictionary files missing or corrupted");
