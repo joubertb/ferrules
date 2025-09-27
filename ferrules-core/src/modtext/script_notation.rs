@@ -12,8 +12,8 @@
 //! - Handles inline subscript patterns within single text spans
 //! - Bold text detection based on font weight and naming
 
-use crate::debug_print;
 use crate::entities::CharSpan;
+use crate::{debug_print, debug_println};
 use lazy_static::lazy_static;
 
 /// Proportional script detection threshold - minimum relative baseline shift as fraction of font size
@@ -640,6 +640,27 @@ fn apply_clustering_formatting(spans: &[CharSpan]) -> String {
         spans.len()
     );
 
+    // Debug parentheses specifically to find ')' -> 'ml' issue in clustering mode
+    for (i, span) in spans.iter().enumerate() {
+        let text = span.text.trim();
+        if text.contains("M(") || text.contains("i,j") || text.contains("ml") {
+            debug_println!(
+                "🚨 CLUSTERING MATRIX DEBUG: span[{}] text='{}' chars={:?}",
+                i,
+                span.text,
+                span.text.chars().collect::<Vec<char>>()
+            );
+        }
+        if text.contains(')') || text == ")" {
+            debug_println!(
+                "🚨 CLUSTERING PARENTHESIS DEBUG: span[{}] text='{}' chars={:?}",
+                i,
+                span.text,
+                span.text.chars().collect::<Vec<char>>()
+            );
+        }
+    }
+
     // Get clustering results
     let cluster_results = detect_subscripts_clustered(spans);
 
@@ -723,7 +744,31 @@ fn apply_clustering_formatting(spans: &[CharSpan]) -> String {
 
         // Add the cleaned text
         let cleaned_text = span.text.replace('\u{001a}', "");
+
+        // CRITICAL DEBUG: Log exactly what text is being added in clustering mode
+        if cleaned_text.contains("M(")
+            || cleaned_text.contains("i,j")
+            || cleaned_text.contains(")")
+            || cleaned_text.contains("ml")
+        {
+            debug_println!("🔥 CLUSTERING TEXT ADDITION: span[{}] original='{}' cleaned='{}' result_before='{}'",
+                i, span.text, cleaned_text, result);
+        }
+
         result.push_str(&cleaned_text);
+
+        // CRITICAL DEBUG: Log result immediately after adding text in clustering mode
+        if cleaned_text.contains("M(")
+            || cleaned_text.contains("i,j")
+            || cleaned_text.contains(")")
+            || cleaned_text.contains("ml")
+        {
+            debug_println!(
+                "🔥 CLUSTERING RESULT AFTER: span[{}] result_after='{}'",
+                i,
+                result
+            );
+        }
     }
 
     // Close any remaining tags
@@ -743,6 +788,18 @@ fn apply_clustering_formatting(spans: &[CharSpan]) -> String {
 
     let spaced_result = fix_script_tag_spacing(&corrected_result);
     let final_result = fix_adjacent_script_patterns(&spaced_result);
+
+    // Debug post-processing steps for M(i,j) issue
+    if corrected_result.contains("M(")
+        || corrected_result.contains("i,j")
+        || corrected_result.contains(")")
+        || corrected_result.contains("ml")
+    {
+        debug_println!("🔍 POST-PROCESSING DEBUG:");
+        debug_println!("  corrected_result: '{}'", corrected_result);
+        debug_println!("  spaced_result: '{}'", spaced_result);
+        debug_println!("  final_result: '{}'", final_result);
+    }
 
     debug_print!(
         "🔬 CLUSTERING RESULT: '{}'",
@@ -769,6 +826,27 @@ pub(crate) fn apply_text_formatting(spans: &[CharSpan]) -> String {
         spans.len(),
         combined_text.chars().take(100).collect::<String>()
     );
+
+    // Debug parentheses specifically to find ')' -> 'ml' issue, especially M(i,j)
+    for (i, span) in spans.iter().enumerate() {
+        let text = span.text.trim();
+        if text.contains("M(") || text.contains("i,j") || text.contains("ml") {
+            debug_println!(
+                "🚨 MATRIX DEBUG: span[{}] text='{}' chars={:?}",
+                i,
+                span.text,
+                span.text.chars().collect::<Vec<char>>()
+            );
+        }
+        if text.contains(')') || text == ")" {
+            debug_println!(
+                "🚨 PARENTHESIS DEBUG: span[{}] text='{}' chars={:?}",
+                i,
+                span.text,
+                span.text.chars().collect::<Vec<char>>()
+            );
+        }
+    }
 
     // Check if this text contains digits that might be misclassified
     if combined_text.contains("1") || combined_text.contains("2") {
@@ -805,6 +883,20 @@ pub(crate) fn apply_text_formatting(spans: &[CharSpan]) -> String {
         for (i, span) in spans.iter().enumerate() {
             if i == 0 {
                 result.push_str(&span.text);
+                // Debug for M( formula
+                if span.text.contains("M(")
+                    || span.text.contains("i,j")
+                    || span.text.contains(")")
+                    || span.text.contains("ml")
+                {
+                    debug_println!(
+                        "🚨 TEXT AGGREGATION: span[{}] text='{}' chars={:?} → result='{}'",
+                        i,
+                        span.text,
+                        span.text.chars().collect::<Vec<char>>(),
+                        result
+                    );
+                }
             } else {
                 let prev_span = &spans[i - 1];
 
@@ -815,7 +907,34 @@ pub(crate) fn apply_text_formatting(spans: &[CharSpan]) -> String {
                 if needs_space {
                     result.push(' ');
                 }
+                let before_add = result.clone();
                 result.push_str(&span.text);
+
+                // Debug for M( formula - catch the transformation moment
+                if span.text.contains("M(")
+                    || span.text.contains("i,j")
+                    || span.text.contains(")")
+                    || span.text.contains("ml")
+                {
+                    debug_println!(
+                        "🚨 TEXT AGGREGATION: span[{}] text='{}' chars={:?} before='{}' after='{}'",
+                        i,
+                        span.text,
+                        span.text.chars().collect::<Vec<char>>(),
+                        before_add,
+                        result
+                    );
+                }
+                if result.contains("M(") && result.contains("ml") {
+                    debug_println!(
+                        "🚨 FOUND THE ISSUE! Result now contains both M( and ml: '{}'",
+                        result
+                    );
+                }
+                // Special debug for when ')' mysteriously becomes 'ml'
+                if span.text == ")" && result.contains("ml") {
+                    debug_println!("🔥 CRITICAL BUG: ')' span became 'ml' in result! span_text='{}' result='{}'", span.text, result);
+                }
             }
         }
         result
@@ -1230,6 +1349,21 @@ pub(crate) fn apply_text_formatting(spans: &[CharSpan]) -> String {
         // Add the actual text, cleaning up any substitute characters
         let cleaned_text = span.text.replace('\u{001a}', ""); // Remove SUB (substitute) character
 
+        // CRITICAL DEBUG: Log exactly what text is being added at this moment
+        if cleaned_text.contains("M(")
+            || cleaned_text.contains("i,j")
+            || cleaned_text.contains(")")
+            || cleaned_text.contains("ml")
+        {
+            debug_println!(
+                "🔥 CRITICAL TEXT ADDITION: span[{}] original='{}' cleaned='{}' result_before='{}'",
+                i,
+                span.text,
+                cleaned_text,
+                result
+            );
+        }
+
         // Add spacing between spans when needed (to preserve word boundaries)
         if i > 0 && !cleaned_text.is_empty() {
             let prev_span = &spans[i - 1];
@@ -1255,6 +1389,19 @@ pub(crate) fn apply_text_formatting(spans: &[CharSpan]) -> String {
         }
 
         result.push_str(&cleaned_text);
+
+        // CRITICAL DEBUG: Log result immediately after adding text
+        if cleaned_text.contains("M(")
+            || cleaned_text.contains("i,j")
+            || cleaned_text.contains(")")
+            || cleaned_text.contains("ml")
+        {
+            debug_println!(
+                "🔥 CRITICAL RESULT AFTER: span[{}] result_after='{}'",
+                i,
+                result
+            );
+        }
     }
 
     // Close any remaining open tags, trimming trailing spaces before closing subscript/superscript tags
@@ -1276,6 +1423,18 @@ pub(crate) fn apply_text_formatting(spans: &[CharSpan]) -> String {
     // Post-process to add proper spacing after subscript/superscript closing tags
     let spaced_result = fix_script_tag_spacing(&corrected_result);
     let final_result = fix_adjacent_script_patterns(&spaced_result);
+
+    // Debug post-processing steps for M(i,j) issue in stack-based processing
+    if corrected_result.contains("M(")
+        || corrected_result.contains("i,j")
+        || corrected_result.contains(")")
+        || corrected_result.contains("ml")
+    {
+        debug_println!("🔍 STACK POST-PROCESSING DEBUG:");
+        debug_println!("  corrected_result: '{}'", corrected_result);
+        debug_println!("  spaced_result: '{}'", spaced_result);
+        debug_println!("  final_result: '{}'", final_result);
+    }
 
     debug_print!(
         "⚡ STACK-BASED RESULT: '{}'",
@@ -1694,7 +1853,7 @@ fn is_matrix_notation_index(spans: &[CharSpan], span_idx: usize) -> bool {
     let text = current_span.text.trim();
 
     // Look for pattern: [Letter]([indices])
-    // We're looking for parentheses or content within parentheses after a matrix variable
+    // We only want to force subscripts for the actual indices, not the parentheses
 
     // Case 1: Current span is opening parenthesis after a matrix variable (A, B, C, M, etc.)
     if text == "(" && span_idx > 0 {
@@ -1714,6 +1873,7 @@ fn is_matrix_notation_index(spans: &[CharSpan], span_idx: usize) -> bool {
     // Case 2: Current span is closing parenthesis - check if we're in matrix context
     if text == ")" {
         // Look backward for opening parenthesis and matrix variable
+        // RESTRICT to very short range (max 3 spans) to prevent excessive matrix detection
         for i in (0..span_idx).rev() {
             let check_span = &spans[i];
             let check_text = check_span.text.trim();
@@ -1737,6 +1897,11 @@ fn is_matrix_notation_index(spans: &[CharSpan], span_idx: usize) -> bool {
                 break; // Found opening paren, stop searching
             }
 
+            // Don't search too far back (max 3 spans for matrix notation - very restrictive)
+            if span_idx - i > 3 {
+                break;
+            }
+
             // Stop if we hit other structure indicators
             if check_text.contains('=') || check_text.contains('+') || check_text.contains('-') {
                 break;
@@ -1745,11 +1910,21 @@ fn is_matrix_notation_index(spans: &[CharSpan], span_idx: usize) -> bool {
     }
 
     // Case 3: Current span contains indices (letters/numbers/commas) inside parentheses
-    if text
-        .chars()
-        .all(|c| c.is_ascii_alphanumeric() || c == ',' || c == ' ')
+    // RESTRICT to short, simple matrix indices only - NOT long phrases
+    if text.len() <= 10 && // Limit to short spans (not long phrases like "attention mask matrix")
+        text
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == ',' || c == ' ') &&
+        !text.contains("mask") && // Exclude common non-index words
+        !text.contains("matrix") &&
+        !text.contains("are") &&
+        !text.contains("by") &&
+        !text.contains("in") &&
+        !text.contains("the") &&
+        !text.contains("and")
     {
         // Look backward for opening parenthesis and matrix variable
+        // RESTRICT to very short range (max 3 spans) to prevent excessive matrix detection
         for i in (0..span_idx).rev() {
             let check_span = &spans[i];
             let check_text = check_span.text.trim();
@@ -1773,8 +1948,8 @@ fn is_matrix_notation_index(spans: &[CharSpan], span_idx: usize) -> bool {
                 break; // Found opening paren, stop searching
             }
 
-            // Don't search too far back (max 5 spans)
-            if span_idx - i > 5 {
+            // Don't search too far back (max 3 spans for matrix notation - very restrictive)
+            if span_idx - i > 3 {
                 break;
             }
         }
@@ -1943,6 +2118,12 @@ fn detect_subscripts_in_cluster_with_local_analysis(
                 }
             }
         };
+
+        // Check for matrix notation pattern before baseline analysis (clustering mode)
+        if is_matrix_notation_index(spans, span_idx) {
+            results.push((span_idx, true, false)); // Force subscript for matrix indices
+            continue;
+        }
 
         // Use shared detection functions with clustering-specific confidence threshold
         let is_subscript = is_real_subscript(
