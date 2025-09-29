@@ -65,6 +65,11 @@ pub fn fix_math_symbol_corruptions(text: &str) -> String {
     result = result.replace("  -- ", " -- ");
     result = result.replace(" --  ", " -- ");
 
+    // Fix angle bracket corruption: h...i → ⟨...⟩
+    // This pattern occurs when mathematical angle brackets are corrupted in PDFs
+    // Common patterns: "hni, nji" → "⟨ni, nj⟩", "hnj, nii" → "⟨nj, ni⟩"
+    result = fix_angle_bracket_corruptions(&result);
+
     result
 }
 
@@ -100,9 +105,14 @@ pub fn apply_character_corrections(text: &str) -> String {
 /// This combines mathematical symbol corrections, character positioning fixes, and character filtering.
 /// Ligature corrections are now handled at the font analysis level via Adobe Glyph List.
 pub fn correct_assembled_text(text: &str) -> String {
-    let positioning_corrected = fix_character_positioning_corruptions(text);
-    let math_corrected = fix_math_symbol_corruptions(&positioning_corrected);
-    filter_control_characters(&math_corrected)
+    // Apply math symbol corrections first, as they should work on both HTML and plain text
+    let math_corrected = fix_math_symbol_corruptions(text);
+
+    // Apply character positioning corrections (may skip HTML content for dictionary corrections)
+    let positioning_corrected = fix_character_positioning_corruptions(&math_corrected);
+
+    // Apply final character filtering
+    filter_control_characters(&positioning_corrected)
 }
 
 /// Apply dictionary corrections directly to spans (modifies span text in place)
@@ -127,6 +137,31 @@ pub fn correct_spans_with_dictionary(spans: &mut [crate::entities::CharSpan]) {
         // No-op when correction engine is disabled
         let _ = spans;
     }
+}
+
+/// Fix angle bracket corruption patterns in mathematical text
+///
+/// This handles a specific corruption where mathematical angle brackets ⟨⟩ are
+/// rendered as 'h' and 'i' characters in mathematical formulas.
+/// Common patterns: "hni, nji" → "⟨ni, nj⟩", "hnj, nii" → "⟨nj, ni⟩"
+/// Since this now runs before HTML processing, it only needs to handle plain text.
+fn fix_angle_bracket_corruptions(text: &str) -> String {
+    use lazy_static::lazy_static;
+    use regex::Regex;
+
+    lazy_static! {
+        /// Pre-compiled regex for angle bracket pair patterns
+        static ref ANGLE_BRACKET_PAIR_REGEX: Regex =
+            Regex::new(r"\bh([a-z]+[ij]*)\s*,\s*([a-z]*[ij])\s*i\b").expect("Invalid regex pattern");
+        /// Pre-compiled regex for single angle bracket patterns
+        static ref ANGLE_BRACKET_SINGLE_REGEX: Regex =
+            Regex::new(r"\bh([a-z]+[ij])\s*i\b").expect("Invalid regex pattern");
+    }
+
+    let result = ANGLE_BRACKET_PAIR_REGEX.replace_all(text, "⟨$1, $2⟩");
+    let result = ANGLE_BRACKET_SINGLE_REGEX.replace_all(&result, "⟨$1⟩");
+
+    result.to_string()
 }
 
 #[cfg(test)]
@@ -218,5 +253,25 @@ mod tests {
         assert_eq!(correct_assembled_text("6=\ntest"), "≠\ntest");
         assert_eq!(correct_assembled_text("sysfitems\u{0002}"), "systems");
         // Note: Ligature corrections are now handled at the font analysis level via Adobe Glyph List
+    }
+
+    #[test]
+    fn test_angle_bracket_corrections() {
+        // Test the specific corruption pattern from mathbert.pdf
+        assert_eq!(
+            fix_angle_bracket_corruptions("hni , nj i ∉ E and hnj , ni i ∉ E"),
+            "⟨ni, nj⟩ ∉ E and ⟨nj, ni⟩ ∉ E"
+        );
+
+        // Test single variable patterns
+        assert_eq!(fix_angle_bracket_corruptions("hni i"), "⟨ni⟩");
+        assert_eq!(fix_angle_bracket_corruptions("hnj i"), "⟨nj⟩");
+
+        // Test that normal text is not affected
+        assert_eq!(fix_angle_bracket_corruptions("hello world"), "hello world");
+        assert_eq!(
+            fix_angle_bracket_corruptions("this is normal"),
+            "this is normal"
+        );
     }
 }

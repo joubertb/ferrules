@@ -191,7 +191,7 @@ pub fn fix_character_encoding_corruption_with_font(text: &str, _font_name: Optio
 /// Sets up document context for font corruption analysis (legacy compatibility)
 ///
 /// This is now handled automatically by the universal corrector during PDF processing.
-pub fn set_document_context(_pdf_data: std::sync::Arc<[u8]>) {
+pub fn set_document_context() {
     // Universal corrector handles document context automatically
 }
 

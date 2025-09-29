@@ -25,24 +25,8 @@ fn apply_character_corrections(
     // Get the original character for comparison
     let original_char = original_text.chars().next().unwrap_or('\0');
 
-    // Debug parentheses specifically to find ')' -> 'ml' issue and ( -> h, ) -> i issue
-    if original_text.contains(')')
-        || original_text.contains("ml")
-        || unicode_value == 41
-        || original_text.contains('(')
-        || unicode_value == 40
-        || original_text == "h"
-        || original_text == "i"
-    {
-        eprintln!(
-            "🚨 CHAR DEBUG: text='{}' unicode=0x{:04X} char='{}' font='{}'",
-            original_text, unicode_value, original_char, font_name
-        );
-    }
-
     #[cfg(feature = "correction-engine")]
     {
-        use crate::debug_println;
         use crate::font_analysis::{
             correct_character_with_encoding_differences, correct_character_with_universal_corrector,
         };
@@ -69,14 +53,8 @@ fn apply_character_corrections(
             correct_character_with_universal_corrector(unicode_value, font_name)
         {
             if corrected_char.is_empty() || corrected_char == "\0" {
-                debug_println!(
-                    "🔧 APPLY CORRECTION: Font '{font_name}' - 0x{unicode_value:04X} '{original_char}' → [SUPPRESSED]"
-                );
                 return (String::new(), true); // Return empty string to suppress character
             } else {
-                debug_println!(
-                    "🔧 APPLY CORRECTION: Font '{font_name}' - 0x{unicode_value:04X} '{original_char}' → '{corrected_char}'"
-                );
                 return (corrected_char, true);
             }
         }
@@ -99,17 +77,14 @@ fn apply_character_corrections(
     //     }
     // }
 
-    // REMOVED: Old fallback mathematical font correction system
     // The universal corrector now handles all font corrections
 
     // No correction needed - return original text
     (original_text.to_string(), false)
 }
 
-// REMOVED: is_mathematical_symbol_font() function
 // No longer needed - universal corrector handles all font detection
 
-// REMOVED: get_mathematical_symbol_correction() function
 // No longer needed - universal corrector handles all mathematical symbol corrections
 
 #[derive(Debug, Default, Clone, Deserialize, Serialize)]

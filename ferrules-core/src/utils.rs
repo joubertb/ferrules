@@ -17,7 +17,6 @@ use std::{
 
 pub fn get_doc_length<P: AsRef<Path>>(
     path: P,
-    _password: Option<&str>,
     page_range: Option<Range<usize>>,
 ) -> anyhow::Result<usize> {
     // Use lopdf instead of pdfium for simple page counting to avoid macOS hanging issue
@@ -120,7 +119,6 @@ fn recreate_result_dir(result_dir_name: &Path) -> anyhow::Result<PathBuf> {
 pub fn create_dirs<P: AsRef<Path>>(
     output_dir: Option<P>,
     doc_name: &str,
-    _debug: bool,
     save_imgs: bool,
 ) -> anyhow::Result<PathBuf> {
     let result_dir_name = format!("{}-results", sanitize_doc_name(doc_name));

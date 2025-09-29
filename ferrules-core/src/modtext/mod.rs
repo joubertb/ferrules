@@ -163,6 +163,65 @@ fn remove_line_ending_hyphens(spans: &mut Vec<crate::entities::CharSpan>) {
     }
 }
 
+/// Apply text corrections to individual spans
+///
+/// This function applies font and text corrections to each span's text content
+/// before HTML processing occurs. This ensures that script notation processing
+/// works with corrected text rather than original corrupted text.
+fn apply_text_corrections_to_spans(spans: &mut [crate::entities::CharSpan]) {
+    debug_print!("🔧 SPAN CORRECTIONS: Processing {} spans", spans.len());
+
+    for span in spans.iter_mut() {
+        let original_text = span.text.clone();
+        let corrected_text = crate::font_analysis::correct_assembled_text(&original_text);
+
+        if corrected_text != original_text {
+            debug_print!(
+                "🔧 SPAN CORRECTED: '{}' → '{}'",
+                original_text,
+                corrected_text
+            );
+            span.text = corrected_text;
+        }
+    }
+
+    debug_print!("🔧 SPAN CORRECTIONS: Completed span text corrections");
+}
+
+/// Apply text corrections to HTML content while preserving HTML structure
+///
+/// This function applies text corrections (like angle bracket fixes) to the text content
+/// within HTML tags without corrupting the HTML markup itself.
+fn apply_text_corrections_to_html(html: &str) -> String {
+    use lazy_static::lazy_static;
+    use regex::Regex;
+
+    lazy_static! {
+        /// Pre-compiled regex for HTML angle bracket pair patterns spanning tags
+        static ref HTML_ANGLE_BRACKET_PAIR_REGEX: Regex =
+            Regex::new(r"\bh([a-z]+)<sub>([ij])</sub>\s*,\s*([a-z]*)<sub>([ij])</sub>\s*i\b")
+                .expect("Invalid regex pattern");
+        /// Pre-compiled regex for HTML single angle bracket patterns spanning tags
+        static ref HTML_ANGLE_BRACKET_SINGLE_REGEX: Regex =
+            Regex::new(r"\bh([a-z]+)<sub>([ij])</sub>\s*i\b").expect("Invalid regex pattern");
+        /// Pre-compiled regex for text content between HTML tags
+        static ref HTML_TEXT_CONTENT_REGEX: Regex =
+            Regex::new(r">([^<]+)<").expect("Invalid regex pattern");
+    }
+
+    let result = HTML_ANGLE_BRACKET_PAIR_REGEX.replace_all(html, "⟨$1$2, $3$4⟩");
+    let result = HTML_ANGLE_BRACKET_SINGLE_REGEX.replace_all(&result, "⟨$1$2⟩");
+
+    let result = HTML_TEXT_CONTENT_REGEX.replace_all(&result, |caps: &regex::Captures| {
+        let text_content = &caps[1];
+        let corrected_content =
+            crate::font_analysis::text_corrections::fix_math_symbol_corruptions(text_content);
+        format!(">{}<", corrected_content)
+    });
+
+    result.to_string()
+}
+
 #[cfg(feature = "modtext")]
 pub mod mathematical;
 
@@ -182,13 +241,10 @@ pub mod script_notation;
 /// ```
 #[allow(dead_code)]
 pub fn process_mathematical_notation(spans: &[crate::entities::CharSpan]) -> String {
-    debug_print!(
-        "🟢 process_mathematical_notation CALLED with {} spans",
-        spans.len()
-    );
     #[cfg(feature = "modtext")]
     {
-        script_notation::apply_text_formatting(spans)
+        let html_result = script_notation::apply_text_formatting(spans);
+        apply_text_corrections_to_html(&html_result)
     }
 
     #[cfg(not(feature = "modtext"))]
@@ -214,8 +270,12 @@ pub fn add_tags(spans: &[crate::entities::CharSpan]) -> String {
     // This fixes cases like "Vi-" + "jil" → "Vijil" (not "Vifijil")
     let hyphen_processed_text = remove_end_of_line_hyphens(spans);
 
+    // TEXT CORRECTIONS: Apply text corrections to assembled text before HTML processing
+    // This fixes mathematical symbol corruptions like "hni, nji" → "⟨ni, nj⟩"
+    let corrected_text = crate::font_analysis::correct_assembled_text(&hyphen_processed_text);
+
     debug_print!(
-        "🏷️ add_tags CALLED with {} spans: '{}' → after hyphen removal: '{}'",
+        "🏷️ add_tags CALLED with {} spans: '{}' → after hyphen removal: '{}' → after corrections: '{}'",
         spans.len(),
         spans
             .iter()
@@ -224,20 +284,23 @@ pub fn add_tags(spans: &[crate::entities::CharSpan]) -> String {
             .chars()
             .take(50)
             .collect::<String>(),
-        hyphen_processed_text.chars().take(50).collect::<String>()
+        hyphen_processed_text.chars().take(50).collect::<String>(),
+        corrected_text.chars().take(50).collect::<String>()
     );
 
     #[cfg(feature = "modtext")]
     {
-        // Hyphen removal is now handled at span level before HTML processing
-        // Just apply the HTML formatting to the already-processed spans
-        script_notation::apply_tags_recursive(spans, 0)
+        // Apply HTML subscript/superscript detection using original spans (needs positioning info)
+        let html_result = script_notation::apply_tags_recursive(spans, 0);
+
+        // Apply text corrections to the HTML content (fix text inside HTML tags)
+        apply_text_corrections_to_html(&html_result)
     }
 
     #[cfg(not(feature = "modtext"))]
     {
-        // When feature is disabled, return the hyphen-processed text
-        hyphen_processed_text
+        // When feature is disabled, return the corrected text
+        corrected_text
     }
 }
 
@@ -423,7 +486,7 @@ pub fn format_formula_with_spans(
     );
 
     // Use shared span processing with complex line break detection
-    let all_spans = process_spans_with_line_breaks(line_spans, true);
+    let mut all_spans = process_spans_with_line_breaks(line_spans, true);
 
     debug_print!(
         "📋 FORMULA WITH SPANS: Flattened to {} total spans",
@@ -437,7 +500,11 @@ pub fn format_formula_with_spans(
         return format_formula_text(text);
     }
 
-    // Apply subscript/superscript detection using the actual CharSpans
+    // Apply text corrections to individual spans BEFORE HTML processing
+    // This ensures that formula processing works with corrected text
+    apply_text_corrections_to_spans(&mut all_spans);
+
+    // Apply subscript/superscript detection using the corrected CharSpans
     let script_processed = add_tags(&all_spans);
 
     debug_print!(
@@ -544,7 +611,11 @@ pub fn process_text_with_spans(
     // This fixes line-ending hyphens like "Vi-" + "jil" → "Vijil" at the source
     remove_line_ending_hyphens(&mut all_spans);
 
-    // Apply subscript/superscript detection using the spans (dictionary correction already applied to text)
+    // Apply text corrections to individual spans BEFORE HTML processing
+    // This ensures that the script processing works with corrected text
+    apply_text_corrections_to_spans(&mut all_spans);
+
+    // Apply subscript/superscript detection using the corrected spans
     let script_processed = script_notation::apply_text_formatting(&all_spans);
 
     debug_print!(

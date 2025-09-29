@@ -404,7 +404,7 @@ fn handle_parse_native_req(
 
     // Set document context for font corruption analysis
     #[cfg(feature = "correction-engine")]
-    crate::font_analysis::set_document_context(doc_data.clone());
+    crate::font_analysis::set_document_context();
 
     // Use original PDF data directly - corrections are applied at character level during text extraction
     let processed_pdf_data = doc_data.to_vec();

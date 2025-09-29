@@ -6,7 +6,13 @@ use crate::{
     entities::{Element, ElementID, ElementType, Line, PageID},
     layout::model::LayoutBBox,
 };
+use lazy_static::lazy_static;
 use regex::Regex;
+
+lazy_static! {
+    /// Pre-compiled regex for figure caption pattern detection
+    static ref FIGURE_CAPTION_REGEX: Regex = Regex::new(r"^(?i)(Figure|Fig\.|Image)\s+[A-Za-z0-9]+[A-Za-z]?\s*[:.]").unwrap();
+}
 
 /// Apply word-level font corrections to text
 fn apply_corrections_to_text(text: String) -> String {
@@ -73,9 +79,7 @@ fn is_figure_caption(text: &str) -> bool {
     // Use regex to match actual figure captions (with colon or period after label)
     // This prevents false positives like "Figure 1 presents..." which are text references
     // Valid patterns: "Figure 1:", "Fig. A:", "Figure 2B.", "Image 3:", etc.
-    let caption_pattern =
-        Regex::new(r"^(?i)(Figure|Fig\.|Image)\s+[A-Za-z0-9]+[A-Za-z]?\s*[:.]").unwrap();
-    caption_pattern.is_match(text.trim())
+    FIGURE_CAPTION_REGEX.is_match(text.trim())
 }
 
 /// Detects text blocks that are likely embedded within a figure

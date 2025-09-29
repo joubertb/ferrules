@@ -175,12 +175,8 @@ fn parse_page_range(range_str: &str) -> anyhow::Result<Range<usize>> {
     }
 }
 
-fn setup_progress_bar(
-    file_path: &Path,
-    password: Option<&str>,
-    page_range: Option<Range<usize>>,
-) -> ProgressBar {
-    let length_pages = get_doc_length(file_path, password, page_range.clone()).unwrap();
+fn setup_progress_bar(file_path: &Path, page_range: Option<Range<usize>>) -> ProgressBar {
+    let length_pages = get_doc_length(file_path, page_range.clone()).unwrap();
     let pb = ProgressBar::new(length_pages as u64);
     pb.set_style(
         ProgressStyle::with_template(
@@ -261,7 +257,7 @@ async fn main() {
         .page_range
         .map(|page_range_str| parse_page_range(&page_range_str).unwrap());
 
-    let pb = setup_progress_bar(&args.file_path, None, page_range.clone());
+    let pb = setup_progress_bar(&args.file_path, page_range.clone());
     let pbc = pb.clone();
 
     let doc_name = args
@@ -272,8 +268,7 @@ async fn main() {
         .unwrap_or(Uuid::new_v4().to_string());
 
     let save_figs = args.html | args.save_images;
-    let output_dir_path =
-        create_dirs(args.output_dir.as_ref(), &doc_name, args.debug, save_figs).unwrap();
+    let output_dir_path = create_dirs(args.output_dir.as_ref(), &doc_name, save_figs).unwrap();
 
     // Set up debug context if debug output to file is enabled
     if debug_output.contains(DebugOutput::FILE) {

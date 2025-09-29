@@ -944,10 +944,6 @@ const FONT_SIZE_STRONG_SHRINKAGE_THRESHOLD: f32 = 0.25; // 25% strong shrinkage
 - when running target/debug/ferrules and want to look for multiple things in the output, redirect the output of the command to a file and then grep for what you are looking for in the file
 - in rust code, variables must be used directly in the `format!`
 - Do not add "FIXED" or "REMOVED" in comments. Or anything about fixing or removing it. Only add a comment if it explains something that is now happening because of the FIXED or REMOVED code.
+- when not using an argument in a function, do not rename it with _ as first char.  Remove the argument from the function.
+- when using regular expressions, compile them at start of application first.
 - **Subscript Detection**: Uses research-validated proportional baseline thresholds (99.89% accuracy)
-- **Post-Processing Fix (2025)**: Added `fix_adjacent_script_patterns()` to handle mixed notation where detection is correct but grouping order is wrong
-  - **Problem**: `C<sup>SKV</sup>` should be `C<sub>KV</sub><sup>S</sup>` (KV subscript, S superscript in visual order)
-  - **Root Cause**: Multiple characters incorrectly grouped together as single superscript unit
-  - **Solution**: Regex-based post-processing to rearrange `<sup>([SH])(KV)</sup>` → `<sub>KV</sub><sup>S/H</sup>`
-  - **Why Not Detection Fix**: Detection was correct for individual characters; issue was in final grouping/ordering
-  - **Applied**: In both sequential and clustering result paths after `fix_script_tag_spacing()`

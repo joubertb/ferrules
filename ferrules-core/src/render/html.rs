@@ -1,6 +1,7 @@
 use std::path::PathBuf;
 
 use build_html::{Html, HtmlContainer, HtmlElement, HtmlPage, HtmlTag};
+use lazy_static::lazy_static;
 use regex::Regex;
 
 use crate::{
@@ -12,23 +13,24 @@ use super::{Render, Renderer};
 
 static LIST_BULLET_PATTERN: &str = r"(^|[\n ]|<[^>]*>)[•●○ഠ ം◦■▪▫–—-]( )";
 
+lazy_static! {
+    /// Pre-compiled regex for list bullet pattern detection
+    static ref LIST_BULLET_REGEX: Regex = Regex::new(LIST_BULLET_PATTERN).unwrap();
+}
+
 #[derive(Debug)]
 pub struct HTMLRenderer {
     root_element: HtmlElement,
     img_src_path: Option<PathBuf>,
-    list_regex: Regex,
 }
 
 impl HTMLRenderer {
     pub(crate) fn new(img_src_path: Option<PathBuf>) -> Self {
         let root = HtmlElement::new(HtmlTag::Div);
 
-        let list_regex = Regex::new(LIST_BULLET_PATTERN).unwrap();
-
         Self {
             root_element: root,
             img_src_path,
-            list_regex,
         }
     }
     pub fn finalize(self, page_title: &str) -> String {
@@ -74,7 +76,7 @@ impl Renderer for HTMLRenderer {
             BlockType::ListBlock(list) => {
                 let mut ul = HtmlElement::new(HtmlTag::UnorderedList);
                 for item in &list.items {
-                    let clean_text = self.list_regex.replace(item, "").into_owned();
+                    let clean_text = LIST_BULLET_REGEX.replace(item, "").into_owned();
                     let li = HtmlElement::new(HtmlTag::ListElement)
                         .with_child(clean_text.as_str().into())
                         .into();
