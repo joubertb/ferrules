@@ -58,28 +58,35 @@
 //! **Approach**: Regex patterns, character substitutions, spell checking
 //! **Coverage**: Angle brackets, mathematical symbols, control characters, word-level corrections
 //!
-//! ### Processing Pipeline Integration
+//! ### Unified Processing Pipeline Integration (2025 Refactor)
 //!
-//! **Critical Architectural Decision**: Corrections are applied **before** HTML formatting
+//! **Architectural Improvement**: Font corrections are now integrated into the unified text
+//! processing pipeline that handles both formulas and regular text through a single code path:
+//!
 //! ```
 //! PDF Character Extraction
 //!     ↓
-//! Universal Font Corrector (font-level)
+//! Universal Font Corrector (font-level) ← This module
 //!     ↓
-//! Text Corrections (text-level patterns)
-//!     ↓
-//! HTML Script Notation Processing
-//!     ↓
-//! HTML Text Content Corrections (pattern spanning tags)
+//! Unified Text Processing Pipeline:
+//!   - Hyphen removal (span-level)
+//!   - Text corrections (span-level patterns)
+//!   - HTML Script Notation Processing → <sub>/<sup>/<b>
+//!   - HTML Content Corrections (formulas only)
 //!     ↓
 //! Final Output
 //! ```
 //!
-//! **Rationale for Processing Order**:
-//! - Font corrections catch corruption at the source during character extraction
-//! - Text corrections handle patterns spanning multiple spans before HTML processing
-//! - HTML corrections fix patterns that span across HTML tag boundaries
-//! - This sequence ensures corrections are preserved throughout the formatting pipeline
+//! **Key Improvements from Unification**:
+//! - **Eliminated duplication**: Previously formula and text paths both applied corrections separately
+//! - **Consistent behavior**: Same correction sequence for all content types
+//! - **Simplified debugging**: Single place to trace correction application
+//! - **Easier maintenance**: One correction pipeline instead of multiple paths
+//!
+//! **Processing Order Rationale**:
+//! - Font corrections prevent corruption at character extraction time
+//! - Unified pipeline ensures consistent correction sequence
+//! - HTML corrections handle patterns spanning across HTML tag boundaries
 //!
 //! ## Success Case Studies
 //!
@@ -2211,3 +2218,36 @@ impl Default for UniversalFontCorrector {
 // The success demonstrates the power of layered correction architectures where each layer
 // handles its specific domain optimally, combining to solve complex multi-faceted problems
 // that no single approach could address comprehensively.
+
+//
+// ## 2025 Unified Pipeline Integration
+//
+// ### Architectural Simplification Achievement
+//
+// **Problem Eliminated**: Previously, this font corrector was called from multiple separate
+// processing paths:
+// - Formula processing: `format_formula_with_spans()` → `add_tags()` → corrections
+// - Text processing: `process_text_with_spans()` → corrections
+// - Each path duplicated hyphen removal, span corrections, and HTML generation
+//
+// **Solution Implemented**: Unified text processing pipeline with single entry point:
+// ```rust
+// pub fn unified_text_processing(spans: &[CharSpan], is_formula: bool) -> String {
+//     // Single path for all text processing:
+//     // 1. Hyphen removal (span-level)
+//     // 2. Text corrections (including this font corrector)
+//     // 3. Script notation detection → HTML tags
+//     // 4. HTML content corrections (formulas only)
+// }
+// ```
+//
+// **Benefits Achieved**:
+// - **Code Reduction**: Eliminated redundant `apply_tags_recursive()` wrapper function
+// - **Consistency**: Same correction sequence for all content types
+// - **Debugging**: Single code path to trace correction behavior
+// - **Maintenance**: One place to modify correction logic
+// - **Performance**: Eliminated duplicate processing
+//
+// **Integration Points**: This universal font corrector now integrates seamlessly into
+// the unified pipeline through `apply_text_corrections_to_spans()`, ensuring consistent
+// font correction behavior across all document content types.

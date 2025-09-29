@@ -29,46 +29,6 @@ use crate::debug_print;
 /// 3. Removing the hyphen to properly rejoin the word
 ///
 /// Example: "Vi-" + "jil" → "Vijil"
-fn remove_end_of_line_hyphens(spans: &[crate::entities::CharSpan]) -> String {
-    if spans.is_empty() {
-        return String::new();
-    }
-
-    let mut result = String::new();
-
-    for (i, span) in spans.iter().enumerate() {
-        let span_text = &span.text;
-
-        // Check if this span ends with hyphen and there's a next span
-        if span_text.ends_with('-') && i + 1 < spans.len() {
-            let next_span = &spans[i + 1];
-            let next_text = &next_span.text;
-
-            // If next span starts with a letter, remove the hyphen (end-of-line hyphenation)
-            if !next_text.is_empty() && next_text.chars().next().unwrap().is_alphabetic() {
-                // Remove the trailing hyphen
-                let without_hyphen = &span_text[..span_text.len() - 1];
-                result.push_str(without_hyphen);
-                debug_print!(
-                    "🔗 HYPHEN REMOVED: '{}' + '{}' → '{}{}'",
-                    span_text,
-                    &next_text[..next_text.len().min(10)],
-                    without_hyphen,
-                    &next_text[..next_text.len().min(10)]
-                );
-            } else {
-                // Keep the hyphen - not end-of-line hyphenation
-                result.push_str(span_text);
-            }
-        } else {
-            // Normal span - just add it
-            result.push_str(span_text);
-        }
-    }
-
-    result
-}
-
 /// Remove line-ending hyphens at the span level
 ///
 /// This function identifies spans that end with "word-" and the next span starts with "word"
@@ -265,43 +225,42 @@ pub fn process_mathematical_notation(spans: &[crate::entities::CharSpan]) -> Str
 ///
 /// let enhanced = modtext::add_tags(&char_spans);
 /// ```
-pub fn add_tags(spans: &[crate::entities::CharSpan]) -> String {
-    // HYPHEN FIX: Handle end-of-line hyphenation before text assembly
-    // This fixes cases like "Vi-" + "jil" → "Vijil" (not "Vifijil")
-    let hyphen_processed_text = remove_end_of_line_hyphens(spans);
-
-    // TEXT CORRECTIONS: Apply text corrections to assembled text before HTML processing
-    // This fixes mathematical symbol corruptions like "hni, nji" → "⟨ni, nj⟩"
-    let corrected_text = crate::font_analysis::correct_assembled_text(&hyphen_processed_text);
-
+/// Unified text processing pipeline for both formulas and text blocks
+/// Consolidates hyphen removal, font correction, and HTML tag generation
+pub fn unified_text_processing(spans: &[crate::entities::CharSpan], is_formula: bool) -> String {
     debug_print!(
-        "🏷️ add_tags CALLED with {} spans: '{}' → after hyphen removal: '{}' → after corrections: '{}'",
+        "🔄 UNIFIED PROCESSING: Processing {} spans, is_formula={}",
         spans.len(),
-        spans
-            .iter()
-            .map(|s| s.text.as_str())
-            .collect::<String>()
-            .chars()
-            .take(50)
-            .collect::<String>(),
-        hyphen_processed_text.chars().take(50).collect::<String>(),
-        corrected_text.chars().take(50).collect::<String>()
+        is_formula
     );
 
-    #[cfg(feature = "modtext")]
-    {
-        // Apply HTML subscript/superscript detection using original spans (needs positioning info)
-        let html_result = script_notation::apply_tags_recursive(spans, 0);
+    // Use shared span processing with simple line break detection
+    let mut processed_spans = process_spans_with_line_breaks(&[spans.to_vec()], false);
 
-        // Apply text corrections to the HTML content (fix text inside HTML tags)
+    // Apply hyphen removal at span level BEFORE HTML processing
+    // This fixes line-ending hyphens like "Vi-" + "jil" → "Vijil" at the source
+    remove_line_ending_hyphens(&mut processed_spans);
+
+    // Apply text corrections to individual spans BEFORE HTML processing
+    // This ensures that the script processing works with corrected text
+    apply_text_corrections_to_spans(&mut processed_spans);
+
+    // Apply subscript/superscript detection and HTML tag creation
+    let html_result = script_notation::apply_text_formatting(&processed_spans);
+
+    if is_formula {
+        // For formulas: Apply additional HTML content corrections
         apply_text_corrections_to_html(&html_result)
+    } else {
+        // For text: Return HTML result directly
+        html_result
     }
+}
 
-    #[cfg(not(feature = "modtext"))]
-    {
-        // When feature is disabled, return the corrected text
-        corrected_text
-    }
+/// Legacy wrapper for add_tags - now uses unified processing
+/// This maintains backward compatibility while using the new unified pipeline
+pub fn add_tags(spans: &[crate::entities::CharSpan]) -> String {
+    unified_text_processing(spans, true) // Formulas get HTML corrections
 }
 
 /// Detect inline subscript patterns within text
@@ -486,7 +445,7 @@ pub fn format_formula_with_spans(
     );
 
     // Use shared span processing with complex line break detection
-    let mut all_spans = process_spans_with_line_breaks(line_spans, true);
+    let all_spans = process_spans_with_line_breaks(line_spans, true);
 
     debug_print!(
         "📋 FORMULA WITH SPANS: Flattened to {} total spans",
@@ -500,15 +459,11 @@ pub fn format_formula_with_spans(
         return format_formula_text(text);
     }
 
-    // Apply text corrections to individual spans BEFORE HTML processing
-    // This ensures that formula processing works with corrected text
-    apply_text_corrections_to_spans(&mut all_spans);
-
-    // Apply subscript/superscript detection using the corrected CharSpans
-    let script_processed = add_tags(&all_spans);
+    // Use unified processing pipeline for formulas (with HTML corrections)
+    let script_processed = unified_text_processing(&all_spans, true);
 
     debug_print!(
-        "📋 FORMULA WITH SPANS: Script processing result: '{}'",
+        "📋 FORMULA WITH SPANS: Unified processing result: '{}'",
         script_processed.chars().take(100).collect::<String>()
     );
 
@@ -591,40 +546,20 @@ pub fn process_text_with_spans(
         text.chars().take(100).collect::<String>()
     );
 
-    // Apply dictionary correction to clean text FIRST, before any HTML processing
-    let corrected_text = crate::font_analysis::correct_assembled_text(text);
-    debug_print!(
-        "📋 TEXT WITH SPANS: Dictionary corrected: '{}' → '{}'",
-        text.chars().take(50).collect::<String>(),
-        corrected_text.chars().take(50).collect::<String>()
-    );
+    // Flatten spans for unified processing
+    let all_spans: Vec<crate::entities::CharSpan> = line_spans
+        .iter()
+        .flat_map(|line| line.iter())
+        .cloned()
+        .collect();
 
-    // Use shared span processing with simple line break detection for text
-    let mut all_spans = process_spans_with_line_breaks(line_spans, false);
-
-    debug_print!(
-        "📋 TEXT WITH SPANS: Flattened to {} total spans",
-        all_spans.len()
-    );
-
-    // Apply hyphen removal at span level BEFORE HTML processing
-    // This fixes line-ending hyphens like "Vi-" + "jil" → "Vijil" at the source
-    remove_line_ending_hyphens(&mut all_spans);
-
-    // Apply text corrections to individual spans BEFORE HTML processing
-    // This ensures that the script processing works with corrected text
-    apply_text_corrections_to_spans(&mut all_spans);
-
-    // Apply subscript/superscript detection using the corrected spans
-    let script_processed = script_notation::apply_text_formatting(&all_spans);
+    // Use unified processing pipeline for text (not formula)
+    let final_text = unified_text_processing(&all_spans, false);
 
     debug_print!(
-        "📋 TEXT WITH SPANS: Script processing result: '{}'",
-        script_processed.chars().take(100).collect::<String>()
+        "📋 TEXT WITH SPANS: Unified processing result: '{}'",
+        final_text.chars().take(100).collect::<String>()
     );
-
-    // Dictionary correction already applied to input text - use processed result
-    let final_text = script_processed;
 
     // Clean up substitute characters
     let cleaned_text = final_text.replace('\u{001a}', "");

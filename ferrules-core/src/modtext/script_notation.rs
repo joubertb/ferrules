@@ -43,23 +43,26 @@
 //! - `VERTICAL_REF = 0.6` - Reference downward movement (60% of font height)
 //! - `SIZE_REF = 0.35` - Reference font shrinkage (35% reduction)
 //!
-//! ## Integration with Text Correction Pipeline
+//! ## Integration with Unified Text Processing Pipeline
 //!
-//! The script detection system is tightly integrated with the text correction pipeline:
+//! This module is the core component of the unified text processing pipeline that handles
+//! both formula and text processing through a single code path:
 //!
 //! ```
-//! Text Correction (span-level)
+//! Input: CharSpan[]
 //!     ↓
-//! Script Notation Detection (this module)
-//!     ↓
-//! HTML Generation with <sub>/<sup> tags
-//!     ↓
-//! HTML Text Content Corrections (pattern spanning tags)
+//! Unified Text Processing Pipeline:
+//!   - Hyphen removal (span-level)
+//!   - Font/Text corrections (span-level)
+//!   - Script Detection (this module) → <sub>/<sup>/<b> tags
+//!   - HTML Content Corrections (for formulas only)
 //!     ↓
 //! Final Formatted Output
 //! ```
 //!
-//! This ensures that corrected text flows through to proper mathematical formatting.
+//! **Key Architectural Improvement**: Previously had separate formula and text processing
+//! paths that both called this module. Now unified through a single `apply_text_formatting()`
+//! entry point, eliminating code duplication and simplifying maintenance.
 //!
 //! ## Key Features & Accuracy Metrics
 //!
@@ -91,6 +94,14 @@
 //! ```
 //!
 //! ## Architecture Decisions
+//!
+//! ### Why Unified Processing Pipeline?
+//! **Decision**: Single `apply_text_formatting()` entry point for both formulas and text
+//! **Rationale**:
+//! - **Eliminated code duplication**: Previously had separate formula/text paths calling same logic
+//! - **Simplified debugging**: Single place to modify subscript detection behavior
+//! - **Consistent results**: Same detection algorithm for all content types
+//! - **Easier maintenance**: One code path instead of multiple wrapper functions
 //!
 //! ### Why Dual-Detection System?
 //! **Decision**: Sequential mode for simple text, clustering mode for complex formulas
@@ -484,6 +495,28 @@ fn is_real_subscript(
         return false;
     }
 
+    // SPECIAL CASE: Mathematical variable subscripts (ni, nj, etc.) - be more lenient
+    let text_trimmed = current_span.text.trim();
+    let is_mathematical_variable_case = if _current_index > 0 {
+        let prev_text = _spans[_current_index - 1].text.trim();
+        prev_text.len() == 1
+            && prev_text.chars().next().unwrap().is_alphabetic()
+            && (text_trimmed == "i" || text_trimmed == "j")
+            && _spans.iter().any(|span| {
+                let text = span.text.trim();
+                text.contains('=')
+                    || text.contains('∑')
+                    || text.contains('∈')
+                    || text.contains('∉')
+                    || text.contains('⟨')
+                    || text.contains('⟩')
+                    || text.contains('∪')
+                    || text.contains('∩')
+            })
+    } else {
+        false
+    };
+
     // Apply composite scoring (ChatGPT approach)
     // Normalize by BASE font size, not current span's font size
     let v = sequential_diff / base_font_size; // Normalized vertical offset (positive for downward)
@@ -499,11 +532,16 @@ fn is_real_subscript(
     let sub_confidence =
         (raw_sub / denom).clamp(CONFIDENCE_NORMALIZATION_MIN, CONFIDENCE_NORMALIZATION_MAX);
 
-    // Use passed confidence threshold parameter
+    // Use passed confidence threshold parameter (but be more lenient for mathematical variables)
+    let effective_threshold = if is_mathematical_variable_case {
+        confidence_threshold * 0.1 // Much more lenient for mathematical variables
+    } else {
+        confidence_threshold
+    };
 
     // Require both confidence threshold AND smaller font
     let has_smaller_font = current_span.font_size < base_font_size * FONT_SIZE_SCRIPT_THRESHOLD;
-    let is_likely_subscript = sub_confidence > confidence_threshold && has_smaller_font;
+    let is_likely_subscript = sub_confidence > effective_threshold && has_smaller_font;
 
     let font_size_ratio = current_span.font_size / base_font_size;
     let relative_sequential_shift = sequential_diff / current_span.font_size;
@@ -536,48 +574,6 @@ fn is_real_subscript(
     );
 
     is_likely_subscript
-}
-
-/// Main entry point for recursive tag processing
-pub(crate) fn apply_tags_recursive(spans: &[CharSpan], depth: usize) -> String {
-    debug_print!(
-        "🔄 apply_tags_recursive called with {} spans at depth {}",
-        spans.len(),
-        depth
-    );
-
-    if spans.is_empty() {
-        return String::new();
-    }
-
-    // Prevent infinite recursion
-    if depth > 10 {
-        debug_print!("⚠️ Maximum recursion depth reached, returning plain text");
-        return spans
-            .iter()
-            .map(|s| s.text.as_str())
-            .collect::<Vec<&str>>()
-            .join("");
-    }
-
-    // Step 1: Detect all tag ranges for this level
-    let subscript_ranges: Vec<TagRange> = Vec::new();
-    let superscript_ranges: Vec<TagRange> = Vec::new();
-    let bold_ranges: Vec<TagRange> = Vec::new();
-    // Note: formula detection is handled at Element level, not span level
-
-    // Step 2: Combine and sort all ranges by priority (subscript/superscript first, then bold)
-    let mut all_ranges: Vec<TagRange> = Vec::new();
-    all_ranges.extend(subscript_ranges);
-    all_ranges.extend(superscript_ranges);
-    all_ranges.extend(bold_ranges);
-
-    // Sort by start position to process in order
-    all_ranges.sort_by_key(|r| r.start_span_index);
-
-    // Step 3: Apply tags - for now, just delegate to existing function
-    // This maintains current functionality while we build the new architecture
-    apply_text_formatting(spans)
 }
 
 /// Helper function to close a subscript or superscript tag
@@ -918,6 +914,7 @@ fn apply_clustering_formatting(spans: &[CharSpan]) -> String {
 /// Works for both mathematical formulas AND regular text content with proper tag nesting.
 pub(crate) fn apply_text_formatting(spans: &[CharSpan]) -> String {
     let combined_text: String = spans.iter().map(|s| s.text.as_str()).collect();
+
     debug_print!(
         "⚡ STACK-BASED detection called with {} spans: '{}'",
         spans.len(),
@@ -1236,6 +1233,7 @@ pub(crate) fn apply_text_formatting(spans: &[CharSpan]) -> String {
 
             if relative_sequential_shift > PROPORTIONAL_SCRIPT_THRESHOLD {
                 // ENHANCED CONTEXT-AWARE SUBSCRIPT DETECTION
+
                 // Use sequential character comparison for script detection
                 let mut should_be_subscript = is_real_subscript(
                     span,
@@ -1859,6 +1857,7 @@ fn detect_using_sequential_comparison(
 
     cluster_indices.iter().map(|&idx| {
         if idx > 0 {
+
             let prev = &spans[idx - 1];
             let curr = &spans[idx];
             let diff = calculate_baseline_difference(curr, prev.bbox.y1);
