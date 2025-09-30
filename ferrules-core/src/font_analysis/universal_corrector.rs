@@ -2,108 +2,156 @@
 //!
 //! ## Overview
 //!
-//! This module implements a comprehensive, dynamic font corruption correction system
-//! for PDF documents. Unlike traditional pattern-based approaches, it analyzes actual
-//! PDF font structures at runtime to automatically detect and correct character mapping
-//! corruptions without requiring external configuration files or hardcoded patterns.
+//! This module implements a dynamic font corruption correction system for PDF documents
+//! that analyzes actual PDF font structures at runtime to automatically detect and correct
+//! character mapping corruptions without requiring external configuration files.
 //!
-//! ## Core Problem Solved
+//! ## Core Problem Domain
 //!
-//! PDF font corruption manifests primarily in subset fonts where character codes
-//! don't map to their expected Unicode values. The infamous "E=mc²" → "E=((" corruption
-//! exemplifies this: characters 'm' and 'c' are mapped to parentheses codes in the
-//! corrupted font `FYEQFE+NimbusRomNo9L-Regu`, causing extraction failures.
+//! PDF font corruption occurs when character codes in a font don't map to their expected
+//! Unicode values. This manifests primarily in subset fonts where the font subsetting process
+//! breaks the character-to-glyph mappings. Additionally, specialized mathematical fonts like
+//! CMSY (Computer Modern Symbol) use non-standard character positions for glyphs.
 //!
 //! ## Architecture Philosophy
 //!
 //! ### Why Dynamic Analysis Instead of Static Patterns?
 //!
 //! **Decision**: Dynamic font structure analysis over pre-configured correction tables
+//!
 //! **Rationale**:
-//! - Font subset names are randomly generated (e.g., FYEQFE+, ABCDEF+)
-//! - Character mappings vary per document and PDF generator
-//! - Pattern-based systems require constant maintenance for new corruption types
-//! - Dynamic analysis works with ANY corrupted font, including unknown ones
+//! - Font subset names are randomly generated per PDF generator (e.g., FYEQFE+, ABCDEF+)
+//! - Character mappings vary by document, generator, and even export settings
+//! - Pattern-based systems require constant maintenance as new corruption patterns emerge
+//! - Static tables cannot anticipate all possible corruption scenarios
+//! - Dynamic analysis works universally without per-document configuration
+//!
+//! **Not Chosen**: Pattern matching or hardcoded correction tables
+//! - Pattern matching is fragile and document-specific
+//! - Cannot reliably distinguish legitimate characters from corrupted ones
+//! - Requires manual updates for each new corruption pattern discovered
+//! - Destroys character positioning metadata needed by downstream processing
 //!
 //! ### Why Adobe Glyph List as Primary Standard?
 //!
-//! **Decision**: Use Adobe Glyph List Specification as the authoritative mapping source
+//! **Decision**: Use Adobe Glyph List Specification as the authoritative glyph name → Unicode mapping source
+//!
 //! **Rationale**:
-//! - Industry standard used by all major PDF processors
-//! - Comprehensive coverage of mathematical symbols and ligatures
-//! - Stable specification that doesn't change frequently
-//! - Eliminates guesswork about glyph name → Unicode mappings
+//! - Industry standard used by all major PDF processors (Adobe, Ghostscript, etc.)
+//! - Comprehensive coverage of mathematical symbols, ligatures, and special characters
+//! - Stable specification that changes infrequently, reducing maintenance burden
+//! - Eliminates ambiguity in glyph name interpretation
+//! - Provides consistent behavior across different PDF generators
+//!
+//! **Not Chosen**: Custom mapping tables or heuristic-based name parsing
+//! - Custom tables would duplicate existing standards and require ongoing maintenance
+//! - Heuristics can misinterpret glyph names, especially for mathematical symbols
+//! - Would diverge from PDF viewer behavior, causing confusion
 //!
 //! ### Why Zero-Configuration Design?
 //!
-//! **Decision**: Self-contained system with no external dependencies
+//! **Decision**: Self-contained system with no external dependencies or configuration files
+//!
 //! **Rationale**:
-//! - Eliminates maintenance burden of keeping correction tables updated
-//! - Works out-of-the-box in any deployment environment
-//! - No version synchronization issues between code and configuration files
-//! - Reduces attack surface by avoiding external file dependencies
+//! - Eliminates operational complexity of deploying and versioning correction tables
+//! - Works identically in all deployment environments (dev, staging, production)
+//! - No file synchronization issues between code version and config version
+//! - Reduces attack surface by avoiding external file parsing
+//! - Enables compile-time optimization of correction logic
 //!
-//! ## Dual-Module Architecture (2025)
+//! **Not Chosen**: JSON/YAML configuration files or database-backed correction tables
+//! - Configuration files add deployment complexity
+//! - Versioning becomes problematic (which config goes with which code?)
+//! - External files introduce parsing overhead and security concerns
+//! - Database dependency adds infrastructure requirements
 //!
-//! The correction system employs a **layered dual-module approach** that addresses corruption
-//! at multiple levels through complementary correction strategies:
+//! ### Why Font-Level Correction Instead of Text-Level?
+//!
+//! **Decision**: Correct character mappings at PDF font extraction time, not during text processing
+//!
+//! **Rationale**:
+//! - Preserves character positioning metadata (bounding boxes, baselines) required by subscript detection
+//! - Prevents corruption before it enters the processing pipeline
+//! - Enables downstream modules to work with clean data
+//! - Single correction point reduces code complexity
+//! - Generic solution that doesn't require knowledge of document content patterns
+//!
+//! **Not Chosen**: Text-level pattern matching corrections (e.g., regex replacements)
+//! - Pattern matching destroys positioning metadata needed for subscript/superscript detection
+//! - Requires document-specific patterns that vary across PDFs
+//! - Cannot reliably distinguish when a character is corrupted vs legitimately present
+//! - Creates maintenance burden as new patterns emerge
+//! - Couples correction logic to document content structure
+//!
+//! ### Why TeX Mathematical Font Support?
+//!
+//! **Decision**: Special handling for Computer Modern Symbol (CMSY) and related TeX fonts
+//!
+//! **Rationale**:
+//! - CMSY is the standard mathematical symbol font for TeX/LaTeX documents
+//! - TeX fonts use non-standard character positions (e.g., angle brackets at positions 104/105)
+//! - Large corpus of academic PDFs generated from LaTeX use these fonts
+//! - Encoding is consistent across all CMSY variants (CMSY10, CMSY9, CMSY7, etc.)
+//! - Can be detected reliably by font name prefix
+//!
+//! **Not Chosen**: Treat CMSY as corrupted fonts requiring complex glyph analysis
+//! - CMSY encoding is standard and predictable, not corruption
+//! - Simple font name check is more efficient than full glyph analysis
+//! - Applying standard corruption detection would fail (positions are intentionally different)
+//!
+//! ## Dual-Module Architecture
+//!
+//! The correction system employs a layered dual-module approach that addresses corruption
+//! at multiple processing stages:
 //!
 //! ### Module 1: Universal Font Corrector (This Module)
-//! **Purpose**: Font-level corruption prevention through dynamic PDF analysis
-//! **Approach**: Analyzes PDF font structures, ToUnicode CMaps, and glyph mappings
-//! **Coverage**: Handles font subset corruption, mathematical Unicode mapping, glyph name resolution
+//! **Layer**: Character extraction (PDF parsing)
+//! **Purpose**: Prevent corruption at the source by fixing font mappings during extraction
+//! **Coverage**: Font subset corruption, mathematical Unicode mapping, glyph name resolution
+//! **Method**: Analyzes PDF font dictionaries, ToUnicode CMaps, and glyph name tables
 //!
 //! ### Module 2: Text Corrections (`text_corrections.rs`)
-//! **Purpose**: Text-level corruption cleanup through pattern recognition and dictionary validation
-//! **Approach**: Regex patterns, character substitutions, spell checking
-//! **Coverage**: Angle brackets, mathematical symbols, control characters, word-level corrections
+//! **Layer**: Text processing (post-extraction)
+//! **Purpose**: Clean up residual corruption and apply content-aware corrections
+//! **Coverage**: Mathematical symbols, control characters, dictionary-based word validation
+//! **Method**: Pattern matching, character substitutions, spell checking
 //!
-//! ### Unified Processing Pipeline Integration (2025 Refactor)
+//! **Why Two Modules?**
+//! - Font-level corrections can't handle all scenarios (e.g., legitimately-mapped wrong characters)
+//! - Text-level corrections provide defense-in-depth for edge cases
+//! - Separation of concerns: structural fixes vs content fixes
+//! - Font module preserves metadata; text module operates on character content
 //!
-//! **Architectural Improvement**: Font corrections are now integrated into the unified text
-//! processing pipeline that handles both formulas and regular text through a single code path:
+//! ## Processing Pipeline Integration
 //!
-//! ```
+//! Font corrections integrate into the unified text processing pipeline at the earliest stage:
+//!
+//! ```text
 //! PDF Character Extraction
 //!     ↓
-//! Universal Font Corrector (font-level) ← This module
+//! Universal Font Corrector (font-level) ← This module operates here
 //!     ↓
 //! Unified Text Processing Pipeline:
 //!   - Hyphen removal (span-level)
 //!   - Text corrections (span-level patterns)
-//!   - HTML Script Notation Processing → <sub>/<sup>/<b>
-//!   - HTML Content Corrections (formulas only)
+//!   - Script notation detection (<sub>/<sup>/<b> tags)
+//!   - HTML content corrections (formulas only)
 //!     ↓
 //! Final Output
 //! ```
 //!
-//! **Key Improvements from Unification**:
-//! - **Eliminated duplication**: Previously formula and text paths both applied corrections separately
-//! - **Consistent behavior**: Same correction sequence for all content types
-//! - **Simplified debugging**: Single place to trace correction application
-//! - **Easier maintenance**: One correction pipeline instead of multiple paths
+//! **Critical Order Dependency**: Font corrections MUST run before subscript detection
+//! - Subscript detection requires accurate character positioning metadata (bounding boxes, baselines)
+//! - Text-level corrections destroy this metadata by replacing character sequences
+//! - Example: CMSY angle brackets stored at positions 104/105 (h/i positions)
+//!   * If not fixed at extraction: subscript detector sees 'h' and 'i', processes incorrectly
+//!   * If fixed at extraction: subscript detector sees '⟨' and '⟩', preserves positioning
 //!
-//! **Processing Order Rationale**:
-//! - Font corrections prevent corruption at character extraction time
-//! - Unified pipeline ensures consistent correction sequence
-//! - HTML corrections handle patterns spanning across HTML tag boundaries
-//!
-//! ## Success Case Studies
-//!
-//! ### E=mc² Formula Correction
-//! **Problem**: `FYEQFE+NimbusRomNo9L-Regu` font mapped 'm'→'(' and 'c'→'('
-//! **Solution**: Universal corrector analyzed ToUnicode CMap, found glyph names, corrected mappings
-//! **Result**: Perfect rendering as "mass m with the speed of light squared (c²)"
-//!
-//! ### Angle Bracket Mathematical Notation
-//! **Problem**: `⟨ni, nj⟩` displayed as `hni, nji` in mathematical formulas
-//! **Solution**: CMSY font detection - positions 104/105 map to angle brackets in Computer Modern Symbol fonts
-//! **Result**: Font-level correction converts CMSY codes 104→⟨ and 105→⟩ during character extraction
-//!
-//! ### Comprehensive Mathematical Symbol Support
-//! **Coverage**: Subscripts, superscripts, mathematical operators, Greek letters
-//! **Approach**: Combination of font analysis and text pattern recognition
-//! **Validation**: 99.89% accuracy on academic papers with complex mathematical notation
+//! **Why Unified Pipeline?**
+//! - Previously had separate paths for formula vs text processing
+//! - Code duplication led to inconsistent behavior
+//! - Single pipeline ensures identical correction sequence for all content types
+//! - Simplifies debugging and maintenance
 
 use crate::debug_println;
 use lopdf::{Document, Object};
@@ -985,7 +1033,6 @@ impl UniversalFontCorrector {
             corrections.insert(105, 0x27E9); // CMSY position 105 → ⟩ (right angle bracket)
         }
     }
-
 
     /// Extract encoding differences from font dictionary
     fn extract_encoding_differences(

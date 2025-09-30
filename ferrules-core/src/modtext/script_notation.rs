@@ -1,30 +1,65 @@
-//! Advanced Script Notation Detection Module
+//! Script Notation Detection Module
 //!
 //! ## Overview
 //!
-//! This module implements a sophisticated dual-detection system for subscripts, superscripts,
-//! and bold text formatting in mathematical and academic documents. The system achieves
-//! 99.89% accuracy through research-validated composite scoring algorithms and intelligent
-//! baseline clustering for complex mathematical formulas.
+//! This module detects subscripts, superscripts, and bold text formatting in PDF documents
+//! through visual positioning analysis. It operates on character-level positioning metadata
+//! (bounding boxes, baselines, font sizes) to determine formatting without content analysis.
 //!
-//! ## Core Architecture: Dual-Detection System
+//! ## Core Problem Domain
 //!
-//! ### 1. Sequential Detection Mode (Simple Text)
-//! **Purpose**: Character-by-character analysis with baseline comparison
-//! **Best For**: Regular text with simple subscripts/superscripts
-//! **Method**: Compares each character against the previous character's position
-//! **Advantages**: Fast, reliable for straightforward cases
+//! PDFs don't preserve semantic formatting like subscripts/superscripts. Character positioning
+//! must be analyzed to reconstruct this information. Challenges include:
+//! - Variable baseline positioning across fonts and PDF generators
+//! - Complex mathematical formulas with multiple baseline levels
+//! - Mixed subscript/superscript notation (e.g., `C<sub>KV</sub><sup>S</sup>`)
+//! - Inconsistent font size reduction for script characters
 //!
-//! ### 2. Clustering Detection Mode (Complex Mathematical Formulas)
-//! **Purpose**: Multi-baseline analysis for complex mathematical notation
-//! **Best For**: Formulas with mixed subscripts/superscripts across multiple baseline levels
-//! **Method**: Groups characters by Y-position proximity, analyzes cluster-local baselines
-//! **Advantages**: Handles complex cases like `Loss<sub>MSP</sub> = ∑ n<sub>i</sub> ∈ N<sub>mask</sub>`
+//! ## Architecture Philosophy
 //!
-//! ## Composite Scoring Algorithm (ChatGPT-Inspired)
+//! ### Why Dual-Detection System?
 //!
-//! Uses normalized scoring based on both vertical positioning and font size:
+//! **Decision**: Sequential mode for simple text, clustering mode for complex formulas
 //!
+//! **Rationale**:
+//! - Sequential detection (character-by-character comparison) works well for linear text
+//! - Complex formulas have multiple interleaved baseline levels that confuse sequential detection
+//! - Clustering groups characters by Y-position, enabling cluster-local baseline calculation
+//! - Automatic mode selection based on Y-position variance analysis
+//! - Different approaches optimize for different text structures
+//!
+//! **Not Chosen**: Single unified detection algorithm
+//! - Pure sequential fails on complex formulas (e.g., `Loss<sub>MSP</sub> = ∑ n<sub>i</sub>`)
+//! - Pure clustering is overkill for simple text and adds processing overhead
+//! - Hybrid approach provides optimal accuracy/performance balance
+//!
+//! #### Sequential Detection (Simple Text)
+//! **Method**: Compares each character against the previous character's baseline
+//! **Best For**: Regular paragraphs with occasional subscripts/superscripts
+//! **Limitation**: Fails when multiple baseline levels interleave (formula notation)
+//!
+//! #### Clustering Detection (Complex Formulas)
+//! **Method**: Groups characters by Y-position proximity (5pt threshold), analyzes cluster-local baselines
+//! **Best For**: Mathematical formulas with nested subscripts and complex notation
+//! **Limitation**: More complex, higher overhead than sequential
+//!
+//! ### Why Composite Scoring Instead of Threshold-Based?
+//!
+//! **Decision**: Normalized confidence scoring combining vertical offset and font size shrinkage
+//!
+//! **Rationale**:
+//! - Font sizes vary widely across documents (8pt to 14pt typical)
+//! - Absolute thresholds (e.g., "2pt movement = subscript") break at different scales
+//! - Normalization makes detection scale-invariant
+//! - Weighted scoring allows tuning sensitivity (75% position, 25% size)
+//! - Confidence thresholds are more interpretable than absolute measurements
+//!
+//! **Not Chosen**: Simple absolute thresholds or font-size-only detection
+//! - Absolute thresholds fail across different document scales
+//! - Font size alone insufficient (small characters aren't always subscripts)
+//! - Position alone insufficient (PDF rendering quirks cause slight vertical shifts)
+//!
+//! **Algorithm**:
 //! ```rust
 //! // Normalized vertical offset (0-1, positive = below baseline)
 //! let v = baseline_diff / cluster_base_font_size;
@@ -33,96 +68,120 @@
 //! let s = 1.0 - (span.font_size / cluster_base_font_size);
 //!
 //! // Directional confidence scores
-//! let sub_confidence = VERTICAL_WEIGHT * v.max(0.0) + SIZE_WEIGHT * s;
-//! let sup_confidence = VERTICAL_WEIGHT * (-v).max(0.0) + SIZE_WEIGHT * s;
+//! let sub_confidence = VERTICAL_WEIGHT * v.max(0.0) + SIZE_WEIGHT * s;  // 0.75 * v + 0.25 * s
+//! let sup_confidence = VERTICAL_WEIGHT * (-v).max(0.0) + SIZE_WEIGHT * s;  // 0.75 * -v + 0.25 * s
 //! ```
 //!
 //! **Parameters**:
-//! - `VERTICAL_WEIGHT = 0.75` - Weight for baseline positioning
-//! - `SIZE_WEIGHT = 0.25` - Weight for font size reduction
-//! - `VERTICAL_REF = 0.6` - Reference downward movement (60% of font height)
-//! - `SIZE_REF = 0.35` - Reference font shrinkage (35% reduction)
+//! - `VERTICAL_WEIGHT = 0.75` - Position is primary signal
+//! - `SIZE_WEIGHT = 0.25` - Size is secondary signal
+//! - `CONFIDENCE_THRESHOLD = 0.25` - Minimum confidence for detection
+//!
+//! ### Why Visual-First Approach?
+//!
+//! **Decision**: Prioritize character positioning over content analysis
+//!
+//! **Rationale**:
+//! - Content-agnostic approach works across languages and notation styles
+//! - Mathematical notation varies by field (physics vs chemistry vs computer science)
+//! - Visual positioning is universal across PDF generators
+//! - Avoids need for domain-specific pattern databases
+//! - More robust to unusual notation and variable naming conventions
+//!
+//! **Not Chosen**: Content-based pattern matching (e.g., "detect 'i' and 'j' as subscripts")
+//! - Pattern matching couples code to specific notation conventions
+//! - Fails on non-English documents or unconventional variable names
+//! - Requires constant maintenance as new patterns emerge
+//! - Cannot handle novel notation not in pattern database
+//!
+//! ### Why Unified Processing Pipeline?
+//!
+//! **Decision**: Single `apply_text_formatting()` entry point for all content types
+//!
+//! **Rationale**:
+//! - Previously had separate wrapper functions for formula vs text processing
+//! - Code duplication led to divergent behavior and bug fixes in only one path
+//! - Identical detection algorithm should produce identical results for all content
+//! - Single code path simplifies testing and debugging
+//! - Reduces maintenance burden of keeping multiple paths synchronized
+//!
+//! **Not Chosen**: Separate formula and text processing paths
+//! - Duplication causes maintenance burden (fix bug twice)
+//! - Inconsistent behavior confuses users
+//! - Harder to reason about system behavior
 //!
 //! ## Integration with Unified Text Processing Pipeline
 //!
-//! This module is the core component of the unified text processing pipeline that handles
-//! both formula and text processing through a single code path:
+//! This module operates in the middle of the text processing pipeline:
 //!
-//! ```
-//! Input: CharSpan[]
+//! ```text
+//! PDF Character Extraction
 //!     ↓
-//! Unified Text Processing Pipeline:
-//!   - Hyphen removal (span-level)
-//!   - Font/Text corrections (span-level)
-//!   - Script Detection (this module) → <sub>/<sup>/<b> tags
-//!   - HTML Content Corrections (for formulas only)
+//! Universal Font Corrector (fixes CMSY fonts, subset corruption)
 //!     ↓
-//! Final Formatted Output
+//! Unified Text Processing Pipeline (mod.rs):
+//!   1. Hyphen removal (joins spans split across lines)
+//!   2. Font corrections (additional text-level cleanup)
+//!   3. Script Detection ← This module applies <sub>/<sup>/<b> tags
+//!   4. HTML content corrections (formula-specific post-processing)
+//!     ↓
+//! Final HTML Output
 //! ```
 //!
-//! **Key Architectural Improvement**: Previously had separate formula and text processing
-//! paths that both called this module. Now unified through a single `apply_text_formatting()`
-//! entry point, eliminating code duplication and simplifying maintenance.
+//! ### Critical Order Dependencies
 //!
-//! ## Key Features & Accuracy Metrics
+//! **Requirement**: Font corrections MUST complete before script detection runs
 //!
-//! - **99.89% accuracy** on academic papers with complex mathematical notation
-//! - **Visual-first detection** for citations like "indexes,<sup>3</sup>which"
-//! - **Mathematical context awareness** for set notation conversion
-//! - **Matrix notation handling** for patterns like `M<sub>(i,j)</sub>`
-//! - **Mixed sub/superscript support** with post-processing pattern fixes
-//! - **Content-agnostic processing** (works for math formulas AND regular text)
-//! - **Stack-based HTML tag application** with proper LIFO nesting
-//! - **Intelligent clustering** for multi-baseline mathematical formulas
-//!
-//! ## Success Examples
-//!
-//! ### Complex Mathematical Formulas
-//! ```
-//! Loss<sub>MLM</sub> = ∑ x<sub>i</sub> ∈ T<sub>mask</sub> ∪ C<sub>mask</sub> − logp(x<sub>i</sub>)
-//! Loss<sub>MSP</sub> = ∑ n<sub>i</sub> ∈ N<sub>mask</sub> ∑ n<sub>j</sub> ∈ N
-//! ```
-//!
-//! ### Citations and References
-//! ```
-//! OpenAI indexes,<sup>3</sup>which enable efficient retrieval
-//! ```
-//!
-//! ### Mixed Notation (Post-Processing Fix)
-//! ```
-//! C<sub>KV</sub><sup>S</sup> and C<sub>KV</sub><sup>H</sup>
-//! ```
-//!
-//! ## Architecture Decisions
-//!
-//! ### Why Unified Processing Pipeline?
-//! **Decision**: Single `apply_text_formatting()` entry point for both formulas and text
 //! **Rationale**:
-//! - **Eliminated code duplication**: Previously had separate formula/text paths calling same logic
-//! - **Simplified debugging**: Single place to modify subscript detection behavior
-//! - **Consistent results**: Same detection algorithm for all content types
-//! - **Easier maintenance**: One code path instead of multiple wrapper functions
+//! - Script detection requires accurate character positioning metadata (BBox, baselines)
+//! - Text-level corrections can destroy this metadata if they replace character sequences
+//! - Example: CMSY angle brackets stored at positions 104/105 (same as 'h'/'i')
+//!   * Without font correction: Script detector sees 'h' and 'i', processes as regular text
+//!   * With font correction: Script detector sees '⟨' and '⟩', positioning preserved
+//!   * Pattern matching fix would replace "hni" → "⟨ni⟩", destroying individual character BBoxes
 //!
-//! ### Why Dual-Detection System?
-//! **Decision**: Sequential mode for simple text, clustering mode for complex formulas
-//! **Rationale**:
-//! - Sequential detection is faster and more reliable for straightforward cases
-//! - Clustering detection handles complex mathematical notation with multiple baselines
-//! - Automatic mode selection based on text complexity analysis
+//! **Why This Matters**:
+//! - Composite scoring algorithm depends on precise baseline measurements
+//! - BBox destruction makes subscript detection impossible (no position data)
+//! - Font-level fixes preserve all metadata, enabling downstream processing
 //!
-//! ### Why Composite Scoring Over Threshold-Based?
-//! **Decision**: Normalized confidence scoring instead of absolute thresholds
-//! **Rationale**:
-//! - Handles varying font sizes and PDF generation differences
-//! - More reliable than simple threshold checks
-//! - Allows fine-tuning of detection sensitivity
+//! **Historical Context**:
+//! - Previous architecture used text-level pattern matching to fix CMSY angle brackets
+//! - Pattern matching created a single merged span, losing individual character positions
+//! - Subscript detection inside angle brackets failed (no BBox for the 'i' character)
+//! - Solution: Move correction to font extraction time (Universal Corrector)
 //!
-//! ### Why Visual-First Approach?
-//! **Decision**: Prioritize visual positioning over content analysis
+//! ### Why Font Corrections Before Script Detection?
+//!
+//! **Decision**: Font-level character corrections must complete before formatting detection
+//!
 //! **Rationale**:
-//! - Content-agnostic approach works across different document types
-//! - Mathematical notation can be ambiguous without visual context
-//! - More robust against different writing styles and languages
+//! - Character identity determines what gets formatted (e.g., variables vs operators)
+//! - Incorrect characters lead to incorrect formatting decisions
+//! - Font corrections provide clean input to visual analysis
+//! - Separation of concerns: character correctness vs position analysis
+//!
+//! **Not Chosen**: Run script detection on corrupted characters, fix afterward
+//! - Formatting applied to wrong characters creates nonsensical output
+//! - HTML tags complicate subsequent text corrections
+//! - Harder to debug (corruption and formatting interleaved)
+//!
+//! ## Design Constraints and Trade-offs
+//!
+//! ### Performance vs Accuracy
+//! - Sequential mode is faster but less accurate on complex formulas
+//! - Clustering mode is slower but handles complex notation
+//! - Automatic mode selection balances performance and accuracy
+//!
+//! ### Robustness vs Precision
+//! - Higher confidence thresholds reduce false positives but miss edge cases
+//! - Lower thresholds catch more subscripts but introduce false positives
+//! - Current threshold (0.25) empirically validated on academic papers
+//!
+//! ### Generality vs Domain-Specific Optimization
+//! - Visual-first approach works across domains but may miss domain-specific patterns
+//! - Content-based detection would be more accurate for specific notations but less general
+//! - Trade-off favors generality to support diverse document types
 
 use crate::entities::CharSpan;
 use crate::{debug_print, debug_println};
@@ -516,8 +575,14 @@ fn is_real_subscript(
 
         // Debug output for the specific ni, nj cases
         if prev_text == "n" && (text_trimmed == "i" || text_trimmed == "j") {
-            debug_print!("🔍 MATH VAR DEBUG: prev='{}' curr='{}' is_var_case={} diff={:.1} font_ratio={:.2}",
-                        prev_text, text_trimmed, is_var_case, sequential_diff, current_span.font_size / base_font_size);
+            debug_print!(
+                "🔍 MATH VAR DEBUG: prev='{}' curr='{}' is_var_case={} diff={:.1} font_ratio={:.2}",
+                prev_text,
+                text_trimmed,
+                is_var_case,
+                sequential_diff,
+                current_span.font_size / base_font_size
+            );
         }
 
         is_var_case
@@ -926,8 +991,10 @@ pub(crate) fn apply_text_formatting(spans: &[CharSpan]) -> String {
     // Debug specific formula of interest
     let is_target_formula = combined_text.contains("ni, nj") || combined_text.contains("⟨ni");
     if is_target_formula {
-        debug_print!("🎯 TARGET FORMULA: Processing text containing ni, nj: '{}'",
-                    combined_text.chars().take(100).collect::<String>());
+        debug_print!(
+            "🎯 TARGET FORMULA: Processing text containing ni, nj: '{}'",
+            combined_text.chars().take(100).collect::<String>()
+        );
     }
 
     debug_print!(
@@ -988,10 +1055,8 @@ pub(crate) fn apply_text_formatting(spans: &[CharSpan]) -> String {
             debug_print!("🎯 TARGET FORMULA: Using CLUSTERING mode");
         }
         return apply_clustering_formatting(spans);
-    } else {
-        if is_target_formula {
-            debug_print!("🎯 TARGET FORMULA: Using SEQUENTIAL mode");
-        }
+    } else if is_target_formula {
+        debug_print!("🎯 TARGET FORMULA: Using SEQUENTIAL mode");
     }
 
     let full_text: String = {
