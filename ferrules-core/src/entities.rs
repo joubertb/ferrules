@@ -874,9 +874,10 @@ mod tests {
 
     #[test]
     fn test_character_corruption_detection() {
-        // Test mathematical symbol corrections (the main corrections that are still active)
-        assert_eq!(correct_characters("∈/"), "∉"); // Mathematical symbol correction
-        assert_eq!(correct_characters("6="), "≠"); // Mathematical symbol correction
+        // correct_characters now only filters control characters
+        // Math symbol corrections happen in the full pipeline via correct_assembled_text
+        assert_eq!(correct_characters("∈/"), "∈/"); // No change - just control char filtering
+        assert_eq!(correct_characters("6="), "6="); // No change - just control char filtering
 
         // fix_character_encoding_corruption now only does control character filtering
         // Character substitutions have been disabled to prevent false changes

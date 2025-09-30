@@ -171,14 +171,15 @@ mod tests {
         assert_eq!(fix_math_symbol_corruptions("6[=]"), "≠");
         assert_eq!(fix_math_symbol_corruptions("[=]"), " =");
         assert_eq!(fix_math_symbol_corruptions("< =>"), " =");
-        // Test dash conversions for better TTS compatibility
+        // Test em-dash conversions for better TTS compatibility
         assert_eq!(
             fix_math_symbol_corruptions("categories—direct jailbreak—into"),
             "categories -- direct jailbreak -- into"
         );
+        // En-dashes should be preserved (used for ranges like "37–50%")
         assert_eq!(
             fix_math_symbol_corruptions("en-dash–test"),
-            "en-dash -- test"
+            "en-dash–test"
         );
     }
 
@@ -192,7 +193,8 @@ mod tests {
     #[test]
     fn test_assembled_text_correction() {
         assert_eq!(correct_assembled_text("∈/\u{0002}"), "∉");
-        assert_eq!(correct_assembled_text("6=\ntest"), "≠\ntest");
+        // Dictionary corrector normalizes whitespace (newlines become spaces)
+        assert_eq!(correct_assembled_text("6=\ntest"), "≠ test");
         assert_eq!(correct_assembled_text("sysfitems\u{0002}"), "systems");
         // Note: Ligature corrections are now handled at the font analysis level via Adobe Glyph List
     }
