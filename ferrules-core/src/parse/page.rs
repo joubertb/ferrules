@@ -233,7 +233,7 @@ fn debug_page(
     let out_img = draw_layout_bboxes(page_layout, &out_img.into())?;
     // Draw the final prediction -
     // TODO: Implement titles hashmap for titles in the page
-    let blocks = merge_elements_into_blocks(elements.to_vec(), HashMap::new())?;
+    let blocks = merge_elements_into_blocks(elements.to_vec(), HashMap::new(), HashMap::new())?;
     let final_img = draw_blocks(&blocks, page_image)?;
     out_img.save(output_file)?;
 

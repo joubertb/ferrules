@@ -152,6 +152,69 @@
 //! - Code duplication led to inconsistent behavior
 //! - Single pipeline ensures identical correction sequence for all content types
 //! - Simplifies debugging and maintenance
+//!
+//! ## Known Limitations
+//!
+//! ### 1. ML Layout Model Footer Detection Issues
+//!
+//! **Issue**: The ONNX layout detection model inconsistently classifies footnote references at the
+//! bottom of pages as "Page-footer" elements. Some footnotes are correctly identified while others
+//! are misclassified as "Text" or "Footnote" blocks.
+//!
+//! **Example**: In `mathbert.pdf` page 3:
+//! - Block 30: `<sup>1</sup> https://arxiv.org` → Correctly classified as Footer
+//! - Block 59: `2 https://arxiv.org/help/bulk_data_s3` → Misclassified as TextBlock
+//! - Block 68: `https://github.com/harvardnlp/im2markup` → Misclassified as TextBlock
+//! - Block 69: `<sup>4</sup> https://github.com/...` → Misclassified as TextBlock
+//!
+//! **Root Cause**: ML model relies on visual features but doesn't consistently recognize:
+//! - Footnote reference patterns (digit + space, superscript digit)
+//! - Bottom-of-page positioning (within 120pt from page bottom)
+//! - URL content as typical footer material
+//!
+//! **Workaround Implemented**: Post-processing heuristic in `merge.rs` that reclassifies TextBlocks
+//! as Footers based on:
+//! - Position: Within 120 points from page bottom
+//! - Content patterns: Starts with digit/superscript digit, contains URLs
+//! - Applied after all text merging is complete
+//!
+//! **Proper Fix**: Retrain ONNX model with:
+//! - Enhanced training data emphasizing footnote patterns
+//! - Position-aware features (distance from page edges)
+//! - Content-aware features (URL detection, number patterns)
+//!
+//! **Status**: Heuristic workaround functional; ML model retraining needed for proper fix.
+//! See: `ferrules-core/src/parse/merge.rs` (post-merge footer reclassification)
+//!
+//! ### 2. Pdfium Character Extraction Gaps
+//!
+//! **Issue**: Some characters visible in PDF viewers are not extracted by pdfium-render library,
+//! even when proper font encoding and glyph mappings exist in the PDF structure.
+//!
+//! **Example**: In `mathbert.pdf`, footnote marker "3" at page bottom (position 359.941, 724.884)
+//! is visible in PDF viewers but pdfium's `page.text()?.chars().iter()` does not return it.
+//! The font (`FYEQFE+NimbusRomNo9L-Regu`) has correct encoding: char code 51 (0x33) → glyph 'three' → "3".
+//!
+//! **Root Cause**: This is a limitation/bug in the pdfium library itself. The character likely uses
+//! a special rendering technique (Type3 font, custom glyph, or non-standard positioning) that pdfium
+//! cannot decode, despite the glyph information being present in the PDF structure.
+//!
+//! **Investigation Results**:
+//! - ✅ Glyph mapping exists in PDF and is correctly extracted by lopdf
+//! - ✅ Universal Corrector successfully builds character-to-glyph-to-Unicode mappings
+//! - ❌ Pdfium simply does not extract the character during text iteration
+//! - ❌ No character object is created, so no correction can be applied
+//!
+//! **Potential Solutions** (not currently implemented):
+//! 1. **OCR fallback**: Use Apple Vision/Tesseract on regions with suspected missing characters
+//! 2. **Alternative PDF library**: Switch to PyMuPDF (fitz) for problematic documents
+//! 3. **Hybrid approach**: Use lopdf's raw content stream parsing to find missed characters
+//!
+//! **Decision**: Documented as known limitation. The issue affects a small percentage of characters
+//! in specific PDFs and would require significant architectural changes to work around.
+//!
+//! **TODO**: Consider reporting this upstream to pdfium-render or switching to a different PDF
+//! extraction library if this becomes a widespread issue.
 
 use crate::debug_println;
 use lopdf::{Document, Object};
@@ -1629,7 +1692,7 @@ impl Default for UniversalFontCorrector {
 // These fonts are prime candidates for corruption because PDF generators create arbitrary character
 // code mappings that don't correspond to standard Unicode values.
 //
-// #### Phase 2: Encoding Differences Extraction (Primary 2025 Approach)
+// #### Phase 2: Encoding Differences Extraction
 //
 // **PDF Encoding Structure Analysis:**
 // The system now extracts character mappings directly from PDF font encoding structures:
@@ -1734,14 +1797,6 @@ impl Default for UniversalFontCorrector {
 //
 // ### Performance Characteristics and Optimization Decisions
 //
-// #### Decision: PHF Maps Over Runtime HashMaps for Mathematical Symbols
-//
-// **Decision**: Precompute mathematical symbol mappings at compile time using PHF
-// **Performance Benefit**: O(1) lookups with zero hash computation overhead
-// **Memory Benefit**: No runtime memory allocation for 52 mathematical symbol mappings
-// **Trade-off**: Slightly larger binary size vs significantly faster runtime performance
-// **Measurement**: 15-20% performance improvement on mathematical document processing
-//
 // #### Decision: Per-Font Caching Strategy
 //
 // **Decision**: Cache font analysis results by font name, persist across documents
@@ -1822,7 +1877,7 @@ impl Default for UniversalFontCorrector {
 // **Default Enabled**: Feature enabled by default for comprehensive text correction
 // **Minimal Builds**: Can be disabled for resource-constrained environments
 //
-// ### Adobe Glyph List Integration (2025 Major Enhancement)
+// ### Adobe Glyph List Integration
 //
 // #### Implementation Overview
 // The 2025 enhancement implements direct integration with Adobe Glyph List standard via PDF
@@ -1911,7 +1966,7 @@ impl Default for UniversalFontCorrector {
 // - No regression in mathematical notation: 75 subscripts, 22 superscripts detected
 // - Full backward compatibility maintained with existing test suite
 //
-// ### Success Case Study: E=mc² Correction (Updated 2025)
+// ### Success Case Study: E=mc² Correction
 //
 // #### Problem Analysis
 // **Document**: mathbert.pdf with mathematical formula corruption
@@ -1960,7 +2015,7 @@ impl Default for UniversalFontCorrector {
 // corruption issues that scales to handle any document without manual intervention, while
 // providing superior accuracy through standards-based glyph name resolution.
 //
-// ### 2025 Code Quality and Architecture Improvements
+// ### Code Quality and Architecture Improvements
 //
 // #### Design Decision: Shared Mathematical Font Detection Function
 // **Problem**: Duplicate mathematical font detection logic existed in two places (lines 294 and 968)
@@ -2020,7 +2075,7 @@ impl Default for UniversalFontCorrector {
 // balancing accuracy, performance, maintainability, and robustness through careful
 // architectural decisions informed by real-world PDF corruption challenges.
 //
-// ### 2025 Complete Ligature Handling System Design
+// ### Complete Ligature Handling System Design
 //
 // #### Problem Analysis: Multi-Stage Ligature Corruption
 // **Documents Affected**: jailbreak.pdf, and other documents with typographic ligatures
@@ -2238,7 +2293,7 @@ impl Default for UniversalFontCorrector {
 // that no single approach could address comprehensively.
 
 //
-// ## 2025 Unified Pipeline Integration
+// ## Unified Pipeline Integration
 //
 // ### Architectural Simplification Achievement
 //

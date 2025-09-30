@@ -12,6 +12,9 @@ use regex::Regex;
 lazy_static! {
     /// Pre-compiled regex for figure caption pattern detection
     static ref FIGURE_CAPTION_REGEX: Regex = Regex::new(r"^(?i)(Figure|Fig\.|Image)\s+[A-Za-z0-9]+[A-Za-z]?\s*[:.]").unwrap();
+
+    /// Pre-compiled regex for footer/footnote pattern detection
+    static ref FOOTER_PATTERN_REGEX: Regex = Regex::new(r"^(\d+\s|<sup>\d+</sup>\s?)|(https?://)").unwrap();
 }
 
 /// Apply word-level font corrections to text
@@ -364,16 +367,19 @@ fn post_process_figure_blocks(blocks: &mut Vec<Block>) {
 pub(crate) fn merge_elements_into_blocks(
     elements: Vec<Element>,
     title_level: HashMap<(PageID, ElementID), TitleLevel>,
+    page_heights: HashMap<PageID, f32>,
 ) -> anyhow::Result<Vec<Block>> {
     // FIXME: This function contains WORKAROUNDS for ONNX model limitations
-    // The layout detection model has two major issues:
+    // The layout detection model has three major issues:
     // 1. It incorrectly classifies figure captions as "Text" instead of "Caption"
     // 2. It fails to detect complete figure boundaries when figures contain embedded text
+    // 3. It misclassifies footnote references at page bottom as "Text" instead of "Page-footer"
     //
     // Proper fix: Retrain the ONNX model to:
     // - Correctly classify "Figure N:" patterns as Caption type
     // - Detect complete figure boundaries including ALL embedded text
     // - Properly associate captions with their corresponding images
+    // - Recognize footnote patterns and bottom positioning as Page-footer elements
     //
     // This heuristic-based workaround should be removed once the model is fixed
     // Track at: https://github.com/[repo]/issues/[TODO: create issue]
@@ -1563,6 +1569,34 @@ pub(crate) fn merge_elements_into_blocks(
     crate::font_analysis::correct_blocks(&mut blocks);
     debug_print!("🔧 MERGE OUTPUT: After corrections applied");
 
+    // WORKAROUND: Reclassify TextBlocks as Footers based on position and content
+    // This must be done AFTER all text merging is complete
+    for block in blocks.iter_mut() {
+        if let BlockType::TextBlock(text_block) = &block.kind {
+            // Get page height for this block
+            if let Some(page_id) = block.pages_id.first() {
+                if let Some(&page_height) = page_heights.get(page_id) {
+                    let distance_from_bottom = page_height - block.bbox.y1;
+
+                    if distance_from_bottom <= 120.0 {
+                        let text = &text_block.text;
+                        if FOOTER_PATTERN_REGEX.is_match(text.trim()) {
+                            debug_print!(
+                                "🔧 Post-merge: Reclassifying block {} as Footer: '{}'",
+                                block.id,
+                                text.chars().take(60).collect::<String>()
+                            );
+                            block.kind = BlockType::Footer(TextBlock {
+                                text: text_block.text.clone(),
+                                fertext: text_block.fertext.clone(),
+                            });
+                        }
+                    }
+                }
+            }
+        }
+    }
+
     Ok(blocks)
 }
 
@@ -1660,7 +1694,7 @@ mod tests {
             create_text_element(1, 1, "Second paragraph", bbox2),
         ];
 
-        let blocks = merge_elements_into_blocks(elements, HashMap::new())?;
+        let blocks = merge_elements_into_blocks(elements, HashMap::new(), HashMap::new())?;
 
         assert_eq!(blocks.len(), 1);
         if let BlockType::TextBlock(text) = &blocks[0].kind {
@@ -1693,7 +1727,7 @@ mod tests {
             create_text_element(2, 1, "Random text", bbox2),
         ];
 
-        let blocks = merge_elements_into_blocks(elements, HashMap::new())?;
+        let blocks = merge_elements_into_blocks(elements, HashMap::new(), HashMap::new())?;
 
         assert_eq!(blocks.len(), 2);
         if let BlockType::ListBlock(list) = &blocks[0].kind {
@@ -1726,7 +1760,7 @@ mod tests {
             create_image_element(1, 1, image_bbox),
         ];
 
-        let blocks = merge_elements_into_blocks(elements, HashMap::new())?;
+        let blocks = merge_elements_into_blocks(elements, HashMap::new(), HashMap::new())?;
 
         assert_eq!(blocks.len(), 1);
         if let BlockType::Image(image) = &blocks[0].kind {
@@ -1748,7 +1782,7 @@ mod tests {
 
         let elements = vec![create_caption_element(0, 1, "Orphan caption", caption_bbox)];
 
-        let blocks = merge_elements_into_blocks(elements, HashMap::new())?;
+        let blocks = merge_elements_into_blocks(elements, HashMap::new(), HashMap::new())?;
 
         assert_eq!(blocks.len(), 1);
         if let BlockType::TextBlock(text) = &blocks[0].kind {
@@ -1779,7 +1813,7 @@ mod tests {
             create_text_element(1, 1, "Distant paragraph", bbox2),
         ];
 
-        let blocks = merge_elements_into_blocks(elements, HashMap::new())?;
+        let blocks = merge_elements_into_blocks(elements, HashMap::new(), HashMap::new())?;
 
         assert_eq!(blocks.len(), 2);
         Ok(())
@@ -1796,7 +1830,7 @@ mod tests {
 
         let elements = vec![create_image_element(0, 1, image_bbox)];
 
-        let blocks = merge_elements_into_blocks(elements, HashMap::new())?;
+        let blocks = merge_elements_into_blocks(elements, HashMap::new(), HashMap::new())?;
 
         assert_eq!(blocks.len(), 1);
         if let BlockType::Image(image) = &blocks[0].kind {
@@ -1827,7 +1861,7 @@ mod tests {
             create_caption_element(1, 1, "Image Description", caption_bbox),
         ];
 
-        let blocks = merge_elements_into_blocks(elements, HashMap::new())?;
+        let blocks = merge_elements_into_blocks(elements, HashMap::new(), HashMap::new())?;
 
         assert_eq!(blocks.len(), 1);
         if let BlockType::Image(image) = &blocks[0].kind {
@@ -1858,7 +1892,7 @@ mod tests {
             create_text_element(1, 1, "Regular text", text_bbox),
         ];
 
-        let blocks = merge_elements_into_blocks(elements, HashMap::new())?;
+        let blocks = merge_elements_into_blocks(elements, HashMap::new(), HashMap::new())?;
 
         assert_eq!(blocks.len(), 2);
         if let BlockType::Image(image) = &blocks[0].kind {
@@ -1895,7 +1929,7 @@ mod tests {
             create_footnote_element(1, 1, "Image Footnote", footnote_bbox),
         ];
 
-        let blocks = merge_elements_into_blocks(elements, HashMap::new())?;
+        let blocks = merge_elements_into_blocks(elements, HashMap::new(), HashMap::new())?;
 
         assert_eq!(blocks.len(), 1);
         if let BlockType::Image(image) = &blocks[0].kind {

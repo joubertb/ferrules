@@ -1,4 +1,4 @@
-use std::{path::PathBuf, sync::Arc, time::Instant};
+use std::{collections::HashMap, path::PathBuf, sync::Arc, time::Instant};
 
 use std::ops::Range;
 
@@ -207,7 +207,8 @@ impl FerrulesParser {
     ///         &doc_bytes,
     ///         "document.pdf".to_string(),
     ///         config,
-    ///         Some(|page_id| println!("Parsed page {}", page_id))
+    ///         Some(|page_id| println!("Parsed page {}", page_id)),
+    ///         None,
     ///     ).await.unwrap();
     /// }
     #[allow(clippy::too_many_arguments)]
@@ -264,6 +265,9 @@ impl FerrulesParser {
 
         let title_level = title_levels_kmeans(&titles, 6);
 
+        let page_heights: HashMap<usize, f32> =
+            parsed_pages.iter().map(|sp| (sp.id, sp.height)).collect();
+
         let doc_pages = parsed_pages
             .into_iter()
             .map(|sp| Page {
@@ -275,7 +279,7 @@ impl FerrulesParser {
             })
             .collect();
 
-        let blocks = merge_elements_into_blocks(all_elements, title_level)?;
+        let blocks = merge_elements_into_blocks(all_elements, title_level, page_heights)?;
 
         let duration = start_time.elapsed();
 
