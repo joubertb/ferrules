@@ -861,8 +861,11 @@ impl UniversalFontCorrector {
         // ===================================================================
         // Only include mappings that are NOT identity mappings to avoid over-correction
 
+        // Preserve mathematical prime for TTS disambiguation
+        // U+2032 (′) is kept distinct from U+0027 (') so TTS can pronounce "prime"
+        synthetic_mappings.insert(0x2032, 0x2032); // Mathematical prime preserved
+
         // Cross-character mappings for corrupted mathematical symbols
-        synthetic_mappings.insert(0x2032, 0x0027); // Mathematical prime → apostrophe
         synthetic_mappings.insert(0x00B4, 0x0027); // Acute accent → apostrophe
         synthetic_mappings.insert(0x0060, 0x0027); // Grave accent → apostrophe
 

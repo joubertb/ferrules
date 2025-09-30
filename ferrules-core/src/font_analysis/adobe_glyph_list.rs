@@ -138,6 +138,11 @@ pub static ADOBE_GLYPH_LIST: Map<&'static str, &'static str> = phf::phf_map! {
     "twosuperior" => "²", // U+00B2
     "threesuperior" => "³", // U+00B3
 
+    // Prime notation for mathematical variables
+    "prime" => "′", // U+2032 - Mathematical prime (distinct from apostrophe)
+    "minute" => "′", // U+2032 - Also maps to prime
+    "second" => "″", // U+2033 - Double prime
+
     // Greek letters commonly used in mathematics
     "alpha" => "α",
     "beta" => "β",

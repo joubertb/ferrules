@@ -869,10 +869,16 @@ fn apply_clustering_formatting(spans: &[CharSpan]) -> String {
             in_subscript = true;
             debug_print!("⬇️ CLUSTER SUB START: '{}'", text_trimmed);
         } else if is_sup && !in_superscript && !in_subscript {
-            result.push_str("<sup>");
-            tag_stack.push("</sup>");
-            in_superscript = true;
-            debug_print!("⬆️ CLUSTER SUP START: '{}'", text_trimmed);
+            // Skip <sup> tag for prime characters (apostrophes in superscript position)
+            let is_prime = text_trimmed == "'";
+            if !is_prime {
+                result.push_str("<sup>");
+                tag_stack.push("</sup>");
+                in_superscript = true;
+                debug_print!("⬆️ CLUSTER SUP START: '{}'", text_trimmed);
+            } else {
+                debug_print!("⬆️ CLUSTER PRIME: Skipping <sup> for prime character");
+            }
         } else if !is_sub && !is_sup {
             // Return to normal text
             if in_subscript {
@@ -909,7 +915,16 @@ fn apply_clustering_formatting(spans: &[CharSpan]) -> String {
         }
 
         // Add the cleaned text
-        let cleaned_text = span.text.replace('\u{001a}', "");
+        let mut cleaned_text = span.text.replace('\u{001a}', "");
+
+        // Convert apostrophes to mathematical prime (for proper TTS)
+        // This happens when we detected superscript but skipped the <sup> tag
+        if is_sup && cleaned_text.trim() == "'" {
+            cleaned_text = "′".to_string(); // U+2032 mathematical prime
+            debug_print!(
+                "🔄 PRIME CONVERSION (CLUSTER): Apostrophe → mathematical prime (no sup tag)"
+            );
+        }
 
         // CRITICAL DEBUG: Log exactly what text is being added in clustering mode
         if cleaned_text.contains("M(")
@@ -1378,10 +1393,15 @@ pub(crate) fn apply_text_formatting(spans: &[CharSpan]) -> String {
                     && should_be_superscript
                     && font_ratio < OPTICAL_ALIGNMENT_FONT_THRESHOLD;
 
+                // Check if this is a prime character (apostrophe that will become prime)
+                // Prime characters don't need <sup> tags as they're already visually raised
+                let is_prime_char = span.text.trim() == "'";
+
                 if should_be_superscript
                     && sequential_diff < 0.0
                     && !in_superscript
                     && !in_subscript
+                    && !is_prime_char
                 {
                     // Superscript has priority for upward movement (negative sequential_diff)
                     result.push_str("<sup>");
@@ -1417,8 +1437,9 @@ pub(crate) fn apply_text_formatting(spans: &[CharSpan]) -> String {
                     && !in_superscript
                     && !in_subscript
                     && !is_optical_alignment_case
+                    && !is_prime_char
                 {
-                    // Superscript only if not an optical alignment case
+                    // Superscript only if not an optical alignment case and not a prime
                     result.push_str("<sup>");
                     tag_stack.push("</sup>");
                     in_superscript = true;
@@ -1529,7 +1550,25 @@ pub(crate) fn apply_text_formatting(spans: &[CharSpan]) -> String {
         }
 
         // Add the actual text, cleaning up any substitute characters
-        let cleaned_text = span.text.replace('\u{001a}', ""); // Remove SUB (substitute) character
+        let mut cleaned_text = span.text.replace('\u{001a}', ""); // Remove SUB (substitute) character
+
+        // Convert apostrophes to mathematical prime (for proper TTS)
+        // This happens when we detected superscript but skipped the <sup> tag for prime chars
+        if cleaned_text.trim() == "'" {
+            let is_superscript_apostrophe = is_real_superscript(
+                span,
+                sequential_diff,
+                base_font_size,
+                i == 0,
+                COMPOSITE_SUBSCRIPT_CONFIDENCE_THRESHOLD,
+            );
+            if is_superscript_apostrophe {
+                cleaned_text = "′".to_string(); // U+2032 mathematical prime
+                debug_print!(
+                    "🔄 PRIME CONVERSION: Apostrophe → mathematical prime (no sup tag needed)"
+                );
+            }
+        }
 
         // CRITICAL DEBUG: Log exactly what text is being added at this moment
         if cleaned_text.contains("M(")
