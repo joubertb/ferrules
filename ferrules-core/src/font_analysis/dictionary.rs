@@ -810,6 +810,12 @@ mod tests {
 
     #[test]
     fn test_word_validation() {
+        // Initialize the dictionary by creating an instance
+        // This loads the thread-local SPELL_CHECKER and CUSTOM_SPELL_CHECKER
+        let config = SmartCorrectionConfig::default();
+        let _corrector = SmartCorrector::new(config).unwrap();
+
+        // Now the static method can access the loaded dictionaries
         // Test common words
         assert!(SmartCorrector::is_valid_word("systems"));
         assert!(SmartCorrector::is_valid_word("information"));

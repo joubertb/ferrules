@@ -557,7 +557,7 @@ pub(crate) fn merge_elements_into_blocks(
 
                 let corrected_text = processed_text;
 
-                let text_block = Block {
+                let mut text_block = Block {
                     id: block_id,
                     kind: crate::blocks::BlockType::TextBlock(TextBlock {
                         text: corrected_text.clone(),
@@ -570,19 +570,27 @@ pub(crate) fn merge_elements_into_blocks(
                     pages_id: vec![curr_el.page_id],
                     bbox: curr_el.bbox,
                 };
-                // TODO : Change this to use some minimum gap
                 // Check to see if we have another text block that is close
-                // while let Some(next_el) = element_it.peek() {
-                //     if matches!(next_el.kind, crate::entities::ElementType::Text(_))
-                //         && (curr_el.bbox.distance(&next_el.bbox, 1.0, 1.0)
-                //             < MAXIMUM_ASSIGNMENT_DISTANCE)
-                //     {
-                //         text_block.merge(next_el)?;
-                //         element_it.next();
-                //     } else {
-                //         break;
-                //     }
-                // }
+                loop {
+                    let should_merge = if let Some(next_el) = element_it.peek() {
+                        matches!(next_el.kind, crate::entities::ElementType::Text)
+                            && (text_block.bbox.distance(&next_el.bbox, 1.0, 1.0)
+                                < MAXIMUM_ASSIGNMENT_DISTANCE)
+                    } else {
+                        false
+                    };
+
+                    if should_merge {
+                        let next_el = element_it.next().unwrap();
+                        if let BlockType::TextBlock(text_content) = &mut text_block.kind {
+                            text_content.text.push('\n');
+                            text_content.text.push_str(&next_el.text_block.text);
+                        }
+                        text_block.bbox.merge(&next_el.bbox);
+                    } else {
+                        break;
+                    }
+                }
                 block_id += 1;
                 blocks.push(text_block);
             }

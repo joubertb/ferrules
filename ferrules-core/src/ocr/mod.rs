@@ -124,6 +124,12 @@ mod ocr_mac {
 
         #[test]
         fn test_ocr_apple_vision() {
+            // Skip test if test data file doesn't exist
+            if !std::path::Path::new("./test_data/double_cols.jpg").exists() {
+                println!("Skipping test: test_data/double_cols.jpg not found");
+                return;
+            }
+
             let image = ImageReader::open("./test_data/double_cols.jpg")
                 .unwrap()
                 .decode()

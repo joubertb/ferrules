@@ -148,7 +148,6 @@ fn apply_text_corrections_to_spans(spans: &mut [crate::entities::CharSpan]) {
     debug_print!("🔧 SPAN CORRECTIONS: Completed span text corrections");
 }
 
-
 #[cfg(feature = "modtext")]
 pub mod mathematical;
 

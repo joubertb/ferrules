@@ -134,7 +134,6 @@ pub fn correct_spans_with_dictionary(spans: &mut [crate::entities::CharSpan]) {
     }
 }
 
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -162,7 +161,6 @@ mod tests {
         assert_eq!(fix_character_positioning_corruptions("unknown"), "unknown");
     }
 
-
     #[test]
     fn test_math_symbol_corrections() {
         assert_eq!(fix_math_symbol_corruptions("∈ /"), "∉");
@@ -177,10 +175,7 @@ mod tests {
             "categories -- direct jailbreak -- into"
         );
         // En-dashes should be preserved (used for ranges like "37–50%")
-        assert_eq!(
-            fix_math_symbol_corruptions("en-dash–test"),
-            "en-dash–test"
-        );
+        assert_eq!(fix_math_symbol_corruptions("en-dash–test"), "en-dash–test");
     }
 
     #[test]
@@ -198,6 +193,4 @@ mod tests {
         assert_eq!(correct_assembled_text("sysfitems\u{0002}"), "systems");
         // Note: Ligature corrections are now handled at the font analysis level via Adobe Glyph List
     }
-
-
 }
