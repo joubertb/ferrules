@@ -65,11 +65,6 @@ pub fn fix_math_symbol_corruptions(text: &str) -> String {
     result = result.replace("  -- ", " -- ");
     result = result.replace(" --  ", " -- ");
 
-    // Fix angle bracket corruption: h...i → ⟨...⟩
-    // This pattern occurs when mathematical angle brackets are corrupted in PDFs
-    // Common patterns: "hni, nji" → "⟨ni, nj⟩", "hnj, nii" → "⟨nj, ni⟩"
-    result = fix_angle_bracket_corruptions(&result);
-
     result
 }
 
@@ -139,30 +134,6 @@ pub fn correct_spans_with_dictionary(spans: &mut [crate::entities::CharSpan]) {
     }
 }
 
-/// Fix angle bracket corruption patterns in mathematical text
-///
-/// This handles a specific corruption where mathematical angle brackets ⟨⟩ are
-/// rendered as 'h' and 'i' characters in mathematical formulas.
-/// Common patterns: "hni, nji" → "⟨ni, nj⟩", "hnj, nii" → "⟨nj, ni⟩"
-/// Since this now runs before HTML processing, it only needs to handle plain text.
-fn fix_angle_bracket_corruptions(text: &str) -> String {
-    use lazy_static::lazy_static;
-    use regex::Regex;
-
-    lazy_static! {
-        /// Pre-compiled regex for angle bracket pair patterns
-        static ref ANGLE_BRACKET_PAIR_REGEX: Regex =
-            Regex::new(r"\bh([a-z]+[ij]*)\s*,\s*([a-z]*[ij])\s*i\b").expect("Invalid regex pattern");
-        /// Pre-compiled regex for single angle bracket patterns
-        static ref ANGLE_BRACKET_SINGLE_REGEX: Regex =
-            Regex::new(r"\bh([a-z]+[ij])\s*i\b").expect("Invalid regex pattern");
-    }
-
-    let result = ANGLE_BRACKET_PAIR_REGEX.replace_all(text, "⟨$1, $2⟩");
-    let result = ANGLE_BRACKET_SINGLE_REGEX.replace_all(&result, "⟨$1⟩");
-
-    result.to_string()
-}
 
 #[cfg(test)]
 mod tests {
@@ -191,35 +162,6 @@ mod tests {
         assert_eq!(fix_character_positioning_corruptions("unknown"), "unknown");
     }
 
-    #[test]
-    fn test_word_character_insertion_fixing() {
-        // Test specific character insertion patterns
-        assert_eq!(fix_word_character_insertion("sysfitems"), "systems");
-
-        // Test valid words are not changed
-        assert_eq!(fix_word_character_insertion("systems"), "systems");
-        assert_eq!(fix_word_character_insertion("information"), "information");
-
-        // Test short words are not processed
-        assert_eq!(fix_word_character_insertion("fi"), "fi");
-        assert_eq!(fix_word_character_insertion("a"), "a");
-    }
-
-    #[test]
-    fn test_word_validation() {
-        // Test common words
-        assert!(is_likely_valid_word("systems"));
-        assert!(is_likely_valid_word("information"));
-        assert!(is_likely_valid_word("the"));
-
-        // Test invalid words
-        assert!(!is_likely_valid_word("sysfitems"));
-        assert!(!is_likely_valid_word("xyz123"));
-
-        // Test edge cases
-        assert!(!is_likely_valid_word("a")); // Too short
-        assert!(!is_likely_valid_word("")); // Empty
-    }
 
     #[test]
     fn test_math_symbol_corrections() {
@@ -255,23 +197,5 @@ mod tests {
         // Note: Ligature corrections are now handled at the font analysis level via Adobe Glyph List
     }
 
-    #[test]
-    fn test_angle_bracket_corrections() {
-        // Test the specific corruption pattern from mathbert.pdf
-        assert_eq!(
-            fix_angle_bracket_corruptions("hni , nj i ∉ E and hnj , ni i ∉ E"),
-            "⟨ni, nj⟩ ∉ E and ⟨nj, ni⟩ ∉ E"
-        );
 
-        // Test single variable patterns
-        assert_eq!(fix_angle_bracket_corruptions("hni i"), "⟨ni⟩");
-        assert_eq!(fix_angle_bracket_corruptions("hnj i"), "⟨nj⟩");
-
-        // Test that normal text is not affected
-        assert_eq!(fix_angle_bracket_corruptions("hello world"), "hello world");
-        assert_eq!(
-            fix_angle_bracket_corruptions("this is normal"),
-            "this is normal"
-        );
-    }
 }

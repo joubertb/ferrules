@@ -148,39 +148,6 @@ fn apply_text_corrections_to_spans(spans: &mut [crate::entities::CharSpan]) {
     debug_print!("🔧 SPAN CORRECTIONS: Completed span text corrections");
 }
 
-/// Apply text corrections to HTML content while preserving HTML structure
-///
-/// This function applies text corrections (like angle bracket fixes) to the text content
-/// within HTML tags without corrupting the HTML markup itself.
-fn apply_text_corrections_to_html(html: &str) -> String {
-    use lazy_static::lazy_static;
-    use regex::Regex;
-
-    lazy_static! {
-        /// Pre-compiled regex for HTML angle bracket pair patterns spanning tags
-        static ref HTML_ANGLE_BRACKET_PAIR_REGEX: Regex =
-            Regex::new(r"\bh([a-z]+)<sub>([ij])</sub>\s*,\s*([a-z]*)<sub>([ij])</sub>\s*i\b")
-                .expect("Invalid regex pattern");
-        /// Pre-compiled regex for HTML single angle bracket patterns spanning tags
-        static ref HTML_ANGLE_BRACKET_SINGLE_REGEX: Regex =
-            Regex::new(r"\bh([a-z]+)<sub>([ij])</sub>\s*i\b").expect("Invalid regex pattern");
-        /// Pre-compiled regex for text content between HTML tags
-        static ref HTML_TEXT_CONTENT_REGEX: Regex =
-            Regex::new(r">([^<]+)<").expect("Invalid regex pattern");
-    }
-
-    let result = HTML_ANGLE_BRACKET_PAIR_REGEX.replace_all(html, "⟨$1$2, $3$4⟩");
-    let result = HTML_ANGLE_BRACKET_SINGLE_REGEX.replace_all(&result, "⟨$1$2⟩");
-
-    let result = HTML_TEXT_CONTENT_REGEX.replace_all(&result, |caps: &regex::Captures| {
-        let text_content = &caps[1];
-        let corrected_content =
-            crate::font_analysis::text_corrections::fix_math_symbol_corruptions(text_content);
-        format!(">{}<", corrected_content)
-    });
-
-    result.to_string()
-}
 
 #[cfg(feature = "modtext")]
 pub mod mathematical;
@@ -203,8 +170,7 @@ pub mod script_notation;
 pub fn process_mathematical_notation(spans: &[crate::entities::CharSpan]) -> String {
     #[cfg(feature = "modtext")]
     {
-        let html_result = script_notation::apply_text_formatting(spans);
-        apply_text_corrections_to_html(&html_result)
+        script_notation::apply_text_formatting(spans)
     }
 
     #[cfg(not(feature = "modtext"))]
@@ -246,15 +212,7 @@ pub fn unified_text_processing(spans: &[crate::entities::CharSpan], is_formula: 
     apply_text_corrections_to_spans(&mut processed_spans);
 
     // Apply subscript/superscript detection and HTML tag creation
-    let html_result = script_notation::apply_text_formatting(&processed_spans);
-
-    if is_formula {
-        // For formulas: Apply additional HTML content corrections
-        apply_text_corrections_to_html(&html_result)
-    } else {
-        // For text: Return HTML result directly
-        html_result
-    }
+    script_notation::apply_text_formatting(&processed_spans)
 }
 
 /// Legacy wrapper for add_tags - now uses unified processing

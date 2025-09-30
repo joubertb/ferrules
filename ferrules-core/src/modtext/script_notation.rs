@@ -499,7 +499,7 @@ fn is_real_subscript(
     let text_trimmed = current_span.text.trim();
     let is_mathematical_variable_case = if _current_index > 0 {
         let prev_text = _spans[_current_index - 1].text.trim();
-        prev_text.len() == 1
+        let is_var_case = prev_text.len() == 1
             && prev_text.chars().next().unwrap().is_alphabetic()
             && (text_trimmed == "i" || text_trimmed == "j")
             && _spans.iter().any(|span| {
@@ -512,7 +512,15 @@ fn is_real_subscript(
                     || text.contains('⟩')
                     || text.contains('∪')
                     || text.contains('∩')
-            })
+            });
+
+        // Debug output for the specific ni, nj cases
+        if prev_text == "n" && (text_trimmed == "i" || text_trimmed == "j") {
+            debug_print!("🔍 MATH VAR DEBUG: prev='{}' curr='{}' is_var_case={} diff={:.1} font_ratio={:.2}",
+                        prev_text, text_trimmed, is_var_case, sequential_diff, current_span.font_size / base_font_size);
+        }
+
+        is_var_case
     } else {
         false
     };
@@ -915,6 +923,13 @@ fn apply_clustering_formatting(spans: &[CharSpan]) -> String {
 pub(crate) fn apply_text_formatting(spans: &[CharSpan]) -> String {
     let combined_text: String = spans.iter().map(|s| s.text.as_str()).collect();
 
+    // Debug specific formula of interest
+    let is_target_formula = combined_text.contains("ni, nj") || combined_text.contains("⟨ni");
+    if is_target_formula {
+        debug_print!("🎯 TARGET FORMULA: Processing text containing ni, nj: '{}'",
+                    combined_text.chars().take(100).collect::<String>());
+    }
+
     debug_print!(
         "⚡ STACK-BASED detection called with {} spans: '{}'",
         spans.len(),
@@ -969,7 +984,14 @@ pub(crate) fn apply_text_formatting(spans: &[CharSpan]) -> String {
     // Debug output for the specific problematic text
 
     if requires_baseline_clustering(spans) {
+        if is_target_formula {
+            debug_print!("🎯 TARGET FORMULA: Using CLUSTERING mode");
+        }
         return apply_clustering_formatting(spans);
+    } else {
+        if is_target_formula {
+            debug_print!("🎯 TARGET FORMULA: Using SEQUENTIAL mode");
+        }
     }
 
     let full_text: String = {

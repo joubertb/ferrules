@@ -96,9 +96,9 @@
 //! **Result**: Perfect rendering as "mass m with the speed of light squared (c²)"
 //!
 //! ### Angle Bracket Mathematical Notation
-//! **Problem**: `⟨ni, nj⟩` corrupted to `hni, nji` in mathematical formulas
-//! **Solution**: Text-level regex pattern matching in `fix_angle_bracket_corruptions()`
-//! **Result**: Both HTML and plain text outputs correctly display `⟨ni, nj⟩` and `⟨nj, ni⟩`
+//! **Problem**: `⟨ni, nj⟩` displayed as `hni, nji` in mathematical formulas
+//! **Solution**: CMSY font detection - positions 104/105 map to angle brackets in Computer Modern Symbol fonts
+//! **Result**: Font-level correction converts CMSY codes 104→⟨ and 105→⟩ during character extraction
 //!
 //! ### Comprehensive Mathematical Symbol Support
 //! **Coverage**: Subscripts, superscripts, mathematical operators, Greek letters
@@ -977,44 +977,15 @@ impl UniversalFontCorrector {
             );
         }
 
-        // ANGLE BRACKET CORRUPTION DETECTION: Specific pattern for mathematical fonts
-        // In some mathematical fonts, angle brackets ⟨⟩ are corrupted to character codes 104 ('h') and 105 ('i')
-        // Only apply this correction in mathematical contexts where we detect this specific corruption pattern
-        let has_angle_bracket_corruption = self.detect_angle_bracket_corruption(font_name);
-        if has_angle_bracket_corruption {
-            debug_println!(
-                "🔍 ANGLE BRACKET CORRUPTION: Mathematical font '{}' detected with h/i → angle bracket corruption",
-                font_name
-            );
-            // Apply targeted corrections only for this specific corruption
-            corrections.insert(104, 0x27E8); // 'h' → ⟨ (left angle bracket)
-            corrections.insert(105, 0x27E9); // 'i' → ⟩ (right angle bracket)
+        // CMSY ANGLE BRACKET MAPPING: CMSY (Computer Modern Symbol) fonts
+        // In CMSY fonts, positions 104 and 105 contain angle bracket glyphs, not 'h' and 'i'
+        // Standard CMSY mapping: 104 → angleleft (⟨), 105 → angleright (⟩)
+        if font_name.contains("CMSY") {
+            corrections.insert(104, 0x27E8); // CMSY position 104 → ⟨ (left angle bracket)
+            corrections.insert(105, 0x27E9); // CMSY position 105 → ⟩ (right angle bracket)
         }
     }
 
-    /// Detect angle bracket corruption in mathematical fonts
-    ///
-    /// This function detects a very specific corruption pattern where mathematical angle brackets
-    /// ⟨⟩ are incorrectly mapped to character codes 104 ('h') and 105 ('i') in subset fonts.
-    /// This should only trigger in exceptional cases, not for normal mathematical fonts.
-    fn detect_angle_bracket_corruption(&self, font_name: &str) -> bool {
-        // CONSERVATIVE APPROACH: Disable this correction for now
-        // The original issue was likely a different type of corruption that doesn't
-        // require universal font-level changes. Having 'h' and 'i' at positions 104/105
-        // is normal in ALL fonts, not a corruption pattern.
-
-        // TODO: This needs much more specific detection criteria, possibly:
-        // - Specific font names known to have this issue
-        // - Detection of actual angle bracket glyph names mapped to wrong positions
-        // - Context-aware text-level correction instead of font-level
-
-        debug_println!(
-            "🔍 ANGLE BRACKET DETECTION: Skipping font '{}' - universal h/i→bracket correction disabled",
-            font_name
-        );
-
-        false // Disable for now to prevent over-correction
-    }
 
     /// Extract encoding differences from font dictionary
     fn extract_encoding_differences(
