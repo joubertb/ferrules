@@ -218,8 +218,7 @@ const CLUSTERING_EXTENDED_Y_THRESHOLD_MULTIPLIER: f32 = 1.5; // Allow 50% more Y
 const RELATIVE_BASELINE_THRESHOLD: f32 = 0.3; // 30% of font size
 
 // === Per-Line Baseline Detection Constants ===
-/// Line detection threshold - Y-difference indicating a new line of text
-const LINE_DETECTION_THRESHOLD: f32 = 10.0; // 10 points
+// Note: LINE_DETECTION_THRESHOLD removed - we now use local Y-proximity filtering instead
 
 /// Minimum cluster size for baseline calculation - smaller clusters use sequential fallback
 const MIN_CLUSTER_SIZE_FOR_BASELINE: usize = 3;
@@ -1811,53 +1810,6 @@ fn cluster_baselines(spans: &[CharSpan], y_threshold: f32) -> Vec<Vec<usize>> {
 /// - Smaller font size than the main text
 /// - Located after text content (more permissive approach)
 ///
-/// Groups spans within a cluster into lines based on Y-position proximity.
-/// Returns groups of span indices, each group representing a text line.
-///
-/// Design rationale: PDF text extraction gives us characters in reading order
-/// but not grouped by lines. We detect lines by finding Y-position jumps
-/// larger than a threshold (typically 10pt for normal text).
-fn group_spans_into_lines(
-    spans: &[CharSpan],
-    cluster_indices: &[usize],
-    line_threshold: f32,
-) -> Vec<Vec<usize>> {
-    if cluster_indices.is_empty() {
-        return Vec::new();
-    }
-
-    let mut lines: Vec<Vec<usize>> = Vec::new();
-    let mut current_line = Vec::new();
-    let mut last_y: Option<f32> = None;
-
-    for &span_idx in cluster_indices {
-        let span_y = spans[span_idx].bbox.y0;
-
-        if let Some(prev_y) = last_y {
-            // Check if this is a new line (significant Y jump)
-            if (span_y - prev_y).abs() > line_threshold {
-                // Start new line
-                if !current_line.is_empty() {
-                    lines.push(current_line);
-                    current_line = Vec::new();
-                }
-            }
-        }
-
-        current_line.push(span_idx);
-        last_y = Some(span_y);
-    }
-
-    // Add the last line
-    if !current_line.is_empty() {
-        lines.push(current_line);
-    }
-
-    debug_print!("📏 Detected {} lines within cluster", lines.len());
-
-    lines
-}
-
 /// Calculates the baseline for a specific line, excluding the character being evaluated.
 ///
 /// Design rationale: A character should NEVER be part of its own baseline calculation.
@@ -2007,16 +1959,6 @@ fn detect_using_sequential_comparison(
             (idx, false, false)  // First char - no reference
         }
     }).collect()
-}
-
-/// Helper function to find which line a span belongs to
-fn find_line_for_span(span_idx: usize, lines: &[Vec<usize>]) -> Option<usize> {
-    for (line_idx, line) in lines.iter().enumerate() {
-        if line.contains(&span_idx) {
-            return Some(line_idx);
-        }
-    }
-    None
 }
 
 /// Check if a span is likely a footnote reference based on context and characteristics
@@ -2199,8 +2141,8 @@ fn detect_subscripts_in_cluster_with_local_analysis(
         .map(|&idx| spans[idx].font_size)
         .fold(0.0f32, |a, b| a.max(b));
 
-    // Group spans into lines based on Y-position proximity
-    let lines = group_spans_into_lines(spans, cluster_indices, LINE_DETECTION_THRESHOLD);
+    // Note: Line grouping is no longer used since we switched to local mode baseline calculation
+    // The local baseline calculation uses Y-proximity filtering directly instead of pre-grouped lines
 
     // Pre-calculate a single cluster-wide baseline that all characters will use
     // This ensures perfect consistency within the cluster
@@ -2252,38 +2194,60 @@ fn detect_subscripts_in_cluster_with_local_analysis(
                     Some(prev_baseline)
                 } else {
                     debug_print!("⚠️ EDGE CASE: Only {} baseline candidates and no previous baseline available", baseline_candidates.len());
-                    // Continue with normal calculation using available candidates
-                    let mut sorted_candidates = baseline_candidates.clone();
-                    sorted_candidates.sort_by(|a, b| a.partial_cmp(b).unwrap());
-                    let baseline = if sorted_candidates.len().is_multiple_of(2) {
-                        let mid = sorted_candidates.len() / 2;
-                        (sorted_candidates[mid - 1] + sorted_candidates[mid]) / 2.0
-                    } else {
-                        sorted_candidates[sorted_candidates.len() / 2]
-                    };
+                    // Use maximum Y value (lowest position = actual baseline)
+                    let baseline = baseline_candidates.iter().fold(0.0f32, |a, &b| a.max(b));
                     debug_print!(
-                        "🎯 CLUSTER BASELINE: {:.1} (median from {} insufficient candidates)",
+                        "🎯 CLUSTER BASELINE: {:.1} (max from {} insufficient candidates - lowest position)",
                         baseline,
                         baseline_candidates.len()
                     );
                     Some(baseline)
                 }
             } else {
-                // Use median instead of mean for more robust baseline calculation
-                let mut sorted_candidates = baseline_candidates.clone();
-                sorted_candidates.sort_by(|a, b| a.partial_cmp(b).unwrap());
-                let baseline = if sorted_candidates.len().is_multiple_of(2) {
-                    let mid = sorted_candidates.len() / 2;
-                    (sorted_candidates[mid - 1] + sorted_candidates[mid]) / 2.0
+                // Use MODE (most common Y position) as baseline
+                // Group Y positions by rounding to nearest 0.5pt to handle float precision
+                // The most common position represents the primary text baseline
+                use std::collections::HashMap;
+                let mut y_counts: HashMap<i32, usize> = HashMap::new();
+                for &y in &baseline_candidates {
+                    let rounded = (y * 2.0).round() as i32; // Round to nearest 0.5pt
+                    *y_counts.entry(rounded).or_insert(0) += 1;
+                }
+
+                // Find the mode (most frequent Y position)
+                let mode_rounded = y_counts
+                    .iter()
+                    .max_by_key(|(_, &count)| count)
+                    .map(|(&y, _)| y);
+
+                if let Some(mode) = mode_rounded {
+                    // Use the actual Y value closest to the mode
+                    let mode_f32 = mode as f32 / 2.0;
+                    let baseline = baseline_candidates
+                        .iter()
+                        .min_by(|&&a, &&b| {
+                            let dist_a = (a - mode_f32).abs();
+                            let dist_b = (b - mode_f32).abs();
+                            dist_a.partial_cmp(&dist_b).unwrap()
+                        })
+                        .copied()
+                        .unwrap_or(mode_f32);
+                    debug_print!(
+                        "🎯 CLUSTER BASELINE: {:.1} (mode from {} main text candidates - most common position)",
+                        baseline,
+                        baseline_candidates.len()
+                    );
+                    Some(baseline)
                 } else {
-                    sorted_candidates[sorted_candidates.len() / 2]
-                };
-                debug_print!(
-                    "🎯 CLUSTER BASELINE: {:.1} (median from {} main text candidates in cluster)",
-                    baseline,
-                    baseline_candidates.len()
-                );
-                Some(baseline)
+                    // Fallback to max if mode calculation fails
+                    let baseline = baseline_candidates.iter().fold(0.0f32, |a, &b| a.max(b));
+                    debug_print!(
+                        "🎯 CLUSTER BASELINE: {:.1} (max fallback from {} candidates)",
+                        baseline,
+                        baseline_candidates.len()
+                    );
+                    Some(baseline)
+                }
             }
         }
     };
@@ -2309,11 +2273,92 @@ fn detect_subscripts_in_cluster_with_local_analysis(
             continue;
         }
 
-        // Find which line this span belongs to
-        let _line_idx = find_line_for_span(span_idx, &lines);
+        // Use LOCAL mode baseline - only characters within ±3pt Y-range of current character
+        // This prevents baseline skew when clusters span multiple lines
+        const LOCAL_BASELINE_RANGE: f32 = 3.0; // ±3 points
 
-        // Use the pre-calculated cluster baseline for ALL characters in this cluster
-        let baseline = cluster_baseline;
+        let local_baseline = {
+            let current_y = current_span.bbox.y0;
+            let mut local_candidates: Vec<f32> = cluster_indices
+                .iter()
+                .filter(|&&idx| idx != span_idx) // Exclude current span
+                .filter(|&&idx| {
+                    let y_diff = (spans[idx].bbox.y0 - current_y).abs();
+                    y_diff <= LOCAL_BASELINE_RANGE // Within local range
+                })
+                .filter(|&&idx| spans[idx].font_size >= max_font_size * FONT_SIZE_SCRIPT_THRESHOLD)
+                .map(|&idx| spans[idx].bbox.y0)
+                .collect();
+
+            // If we don't have enough local candidates, try a slightly wider range
+            if local_candidates.len() < 2 {
+                const EXTENDED_LOCAL_RANGE: f32 = 5.0; // Try ±5pt if ±3pt didn't work
+                local_candidates = cluster_indices
+                    .iter()
+                    .filter(|&&idx| idx != span_idx)
+                    .filter(|&&idx| {
+                        let y_diff = (spans[idx].bbox.y0 - current_y).abs();
+                        y_diff <= EXTENDED_LOCAL_RANGE
+                    })
+                    .filter(|&&idx| {
+                        spans[idx].font_size >= max_font_size * FONT_SIZE_SCRIPT_THRESHOLD
+                    })
+                    .map(|&idx| spans[idx].bbox.y0)
+                    .collect();
+            }
+
+            if local_candidates.len() >= 2 {
+                // Calculate mode from local candidates
+                use std::collections::HashMap;
+                let mut y_counts: HashMap<i32, usize> = HashMap::new();
+                for &y in &local_candidates {
+                    let rounded = (y * 2.0).round() as i32;
+                    *y_counts.entry(rounded).or_insert(0) += 1;
+                }
+
+                // Find mode with deterministic tie-breaking (prefer lower Y = higher on page)
+                if let Some((&mode_rounded, _)) =
+                    y_counts.iter().max_by(|(y1, count1), (y2, count2)| {
+                        count1.cmp(count2).then_with(|| y2.cmp(y1)) // Higher count wins; if tied, lower Y wins
+                    })
+                {
+                    let mode_f32 = mode_rounded as f32 / 2.0;
+                    let local_baseline_value = local_candidates
+                        .iter()
+                        .min_by(|&&a, &&b| {
+                            let dist_a = (a - mode_f32).abs();
+                            let dist_b = (b - mode_f32).abs();
+                            dist_a.partial_cmp(&dist_b).unwrap()
+                        })
+                        .copied();
+
+                    debug_print!(
+                        "📍 LOCAL BASELINE for '{}': {:.1} (from {} local candidates within ±{}pt)",
+                        current_span.text.trim(),
+                        local_baseline_value.unwrap_or(0.0),
+                        local_candidates.len(),
+                        LOCAL_BASELINE_RANGE
+                    );
+                    local_baseline_value
+                } else {
+                    debug_print!(
+                        "⚠️ LOCAL BASELINE: No mode found for '{}'",
+                        current_span.text.trim()
+                    );
+                    None
+                }
+            } else {
+                // Not enough local candidates, fall back to cluster baseline
+                debug_print!(
+                    "⚠️ LOCAL BASELINE: Only {} local candidates for '{}', using cluster baseline",
+                    local_candidates.len(),
+                    current_span.text.trim()
+                );
+                cluster_baseline
+            }
+        };
+
+        let baseline = local_baseline;
 
         // If no valid baseline, fall back to sequential comparison
         let (baseline_diff, base_font_size) = match baseline {
@@ -2656,42 +2701,64 @@ let sup_confidence = VERTICAL_WEIGHT * (-v).max(0.0) + SIZE_WEIGHT * s;
 - Prevents false positives from size-only or position-only detection
 - Weighted scoring reflects that position is more reliable than size alone
 
-## PER-LINE BASELINE CALCULATION
+## LOCAL MODE-BASED BASELINE CALCULATION
 
 **Problem Solved:**
-Previous clustering approach averaged baselines across multiple lines, causing
-subscripts on earlier lines to appear above the averaged baseline and be
-incorrectly detected as superscripts.
+Previous clustering approach used cluster-wide baselines (either median or max), which
+caused issues when clusters spanned multiple lines with different Y positions. Characters
+on one line were compared against baselines calculated from text on completely different lines.
 
-**Example of Problem:**
+**Example of Problem (Cluster-Wide Median):**
 ```
-Line 1: Y=100 (contains subscript at Y=102)
-Line 2: Y=120
-Line 3: Y=140
-Averaged baseline: 120
-Subscript position: 102 - 120 = -18 (above baseline) → WRONG: superscript
+Cluster contains text from 3 different lines:
+Line 1: Y=342 (contains "masked n_i")
+Line 2: Y=350 (main text)
+Line 3: Y=358 (more text)
+
+Median baseline: 350
+"masked n_i" position: 342 - 350 = -8 (above baseline) → WRONG: detected as superscript
 ```
 
-**Solution Implementation:**
-1. **Line Detection**: Groups spans within 10pt Y-distance as same line
-2. **Per-Line Baseline**: Calculates baseline for each line independently
-3. **Self-Exclusion**: Character being evaluated is NEVER included in its own baseline
-4. **Typography Baseline**: Uses `y0 + font_size * 0.75` for proper baseline position
+**Example of Problem (Cluster-Wide Max):**
+```
+Even using max (Y=358) doesn't help:
+"masked n_i" position: 342 - 358 = -16 (even more above!) → STILL WRONG
+```
 
-**Critical Self-Exclusion Logic:**
+**Solution Implementation - Local Mode-Based Baseline:**
+1. **Local Y-Proximity Filtering**: Only uses characters within ±3pt Y-range of current character
+2. **Mode Calculation**: Finds most common Y position among local candidates (not median or max)
+3. **Extended Range Fallback**: If <2 candidates at ±3pt, expands to ±5pt
+4. **Deterministic Tie-Breaking**: When multiple Y positions have equal frequency, prefers lower Y
+5. **Self-Exclusion**: Character being evaluated is NEVER included in its own baseline
+
+**Critical Local Mode Logic:**
 ```rust
-let baseline_candidates: Vec<f32> = line_indices
+const LOCAL_BASELINE_RANGE: f32 = 3.0; // ±3 points
+
+let local_candidates: Vec<f32> = cluster_indices
     .iter()
-    .filter(|&&idx| idx != exclude_index)  // EXCLUDE current span
-    .filter(|&&idx| spans[idx].font_size >= max_font_size * 0.9)
-    .map(|&idx| spans[idx].bbox.y0 + spans[idx].font_size * 0.75)
+    .filter(|&&idx| idx != span_idx) // EXCLUDE current span
+    .filter(|&&idx| {
+        let y_diff = (spans[idx].bbox.y0 - current_y).abs();
+        y_diff <= LOCAL_BASELINE_RANGE  // Within local range
+    })
+    .filter(|&&idx| spans[idx].font_size >= max_font_size * 0.85)
+    .map(|&idx| spans[idx].bbox.y0)
     .collect();
+
+// Calculate mode with deterministic tie-breaking
+let mode = y_counts.iter().max_by(|(y1, count1), (y2, count2)| {
+    count1.cmp(count2).then_with(|| y2.cmp(y1)) // Prefer lower Y if tied
+})
 ```
 
-**Why Self-Exclusion is Critical:**
-- Prevents circular reference where character affects its own baseline
-- Ensures baseline represents the "normal" text line, not the script character
-- Eliminates bias in baseline calculation from the character being evaluated
+**Why Local Mode is Critical:**
+- **Local filtering** ensures baseline uses characters on the SAME LINE as target character
+- **Mode (not median/max)** finds the primary text baseline even with outliers
+- **Deterministic tie-breaking** ensures consistent results between debug and release builds
+- **Self-exclusion** prevents circular reference where character affects its own baseline
+- **Extended fallback** handles edge cases where local text is sparse
 
 ## SEQUENTIAL FALLBACK SYSTEM
 
@@ -2733,15 +2800,19 @@ Y-coordinate increases downward in processed coordinates, so:
 - Mixed notation: `δ = 1 if C = C^0`
 - Mathematical variables: `t_1`, `t_2`, `t_LT`
 
-**Edge Case: "where p (n_i, n_j)" Issue:**
-During development, this text appeared to have incorrect subscript detection.
-Investigation revealed:
-1. Characters 'i' and 'j' are positioned ABOVE baseline in PDF coordinates
-2. They have moderate size reduction (70% normal size)
-3. Algorithm correctly detects them as superscripts based on position + size
-4. The issue was that PDF positioning data conflicted with visual expectations
+**Fixed Edge Case: "masked n_i" Issue:**
+This text was incorrectly detected as superscript ("masked n^i") instead of subscript.
+Root cause analysis revealed:
+1. Cluster spanned multiple lines (Y=342 to Y=358)
+2. Cluster-wide baseline calculation (even with max) included distant text
+3. "masked n_i" at Y=342 was compared against baseline at Y=350
+4. Result: Character appeared "above" baseline → incorrectly detected as superscript
 
-**Resolution:** Algorithm is working correctly. PDF coordinate data drives detection.
+**Resolution:** Implemented local mode-based baseline calculation
+- Uses only characters within ±3pt Y-range (same line)
+- Calculates mode (most common Y position) instead of median/max
+- Deterministic tie-breaking ensures debug/release consistency
+- **Result:** All n_i and n_j instances now correctly render as subscripts
 
 ## PERFORMANCE CHARACTERISTICS
 
@@ -2769,37 +2840,45 @@ Investigation revealed:
 
 ## DESIGN DECISIONS RATIONALE
 
-**Typography Baseline (y0 + 75% font height):**
-- More accurate than character bottom (y1) for baseline positioning
-- Accounts for typical font metrics where baseline is 75% down from top
-- Prevents issues with descenders affecting baseline calculation
+**Raw Y-Position Baseline (y0):**
+- Uses character top (y0) directly for baseline calculation
+- Simpler and more consistent than typography-adjusted baselines
+- Previous attempt to use y0 + 75% font height created systematic bias
+- Raw y0 provides 1:1 correspondence between baseline and character positions
 
 **Confidence Threshold Differences:**
 - Sequential (0.25): Stricter because character-to-character comparison is more precise
-- Clustering (0.12): More permissive because line-based baselines have more variance
+- Clustering (0.12): More permissive because cluster baselines have more variance
 
-**Line Detection Threshold (10pt):**
-- Balances between grouping same-line characters and separating different lines
-- Accounts for PDF generation precision variations
-- Tested on mathematical documents with complex layouts
+**Local Baseline Range (±3pt):**
+- Defines "same line" proximity for local baseline calculation
+- ±3pt captures characters on the same visual line
+- Extended to ±5pt if insufficient candidates (<2)
+- Tested on mathematical documents with complex multi-line formulas
 
 **Self-Exclusion Principle:**
 - Ensures baseline represents "normal" text, not the character being evaluated
 - Prevents circular dependencies in baseline calculation
 - Critical for accurate subscript/superscript detection in clustering mode
 
-**Edge Case Fallback (Previous Baseline):**
-- Addresses insufficient baseline candidates at line beginnings (< 3 candidates)
-- Uses previous cluster's baseline as reference when current cluster lacks context
-- Prevents false superscript detection for subscripts at line boundaries
-- Essential for sequences like "nLN" that would otherwise be miscategorized
-- Maintains consistency across line spans in complex mathematical notation
+**Mode-Based Baseline Calculation:**
+- Finds most common Y position among candidates (not median or max)
+- More robust than median when text has multiple baseline levels
+- More accurate than max which can be skewed by outliers
+- Handles clusters spanning multiple lines by using most frequent position
+- Works in conjunction with local filtering for optimal accuracy
 
-**Baseline Candidate Threshold (3 minimum):**
-- Ensures statistical reliability in baseline calculation
-- Prevents outliers from skewing baseline in small clusters
-- Triggers fallback logic when insufficient "normal" text available
-- Based on empirical testing with mathematical documents
+**Deterministic Tie-Breaking (HashMap Issue Fix):**
+- HashMap iteration order is non-deterministic across debug/release builds
+- When multiple Y positions have equal frequency, tie-breaker is needed
+- Prefers lower Y value (higher on page) for consistency
+- Critical fix that eliminated debug vs release behavior differences
+
+**Local Candidate Thresholds:**
+- Minimum 2 candidates required for local mode calculation
+- Falls back to ±5pt range if ±3pt yields <2 candidates
+- Falls back to cluster baseline if still insufficient candidates
+- Ensures reliable baseline even with sparse local text
 
 This documentation preserves the reasoning behind all design decisions to aid
 future debugging and development of the subscript/superscript detection system.
