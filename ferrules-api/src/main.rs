@@ -1103,9 +1103,8 @@ async fn parse_document_sse_handler(
 
     // Create SSE stream
     let stream = ReceiverStream::new(rx).map(|event| {
-        // Use to_vec_pretty + from_utf8 to preserve Unicode characters and format prettily
-        let data = String::from_utf8(serde_json::to_vec_pretty(&event).unwrap_or_default())
-            .unwrap_or_default();
+        // Use to_string to preserve Unicode characters and produce single-line JSON for SSE
+        let data = serde_json::to_string(&event).unwrap_or_default();
         Ok::<_, std::convert::Infallible>(
             axum::response::sse::Event::default()
                 .event(match &event {
