@@ -50,12 +50,10 @@ RUN mkdir -p /app/models
 COPY --from=builder /app/target/release/ferrules-api /app/ferrules-api
 COPY --from=builder /app/target/release/*onnxruntime*.so* /usr/local/lib/
 
-# Copy configuration files
-COPY --from=builder /app/ /app/
-
-
-# Copy models
+# Copy runtime dependencies
 COPY --from=builder /app/models/ /app/models/
+COPY --from=builder /app/font/ /app/font/
+COPY --from=builder /app/libs/ /app/libs/
 
 # Verify all required files are present
 RUN echo "Verifying model files..." && \
