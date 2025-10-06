@@ -1122,7 +1122,7 @@ async fn parse_document_sse_handler(
     Ok(Sse::new(stream).keep_alive(
         axum::response::sse::KeepAlive::new()
             .interval(std::time::Duration::from_secs(30))
-            .text("keep-alive-text"),
+            .text(r#"{"type":"keep_alive"}"#),
     ))
 }
 
