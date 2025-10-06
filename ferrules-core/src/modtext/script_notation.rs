@@ -105,14 +105,14 @@
 //! **Decision**: Single `apply_text_formatting()` entry point for all content types
 //!
 //! **Rationale**:
-//! - Previously had separate wrapper functions for formula vs text processing
-//! - Code duplication led to divergent behavior and bug fixes in only one path
-//! - Identical detection algorithm should produce identical results for all content
-//! - Single code path simplifies testing and debugging
+//! - Script detection applies to all text types: paragraphs, headers, captions
+//! - Formula blocks now contain raw pdfium text without script tag processing
+//! - Downstream consumers use formula images for visual interpretation
+//! - Single code path for non-formula text simplifies testing and debugging
 //! - Reduces maintenance burden of keeping multiple paths synchronized
 //!
-//! **Not Chosen**: Separate formula and text processing paths
-//! - Duplication causes maintenance burden (fix bug twice)
+//! **Not Chosen**: Separate processing paths for different block types
+//! - Duplication causes maintenance burden (fix bug multiple times)
 //! - Inconsistent behavior confuses users
 //! - Harder to reason about system behavior
 //!
@@ -125,11 +125,13 @@
 //!     ↓
 //! Universal Font Corrector (fixes CMSY fonts, subset corruption)
 //!     ↓
-//! Unified Text Processing Pipeline (mod.rs):
-//!   1. Hyphen removal (joins spans split across lines)
-//!   2. Font corrections (additional text-level cleanup)
-//!   3. Script Detection ← This module applies <sub>/<sup>/<b> tags
-//!   4. HTML content corrections (formula-specific post-processing)
+//! Block Type Classification:
+//!   - Formula blocks → Raw text (no processing) + Image extraction
+//!   - Text blocks → Unified Text Processing Pipeline (mod.rs):
+//!       1. Hyphen removal (joins spans split across lines)
+//!       2. Font corrections (additional text-level cleanup)
+//!       3. Script Detection ← This module applies <sub>/<sup>/<b> tags
+//!       4. HTML content corrections
 //!     ↓
 //! Final HTML Output
 //! ```
@@ -432,7 +434,6 @@ pub(crate) enum TagType {
     Bold,
     Subscript,
     Superscript,
-    Formula,
 }
 
 /// Represents a range of characters that should be wrapped with a specific tag

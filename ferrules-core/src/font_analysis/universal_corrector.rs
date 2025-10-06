@@ -135,7 +135,7 @@
 //!   - Hyphen removal (span-level)
 //!   - Text corrections (span-level patterns)
 //!   - Script notation detection (<sub>/<sup>/<b> tags)
-//!   - HTML content corrections (formulas only)
+//!   - HTML content corrections
 //!     ↓
 //! Final Output
 //! ```
@@ -148,8 +148,8 @@
 //!   * If fixed at extraction: subscript detector sees '⟨' and '⟩', preserves positioning
 //!
 //! **Why Unified Pipeline?**
-//! - Previously had separate paths for formula vs text processing
-//! - Code duplication led to inconsistent behavior
+//! - All text content (formulas, paragraphs, captions) uses the same processing pipeline
+//! - Formula blocks now contain raw pdfium text without special processing
 //! - Single pipeline ensures identical correction sequence for all content types
 //! - Simplifies debugging and maintenance
 //!
@@ -2300,20 +2300,20 @@ impl Default for UniversalFontCorrector {
 //
 // ### Architectural Simplification Achievement
 //
-// **Problem Eliminated**: Previously, this font corrector was called from multiple separate
-// processing paths:
-// - Formula processing: `format_formula_with_spans()` → `add_tags()` → corrections
-// - Text processing: `process_text_with_spans()` → corrections
-// - Each path duplicated hyphen removal, span corrections, and HTML generation
+// **Current Architecture**: Formulas now contain raw pdfium text without processing
+// - Formula blocks identified by ONNX model and marked with `BlockType::Formula`
+// - Formula text is raw character extraction without enhancements
+// - Formula images extracted and served via API for visual representation
+// - Downstream consumers (TTS) use images for formula interpretation
 //
-// **Solution Implemented**: Unified text processing pipeline with single entry point:
+// **Text Processing Pipeline**: Only applied to non-formula blocks
 // ```rust
 // pub fn unified_text_processing(spans: &[CharSpan], is_formula: bool) -> String {
 //     // Single path for all text processing:
 //     // 1. Hyphen removal (span-level)
 //     // 2. Text corrections (including this font corrector)
 //     // 3. Script notation detection → HTML tags
-//     // 4. HTML content corrections (formulas only)
+//     // 4. HTML content corrections
 // }
 // ```
 //

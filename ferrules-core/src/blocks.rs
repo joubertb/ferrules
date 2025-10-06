@@ -81,8 +81,6 @@ pub struct Title {
 pub struct FormulaBlock {
     pub text: String,
     #[serde(skip_serializing_if = "Option::is_none")]
-    pub fertext: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
     pub formula_img: Option<String>,
 }
 

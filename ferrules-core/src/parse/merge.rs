@@ -1,7 +1,7 @@
 use std::collections::HashMap;
 
 use crate::{
-    blocks::{Block, BlockType, ImageBlock, List, TextBlock, Title, TitleLevel},
+    blocks::{Block, BlockType, FormulaBlock, ImageBlock, List, TextBlock, Title, TitleLevel},
     debug_print,
     entities::{Element, ElementID, ElementType, Line, PageID},
     layout::model::LayoutBBox,
@@ -601,82 +601,22 @@ pub(crate) fn merge_elements_into_blocks(
                 blocks.push(text_block);
             }
             ElementType::Formula => {
-                debug_print!("\n🧮 ===== FORMULA ELEMENT PROCESSING =====");
-                debug_print!(
-                    "🧮 Element ID: {}, Page: {}, Block ID: {}",
-                    curr_el.id,
-                    curr_el.page_id,
-                    block_id
-                );
-                debug_print!(
-                    "🧮 BBox: ({:.1},{:.1}) - ({:.1},{:.1})",
-                    curr_el.bbox.x0,
-                    curr_el.bbox.y0,
-                    curr_el.bbox.x1,
-                    curr_el.bbox.y1
-                );
-                debug_print!("🧮 Raw Formula Text: '{}'", curr_el.text_block.text);
-
-                // Get truly original text by reconstructing from raw CharSpans (before any HTML tag processing)
+                // Get raw original text from CharSpans or text_block
                 let original_text = if !curr_el.line_spans.is_empty() {
-                    // Reconstruct original text from CharSpans
                     curr_el
                         .line_spans
                         .iter()
-                        .map(|line_spans| {
-                            // Space-aware concatenation of spans within a line
-                            concatenate_spans_with_spacing(line_spans)
-                        })
+                        .map(|line_spans| concatenate_spans_with_spacing(line_spans))
                         .collect::<Vec<String>>()
                         .join(" ")
                 } else {
-                    // Fallback to current text if no spans available
                     curr_el.text_block.text.clone()
                 };
 
-                // Process the formula text - use spans if available for better subscript detection
-                let processed_text = if !curr_el.line_spans.is_empty() {
-                    debug_print!(
-                        "🧮 Using CharSpan-based formula processing with {} line(s) of spans",
-                        curr_el.line_spans.len()
-                    );
-                    crate::modtext::format_formula_with_spans(
-                        &curr_el.text_block.text,
-                        &curr_el.line_spans,
-                    )
-                } else {
-                    debug_print!("🧮 No spans available, using text-only formula processing");
-                    crate::modtext::format_formula_text(&curr_el.text_block.text)
-                };
-                debug_print!("🧮 Processed Formula: '{processed_text}'");
-
-                // Check if subscripts were detected
-                if processed_text.contains("<sub>") {
-                    debug_print!("🧮 ✓ SUBSCRIPTS DETECTED in formula");
-                } else {
-                    debug_print!("🧮 ✗ NO SUBSCRIPTS detected in formula - potential issue!");
-                }
-
-                if processed_text.contains("ni")
-                    || processed_text.contains("nj")
-                    || processed_text.contains("M(i,j)")
-                {
-                    debug_print!(
-                        "🧮 ⚠️ POTENTIAL SUBSCRIPT PATTERN found but not tagged: check spans"
-                    );
-                }
-
-                debug_print!("🧮 ===== END FORMULA PROCESSING =====\n");
-
                 let formula_block = Block {
                     id: block_id,
-                    kind: crate::blocks::BlockType::Formula(crate::blocks::FormulaBlock {
-                        text: processed_text.clone(),
-                        fertext: if processed_text != original_text {
-                            Some(original_text)
-                        } else {
-                            None
-                        },
+                    kind: BlockType::Formula(FormulaBlock {
+                        text: original_text,
                         formula_img: Some(format!("figures/formula_{}.png", block_id)),
                     }),
                     pages_id: vec![curr_el.page_id],

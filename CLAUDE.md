@@ -477,6 +477,55 @@ grep -r "mass.*speed.*light" test-results/mathbert.json
 - **Tables**: Tabular data with row/column organization
 - **Captions**: Figure and table captions
 - **Footnotes**: Referenced footnote content
+- **Formulas**: Mathematical formulas with raw pdfium text and extracted images
+
+### Formula Block Handling
+
+Formula blocks are identified by the ONNX layout model and handled specially:
+
+**Text Content:**
+- Contains raw character extraction from pdfium without enhancements
+- No subscript/superscript HTML tags applied
+- No Unicode normalization or mathematical symbol corrections
+- Preserves original PDF character sequences as-is
+
+**Image Content:**
+- Formula region is cropped from the PDF page
+- Saved as PNG image: `formula_{block_id}.png`
+- Available via API endpoint: `/images/{job_id}/figures/formula_{block_id}.png`
+- Provides visual representation for downstream consumers (TTS)
+
+**JSON Structure Example:**
+```json
+{
+  "id": 42,
+  "block_type": "Formula",
+  "text": "E=mc²",
+  "formula_img": "/images/{job_id}/figures/formula_42.png",
+  "bbox": {"x0": 100, "y0": 200, "x1": 300, "y1": 250}
+}
+```
+
+**Processing Pipeline Divergence:**
+```
+ONNX Layout Model Classification
+    ↓
+┌───────────────┴───────────────┐
+│                               │
+Formula Blocks              Text Blocks
+    ↓                           ↓
+Raw Text +              Unified Text Processing:
+Image Extraction        - Hyphen removal
+                        - Font corrections
+                        - Script detection (<sub>/<sup>)
+                        - HTML formatting
+```
+
+**Rationale:**
+- Downstream TTS consumers use formula images for visual interpretation
+- Raw text preserves original mathematical notation without distortion
+- Image provides accurate visual representation for complex equations
+- Separates concerns: text blocks get enhancement, formulas remain raw
 
 ## External Dependencies
 
@@ -827,12 +876,13 @@ let sup_confidence = VERTICAL_WEIGHT * (-v).max(0.0) + SIZE_WEIGHT * s;
 - Confidence scoring: `sub_confidence = VERTICAL_WEIGHT * v.max(0.0) + SIZE_WEIGHT * s`
 - Direct visual-first detection for straightforward cases
 
-**2. Clustering Analysis (Complex Formulas):**
+**2. Clustering Analysis (Complex Mathematical Notation):**
 - Groups spans by Y-position proximity (5pt threshold) for complex mathematical text
 - **Local mode-based baseline calculation** - Only uses characters within ±3pt of current character
 - Lowered confidence threshold (0.12 vs 0.25) to account for baseline calculation variance
-- Handles cases where mathematical formulas span multiple baseline levels
+- Handles cases where mathematical notation spans multiple baseline levels
 - Examples: Complex equations with mixed subscripts/superscripts like `Loss<sub>MSP</sub> = ∑ n<sub>i</sub>`
+- Applied to text blocks containing mathematical content (not formula blocks)
 
 **Local Mode-Based Baseline Fix (2025):**
 - **Problem Solved**: Cluster-wide baselines (median/max) caused issues when clusters spanned multiple lines
@@ -890,13 +940,15 @@ const EXTENDED_LOCAL_RANGE: f32 = 5.0; // ±5pt fallback if <2 local candidates
 - ✅ `M<sub>(i,j)</sub> = 0 if (n<sub>i</sub>, n<sub>j</sub>) ∉ E`
 - ✅ `to predict... of the masked n<sub>i</sub>` (fixed via local mode baseline - was incorrectly n<sup>i</sup>)
 
-**Complex Formula Handling:**
+**Mathematical Notation Detection in Text Blocks:**
 - Mathematical variables: `t<sub>1</sub>`, `t<sub>2</sub>`, `t<sub>LT</sub>`
 - Function notation: `logp(x<sub>i</sub>)`, `log(1 - p(n<sub>i</sub>, n<sub>j</sub>))`
 - Equation numbering: `(2)`, `(3)`, `(5)` correctly preserved as normal text
 - Mixed notation: `c<sup>2</sup> = a<sup>2</sup> + b<sup>2</sup>`
 - **Citations and References**: `OpenAI indexes,<sup>3</sup>which` (visual-first detection)
 - **Mixed Sub/Superscript**: `C<sub>KV</sub><sup>S</sup>` and `C<sub>KV</sub><sup>H</sup>` (post-processing fix for correct visual order)
+
+**Note**: These examples apply to text blocks containing mathematical notation. Formula blocks (identified by the ONNX model) contain raw pdfium text without HTML tag enhancement and rely on extracted images for visual representation.
 
 #### Error Handling & Edge Cases
 
