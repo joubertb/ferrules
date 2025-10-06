@@ -117,6 +117,12 @@ pub fn correct_block(block: &mut crate::blocks::Block) {
         BlockType::Footer(footer) => {
             apply_word_corrections(&mut footer.text);
         }
+        BlockType::Formula(formula) => {
+            apply_word_corrections(&mut formula.text);
+            if let Some(ref mut fertext) = formula.fertext {
+                apply_word_corrections(fertext);
+            }
+        }
         BlockType::Image(_) => {
             // No text to correct in image blocks
         }

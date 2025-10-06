@@ -1,4 +1,5 @@
 use axum::{
+    body::Body,
     extract::{DefaultBodyLimit, Multipart, Path, State},
     http::{
         header::{ACCEPT, CONTENT_TYPE},
@@ -19,6 +20,7 @@ use ferrules_core::{
     font_analysis::initialize_for_cli,
     layout::model::{ORTConfig, OrtExecutionProvider},
     render::markdown::to_markdown,
+    utils::save_doc_images,
     FerrulesParseConfig, FerrulesParser,
 };
 use memmap2::Mmap;
@@ -27,6 +29,7 @@ use serde::{Deserialize, Serialize};
 use std::{
     collections::HashMap,
     io::{Seek, Write},
+    path::PathBuf,
     sync::Arc,
 };
 use tempfile::NamedTempFile;
@@ -157,7 +160,6 @@ struct ApiResponse<T> {
 #[derive(Debug, Deserialize)]
 struct ParseOptions {
     page_range: Option<String>,
-    _save_images: Option<bool>,
 }
 
 #[derive(Debug, Serialize)]
@@ -330,6 +332,105 @@ async fn delete_debug_handler(
     }
 }
 
+/// Handler to retrieve formula images
+#[tracing::instrument(skip_all)]
+async fn get_image_handler(
+    Path((job_id, filename)): Path<(String, String)>,
+) -> Result<impl IntoResponse, (StatusCode, Json<ApiResponse<()>>)> {
+    if filename.contains("..") || filename.contains('/') || filename.contains('\\') {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(ApiResponse {
+                success: false,
+                data: None,
+                error: Some("Invalid filename: path traversal not allowed".to_string()),
+            }),
+        ));
+    }
+
+    if !filename.ends_with(".png") {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(ApiResponse {
+                success: false,
+                data: None,
+                error: Some("Invalid filename: only PNG files are allowed".to_string()),
+            }),
+        ));
+    }
+
+    let image_path = PathBuf::from(format!("/tmp/ferrules-api/{}/figures/{}", job_id, filename));
+
+    match tokio::fs::read(&image_path).await {
+        Ok(data) => Ok(Response::builder()
+            .status(StatusCode::OK)
+            .header(CONTENT_TYPE, "image/png")
+            .body(Body::from(data))
+            .unwrap()),
+        Err(_) => Err((
+            StatusCode::NOT_FOUND,
+            Json(ApiResponse {
+                success: false,
+                data: None,
+                error: Some("Image not found".to_string()),
+            }),
+        )),
+    }
+}
+
+fn update_formula_img_paths(doc: &mut ferrules_core::entities::ParsedDocument, job_id: &str) {
+    use ferrules_core::blocks::BlockType;
+
+    for block in &mut doc.blocks {
+        if let BlockType::Formula(ref mut formula) = block.kind {
+            if let Some(ref path) = formula.formula_img {
+                if let Some(filename) = path.split('/').next_back() {
+                    formula.formula_img = Some(format!("/images/{}/figures/{}", job_id, filename));
+                }
+            }
+        }
+    }
+}
+
+fn cleanup_old_image_dirs(hours: u64) -> anyhow::Result<()> {
+    let base_dir = PathBuf::from("/tmp/ferrules-api");
+    if !base_dir.exists() {
+        return Ok(());
+    }
+
+    let now = std::time::SystemTime::now();
+    let cutoff = std::time::Duration::from_secs(hours * 3600);
+
+    for entry in std::fs::read_dir(&base_dir)? {
+        let entry = entry?;
+        let path = entry.path();
+
+        if !path.is_dir() {
+            continue;
+        }
+
+        if let Ok(metadata) = entry.metadata() {
+            if let Ok(modified) = metadata.modified() {
+                if let Ok(age) = now.duration_since(modified) {
+                    if age > cutoff {
+                        if let Err(e) = std::fs::remove_dir_all(&path) {
+                            tracing::warn!(
+                                "Failed to remove old image directory {:?}: {}",
+                                path,
+                                e
+                            );
+                        } else {
+                            tracing::info!("Removed old image directory: {:?}", path);
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    Ok(())
+}
+
 #[tokio::main]
 async fn main() {
     let args = Args::parse();
@@ -402,20 +503,27 @@ async fn main() {
         .route("/parse/cancel/:job_id", post(cancel_job_handler))
         .route("/debug/:doc_name", get(get_debug_handler))
         .route("/debug/:doc_name", delete(delete_debug_handler))
+        .route("/images/:job_id/figures/:filename", get(get_image_handler))
         .with_state(app_state)
         .layer(OtelAxumLayer::default())
         .layer(DefaultBodyLimit::max(MAX_SIZE_LIMIT));
 
-    // Start background task for debug file cleanup
+    // Start background task for cleanup (debug files and image directories)
     tokio::spawn(async {
         let mut interval = tokio::time::interval(std::time::Duration::from_secs(3600)); // Run every hour
         loop {
             interval.tick().await;
+
             if let Err(e) = cleanup_old_debug_files(4) {
-                // Clean files older than 4 hours
                 tracing::warn!("Failed to cleanup old debug files: {}", e);
             } else {
                 tracing::debug!("Debug file cleanup completed");
+            }
+
+            if let Err(e) = cleanup_old_image_dirs(1) {
+                tracing::warn!("Failed to cleanup old image directories: {}", e);
+            } else {
+                tracing::debug!("Image directory cleanup completed");
             }
         }
     });
@@ -598,9 +706,15 @@ async fn parse_document_handler(
     let doc_name = Uuid::new_v4().to_string();
     set_debug_context(doc_name.clone(), None);
 
-    let doc = state
+    let mut doc = state
         .parser
-        .parse_document(&mmap, doc_name, config, Some(|_| {}), None::<fn() -> bool>)
+        .parse_document(
+            &mmap,
+            doc_name.clone(),
+            config,
+            Some(|_| {}),
+            None::<fn() -> bool>,
+        )
         .await
         .map_err(|e| {
             clear_debug_context(); // Clear on error
@@ -613,6 +727,16 @@ async fn parse_document_handler(
                 }),
             )
         })?;
+
+    // Save formula images to /tmp/ferrules-api/{job_id}/figures/
+    let figures_dir = PathBuf::from(format!("/tmp/ferrules-api/{}/figures", doc_name));
+    std::fs::create_dir_all(&figures_dir).ok();
+    if let Err(e) = save_doc_images(&figures_dir, &doc) {
+        tracing::warn!("Failed to save formula images: {}", e);
+    }
+
+    // Update formula_img paths to full API paths
+    update_formula_img_paths(&mut doc, &doc_name);
 
     let accept_header = headers.get(ACCEPT).and_then(|h| h.to_str().ok());
 
@@ -933,8 +1057,19 @@ async fn parse_document_sse_handler(
             .await;
 
         match result {
-            Ok(doc) => {
+            Ok(mut doc) => {
                 if !cancellation_token_clone.is_cancelled() {
+                    // Save formula images to /tmp/ferrules-api/{job_id}/figures/
+                    let figures_dir =
+                        PathBuf::from(format!("/tmp/ferrules-api/{}/figures", job_id));
+                    let _ = std::fs::create_dir_all(&figures_dir);
+                    if let Err(e) = save_doc_images(&figures_dir, &doc) {
+                        tracing::warn!("Failed to save formula images: {}", e);
+                    }
+
+                    // Update formula_img paths to full API paths
+                    update_formula_img_paths(&mut doc, &job_id.to_string());
+
                     let _ = tx_clone
                         .send(ParseEvent::Complete {
                             document: serde_json::to_value(&doc).unwrap_or_default(),

@@ -670,13 +670,14 @@ pub(crate) fn merge_elements_into_blocks(
 
                 let formula_block = Block {
                     id: block_id,
-                    kind: crate::blocks::BlockType::TextBlock(TextBlock {
+                    kind: crate::blocks::BlockType::Formula(crate::blocks::FormulaBlock {
                         text: processed_text.clone(),
                         fertext: if processed_text != original_text {
                             Some(original_text)
                         } else {
                             None
                         },
+                        formula_img: Some(format!("figures/formula_{}.png", block_id)),
                     }),
                     pages_id: vec![curr_el.page_id],
                     bbox: curr_el.bbox,

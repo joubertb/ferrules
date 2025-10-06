@@ -77,6 +77,15 @@ pub struct Title {
     pub fertext: Option<String>,
 }
 
+#[derive(Debug, Default, Deserialize, Serialize)]
+pub struct FormulaBlock {
+    pub text: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub fertext: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub formula_img: Option<String>,
+}
+
 #[derive(Debug, Deserialize, Serialize)]
 #[serde(tag = "block_type")]
 pub enum BlockType {
@@ -85,6 +94,7 @@ pub enum BlockType {
     Title(Title),
     ListBlock(List),
     TextBlock(TextBlock),
+    Formula(FormulaBlock),
     Image(ImageBlock),
     Figure(FigureBlock),
     Table,
@@ -175,6 +185,7 @@ impl Block {
                 }
             }
             BlockType::Title(_title) => todo!(),
+            BlockType::Formula(_formula) => bail!("can't merge element in Formula"),
             BlockType::Image(_image_block) => todo!(),
             BlockType::Figure(_figure_block) => todo!(),
             BlockType::Table => todo!(),
@@ -188,6 +199,7 @@ impl Block {
             BlockType::TextBlock(_) => "TEXT",
             BlockType::Title(_) => "TITLE",
             BlockType::ListBlock(_) => "LIST",
+            BlockType::Formula(_) => "FORMULA",
             BlockType::Image(_) => "IMAGE",
             BlockType::Figure(_) => "FIGURE",
             BlockType::Table => "TABLE",
