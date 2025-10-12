@@ -75,6 +75,53 @@ This directory contains the Ferrules PDF parsing engine - a high-performance Rus
 - **Log Location**: Service logs to `ferrules-api.log` in ferrules directory
 - **Port Binding**: Manual port configuration to avoid conflicts
 
+## Environment Variables
+
+### FERRULES_DEBUG_OUTPUT
+Controls debug output generation for the Ferrules API service. Debug files are essential for troubleshooting PDF parsing issues and are automatically downloaded by the worker service when available.
+
+**Values:**
+- `none` - No debug output (default)
+- `stderr` - Debug output to container logs only
+- `file` - Debug output saved to `/tmp/ferrules-debug/{doc_name}-debug.txt`
+- `both` - Both stderr and file output
+
+**Docker Configuration:**
+```yaml
+ferrules-api:
+  environment:
+    - FERRULES_DEBUG_OUTPUT=file  # Enable debug file generation
+```
+
+**Debug File Location:**
+- **API Service**: Debug files written to `/tmp/ferrules-debug/{doc_name}-debug.txt`
+- **Worker Service**: Downloaded and saved to `<document_id>/logs/raw-debug.txt.gz` (compressed)
+- **Retention**: Automatically cleaned up after 24 hours by API service
+
+**Usage with CLI:**
+```bash
+# Using environment variable
+FERRULES_DEBUG_OUTPUT=file ./target/debug/ferrules document.pdf --output-dir output
+
+# Using command-line flag
+./target/debug/ferrules document.pdf --output-dir output --debug-output file
+```
+
+**Note**: The worker service automatically retrieves debug logs via the `/debug/{doc_name}` API endpoint if debug output is enabled.
+
+### FERRULES_DEBUG_DIR
+Optional environment variable to specify custom debug file storage location.
+
+**Default**: `/tmp/ferrules-debug`
+
+**Example**:
+```yaml
+ferrules-api:
+  environment:
+    - FERRULES_DEBUG_OUTPUT=file
+    - FERRULES_DEBUG_DIR=/app/debug  # Custom debug directory
+```
+
 ## Build System
 
 ### Rust Workspace Configuration
