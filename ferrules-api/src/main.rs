@@ -1045,6 +1045,9 @@ async fn parse_document_sse_handler(
             }
         };
 
+        // Set debug context for this document processing task
+        set_debug_context(job_id.to_string(), None);
+
         // Parse document with cancellation callback - much simpler!
         let result = parser
             .parse_document(
@@ -1096,6 +1099,9 @@ async fn parse_document_sse_handler(
                 }
             }
         }
+
+        // Clear debug context
+        clear_debug_context();
 
         // Clean up job when done
         job_manager.complete_job(job_id).await;
