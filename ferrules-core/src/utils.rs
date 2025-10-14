@@ -5,8 +5,10 @@ use crate::{
 };
 
 const IMAGE_PADDING: u32 = 5;
+const IMAGE_SCALE_FACTOR: f32 = 1.25;
 use anyhow::Context;
 use colored::*;
+use image::{imageops::FilterType, DynamicImage};
 use std::{
     fs::{create_dir, File},
     io::{BufWriter, Write},
@@ -55,6 +57,12 @@ fn sanitize_doc_name(doc_name: &str) -> String {
         .collect::<String>()
 }
 
+fn resize_extracted_image(image: &DynamicImage, width: u32, height: u32) -> DynamicImage {
+    let new_width = (width as f32 * IMAGE_SCALE_FACTOR) as u32;
+    let new_height = (height as f32 * IMAGE_SCALE_FACTOR) as u32;
+    image.resize(new_width, new_height, FilterType::Lanczos3)
+}
+
 pub fn save_doc_images(imgs_dir: &Path, doc: &ParsedDocument) -> anyhow::Result<()> {
     for block in doc.blocks.iter() {
         match &block.kind {
@@ -70,8 +78,9 @@ pub fn save_doc_images(imgs_dir: &Path, doc: &ParsedDocument) -> anyhow::Result<
                             .min(page.height as u32);
 
                         let crop = page.image.clone().crop(x, y, width, height);
+                        let resized = resize_extracted_image(&crop, width, height);
                         let output_file = imgs_dir.join(format!("formula_{}.png", block.id));
-                        crop.save(output_file)?;
+                        resized.save(output_file)?;
                     }
                     None => continue,
                 }
@@ -91,9 +100,10 @@ pub fn save_doc_images(imgs_dir: &Path, doc: &ParsedDocument) -> anyhow::Result<
                             .min(page.height as u32);
 
                         let crop = page.image.clone().crop(x, y, width, height);
+                        let resized = resize_extracted_image(&crop, width, height);
 
                         let output_file = imgs_dir.join(img_block.path());
-                        crop.save(output_file)?;
+                        resized.save(output_file)?;
                     }
                     None => continue,
                 }
@@ -113,9 +123,10 @@ pub fn save_doc_images(imgs_dir: &Path, doc: &ParsedDocument) -> anyhow::Result<
                             .min(page.height as u32);
 
                         let crop = page.image.clone().crop(x, y, width, height);
+                        let resized = resize_extracted_image(&crop, width, height);
 
                         let output_file = imgs_dir.join(figure_block.path());
-                        crop.save(output_file)?;
+                        resized.save(output_file)?;
                     }
                     None => continue,
                 }
