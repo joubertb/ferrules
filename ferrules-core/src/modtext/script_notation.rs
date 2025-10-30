@@ -1419,8 +1419,32 @@ pub(crate) fn apply_text_formatting(spans: &[CharSpan]) -> String {
                     debug_print!(
                         "⬇️ SUBSCRIPT CONTINUE: Sequential detection supports continuation"
                     );
-                    // Skip baseline change detection and just continue
                     let cleaned_text = span.text.replace('\u{001a}', ""); // Remove SUB (substitute) character
+
+                    // Add spacing between spans when needed (to preserve word boundaries)
+                    if i > 0 && !cleaned_text.is_empty() {
+                        let prev_span = &spans[i - 1];
+
+                        // Check horizontal gap (words on same line)
+                        let x_gap = span.bbox.x0 - prev_span.bbox.x1;
+                        // Check vertical gap (wrapped text)
+                        let y_diff = (span.bbox.y0 - prev_span.bbox.y0).abs();
+
+                        // Use common font-aware spacing logic
+                        let needs_space = crate::spacing::should_add_space_simple(
+                            &result,
+                            &cleaned_text,
+                            x_gap,
+                            y_diff,
+                            prev_span.font_size,
+                            CLUSTERING_Y_THRESHOLD,
+                        );
+
+                        if needs_space {
+                            result.push(' ');
+                        }
+                    }
+
                     result.push_str(&cleaned_text);
                     continue;
                 } else {

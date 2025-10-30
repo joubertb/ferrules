@@ -33,6 +33,7 @@ const WORD_BOUNDARY_THRESHOLD_FACTOR: f32 = 0.16;
 ///
 /// # Example
 /// For 9pt font: threshold = 9 * 0.55 * 0.16 ≈ 0.79 points
+/// For 16pt font: threshold = 16 * 0.55 * 0.16 ≈ 1.41 points
 pub fn calculate_spacing_threshold(font_size: f32) -> f32 {
     let estimated_avg_char_width = font_size * AVERAGE_CHAR_WIDTH_FACTOR;
     estimated_avg_char_width * WORD_BOUNDARY_THRESHOLD_FACTOR
