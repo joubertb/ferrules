@@ -3,6 +3,10 @@
 # ============================================================================
 # Note: Common patterns (.DS_Store, .venv, target/, .env) are in root .gitignore
 
+**/.DS_Store
+**/.serena
+**/target
+
 # Model files and archives
 model-archive/
 models/
