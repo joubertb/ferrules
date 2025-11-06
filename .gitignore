@@ -1,17 +1,15 @@
-.serena
-.DS_Store
-/target
-#models/
+# ============================================================================
+# Ferrules-Specific Ignores
+# ============================================================================
+# Note: Common patterns (.DS_Store, .venv, target/, .env) are in root .gitignore
+
+# Model files and archives
 model-archive/
-**/.venv/
-*.pt
-test_data/*
-
 models/
+*.pt
 
-**/.env
-
-# Test files and output directories
+# Test data and output directories
+test_data/*
 *.pdf
 *-results/
 *-output/
