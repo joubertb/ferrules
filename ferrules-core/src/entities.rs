@@ -306,6 +306,30 @@ impl Element {
         // This preserves the positioning and font information needed for Formula elements
         self.line_spans.push(line.spans.clone());
     }
+
+    /// Get serializable char spans with absolute character indices
+    /// Used for PDF sentence highlighting in the UI
+    pub fn get_serializable_char_spans(&self) -> Vec<SerializableCharSpan> {
+        let mut result = Vec::new();
+        let mut char_offset: usize = 0;
+
+        for line_spans in &self.line_spans {
+            for span in line_spans {
+                let span_len = span.text.chars().count();
+                result.push(SerializableCharSpan {
+                    bbox: span.bbox.clone(),
+                    text: span.text.clone(),
+                    char_start: char_offset,
+                    char_end: char_offset + span_len,
+                });
+                char_offset += span_len;
+            }
+            // Account for newline/space added between lines
+            char_offset += 1;
+        }
+
+        result
+    }
 }
 
 #[derive(Debug)]
@@ -356,6 +380,27 @@ pub struct ParsedDocument {
     pub metadata: DocumentMetadata,
 }
 
+/// Serializable version of CharSpan for JSON output
+/// Used for PDF sentence highlighting in the UI
+#[derive(Debug, Clone, Deserialize, Serialize)]
+pub struct SerializableCharSpan {
+    pub bbox: BBox,
+    pub text: String,
+    pub char_start: usize,
+    pub char_end: usize,
+}
+
+impl From<&CharSpan> for SerializableCharSpan {
+    fn from(span: &CharSpan) -> Self {
+        Self {
+            bbox: span.bbox.clone(),
+            text: span.text.clone(),
+            char_start: span.char_start_idx,
+            char_end: span.char_end_idx,
+        }
+    }
+}
+
 #[derive(Debug, Clone)]
 pub struct CharSpan {
     pub bbox: BBox,
@@ -372,6 +417,10 @@ pub struct CharSpan {
 }
 
 impl CharSpan {
+    /// Y-position threshold for line break detection in CharSpan::append.
+    /// Characters with Y difference greater than this are placed in separate spans.
+    const LINE_BREAK_Y_THRESHOLD: f32 = 5.0;
+
     pub fn new_from_char(char: &PdfPageTextChar, page_bbox: &BBox) -> Self {
         let font_name = char.font_name();
         let original_unicode = char.unicode_char();
@@ -466,6 +515,12 @@ impl CharSpan {
                 char.loose_bounds().expect("error tight bound"),
                 page_bbox.height(),
             );
+
+            // Break on significant Y-position change (line break) for consistent line-level granularity
+            let y_diff = (char_bbox.y0 - self.bbox.y0).abs();
+            if y_diff > Self::LINE_BREAK_Y_THRESHOLD {
+                return None;
+            }
 
             let original_text = char.unicode_char().unwrap_or_default().to_string();
             let unicode_value = char.unicode_value();

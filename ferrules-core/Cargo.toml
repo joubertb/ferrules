@@ -56,6 +56,8 @@ phf = { version = "0.11", features = ["macros"] }
 # Dictionary and spellchecking support
 spellbook = { version = "0.2", optional = true }
 moka = { version = "0.12", features = ["future"], optional = true }
+# Sentence boundary detection (Unicode Standard Annex #29)
+unicode-segmentation = "1.12"
 
 [target.'cfg(target_os = "macos")'.dependencies]
 ort = { version = "=2.0.0-rc.9", features = ["coreml", "fetch-models"] }

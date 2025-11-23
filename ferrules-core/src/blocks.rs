@@ -1,4 +1,4 @@
-use crate::entities::{BBox, Element, ElementType, PageID};
+use crate::entities::{BBox, Element, ElementType, PageID, SerializableCharSpan};
 use crate::font_analysis as correction;
 use anyhow::bail;
 use serde::{Deserialize, Serialize};
@@ -62,6 +62,12 @@ pub struct TextBlock {
     pub(crate) text: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) fertext: Option<String>,
+    /// Character spans with bounding boxes for sentence highlighting
+    #[serde(skip_serializing_if = "Vec::is_empty", default)]
+    pub(crate) char_spans: Vec<SerializableCharSpan>,
+    /// Sentence end positions (character indices) for precise bbox computation
+    #[serde(skip_serializing_if = "Vec::is_empty", default)]
+    pub(crate) sentence_ends: Vec<usize>,
 }
 
 #[derive(Debug, Default, Deserialize, Serialize)]
@@ -75,6 +81,12 @@ pub struct Title {
     pub text: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub fertext: Option<String>,
+    /// Character spans with bounding boxes for sentence highlighting
+    #[serde(skip_serializing_if = "Vec::is_empty", default)]
+    pub char_spans: Vec<SerializableCharSpan>,
+    /// Sentence end positions (character indices) for precise bbox computation
+    #[serde(skip_serializing_if = "Vec::is_empty", default)]
+    pub sentence_ends: Vec<usize>,
 }
 
 #[derive(Debug, Default, Deserialize, Serialize)]
@@ -118,11 +130,36 @@ impl Block {
                         text.fertext = Some(text.text.clone());
                     }
 
+                    // Get fertext length for char_span offset (char_spans index into original text)
+                    let fertext_len = text
+                        .fertext
+                        .as_ref()
+                        .map(|f| f.chars().count())
+                        .unwrap_or_else(|| text.text.chars().count());
+
                     text.text.push('\n');
                     text.text.push_str(&element.text_block.text);
 
-                    // Apply word-level corrections to assembled text
+                    // Merge fertext - element.text_block.text is original text before corrections
+                    if let Some(ref mut fertext) = text.fertext {
+                        fertext.push('\n');
+                        fertext.push_str(&element.text_block.text);
+                    }
+
+                    // Apply word-level corrections to assembled text (not fertext)
                     correction::apply_word_corrections(&mut text.text);
+
+                    // Collect char_spans from element with adjusted offsets
+                    // Use fertext length since char_spans index into original text
+                    let offset = fertext_len + 1;
+                    for span in element.get_serializable_char_spans() {
+                        text.char_spans.push(SerializableCharSpan {
+                            bbox: span.bbox,
+                            text: span.text,
+                            char_start: span.char_start + offset,
+                            char_end: span.char_end + offset,
+                        });
+                    }
 
                     // add page_id
                     Ok(())

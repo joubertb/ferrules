@@ -5,6 +5,7 @@ use crate::{
     debug_print,
     entities::{Element, ElementID, ElementType, Line, PageID},
     layout::model::LayoutBBox,
+    sentence_detection::detect_sentence_ends,
 };
 use lazy_static::lazy_static;
 use regex::Regex;
@@ -568,10 +569,12 @@ pub(crate) fn merge_elements_into_blocks(
                     kind: crate::blocks::BlockType::TextBlock(TextBlock {
                         text: corrected_text.clone(),
                         fertext: if corrected_text != original_text {
-                            Some(original_text)
+                            Some(original_text.clone())
                         } else {
                             None
                         },
+                        char_spans: curr_el.get_serializable_char_spans(),
+                        sentence_ends: Vec::new(), // Will be computed after merging
                     }),
                     pages_id: vec![curr_el.page_id],
                     bbox: curr_el.bbox,
@@ -589,14 +592,58 @@ pub(crate) fn merge_elements_into_blocks(
                     if should_merge {
                         let next_el = element_it.next().unwrap();
                         if let BlockType::TextBlock(text_content) = &mut text_block.kind {
+                            // Get current text length for char_span offset adjustment
+                            let current_len = text_content.text.chars().count();
                             text_content.text.push('\n');
                             text_content.text.push_str(&next_el.text_block.text);
+
+                            // Merge fertext for accurate sentence detection
+                            // next_el.text_block.text is the original text before corrections
+                            let next_original_text = &next_el.text_block.text;
+                            let fertext_len = text_content
+                                .fertext
+                                .as_ref()
+                                .map(|f| f.chars().count())
+                                .unwrap_or(current_len);
+                            if let Some(ref mut fertext) = text_content.fertext {
+                                fertext.push('\n');
+                                fertext.push_str(next_original_text);
+                            } else {
+                                // Current has no fertext - create one from current text + next original
+                                let current_original = text_content.text.clone();
+                                let mut merged = current_original;
+                                merged.push('\n');
+                                merged.push_str(next_original_text);
+                                text_content.fertext = Some(merged);
+                            }
+
+                            // Collect char_spans from next element with adjusted offsets
+                            let offset = fertext_len + 1; // +1 for newline
+                            for span in next_el.get_serializable_char_spans() {
+                                text_content.char_spans.push(
+                                    crate::entities::SerializableCharSpan {
+                                        bbox: span.bbox,
+                                        text: span.text,
+                                        char_start: span.char_start + offset,
+                                        char_end: span.char_end + offset,
+                                    },
+                                );
+                            }
                         }
                         text_block.bbox.merge(&next_el.bbox);
                     } else {
                         break;
                     }
                 }
+
+                // Compute sentence end positions for the final merged text
+                if let BlockType::TextBlock(text_content) = &mut text_block.kind {
+                    // Use fertext (original text) for sentence detection since char_spans map to it
+                    let text_for_detection =
+                        text_content.fertext.as_ref().unwrap_or(&text_content.text);
+                    text_content.sentence_ends = detect_sentence_ends(text_for_detection);
+                }
+
                 block_id += 1;
                 blocks.push(text_block);
             }
@@ -696,7 +743,9 @@ pub(crate) fn merge_elements_into_blocks(
                         None => {
                             // last element -> transform to txt block and break
                             let original_text = curr_el.text_block.text.clone();
+                            let char_spans = curr_el.get_serializable_char_spans();
                             let processed_text = apply_corrections_to_text(curr_el.text_block.text);
+                            let sentence_ends = detect_sentence_ends(&original_text);
 
                             let text_block = Block {
                                 id: block_id,
@@ -707,6 +756,8 @@ pub(crate) fn merge_elements_into_blocks(
                                     } else {
                                         None
                                     },
+                                    char_spans,
+                                    sentence_ends,
                                 }),
                                 pages_id: vec![curr_el.page_id],
                                 bbox: curr_el.bbox,
@@ -766,6 +817,7 @@ pub(crate) fn merge_elements_into_blocks(
                                     let original_text = curr_el.text_block.text.clone();
                                     let processed_text =
                                         apply_corrections_to_text(curr_el.text_block.text);
+                                    let sentence_ends = detect_sentence_ends(&original_text);
 
                                     let text_block = Block {
                                         id: block_id,
@@ -776,6 +828,8 @@ pub(crate) fn merge_elements_into_blocks(
                                             } else {
                                                 None
                                             },
+                                            char_spans: Vec::new(),
+                                            sentence_ends,
                                         }),
                                         pages_id: vec![curr_el.page_id],
                                         bbox: curr_el.bbox,
@@ -1340,6 +1394,8 @@ pub(crate) fn merge_elements_into_blocks(
                         } else {
                             None
                         },
+                        char_spans: Vec::new(),
+                        sentence_ends: Vec::new(),
                     }),
                     pages_id: vec![curr_el.page_id],
                     bbox: curr_el.bbox,
@@ -1386,6 +1442,8 @@ pub(crate) fn merge_elements_into_blocks(
                         } else {
                             None
                         },
+                        char_spans: Vec::new(),
+                        sentence_ends: Vec::new(),
                     }),
                     pages_id: vec![curr_el.page_id],
                     bbox: curr_el.bbox,
@@ -1446,6 +1504,8 @@ pub(crate) fn merge_elements_into_blocks(
                         } else {
                             None
                         },
+                        char_spans: curr_el.get_serializable_char_spans(),
+                        sentence_ends: Vec::new(),
                     }),
                     pages_id: vec![curr_el.page_id],
                     bbox: curr_el.bbox,
@@ -1530,6 +1590,8 @@ pub(crate) fn merge_elements_into_blocks(
                             block.kind = BlockType::Footer(TextBlock {
                                 text: text_block.text.clone(),
                                 fertext: text_block.fertext.clone(),
+                                char_spans: text_block.char_spans.clone(),
+                                sentence_ends: text_block.sentence_ends.clone(),
                             });
                         }
                     }

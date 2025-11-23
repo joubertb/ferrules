@@ -91,6 +91,7 @@ pub mod layout;
 mod modtext;
 pub mod ocr;
 pub mod render;
+pub mod sentence_detection;
 pub mod spacing;
 pub mod utils;
 
