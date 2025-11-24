@@ -321,6 +321,7 @@ impl Element {
                     text: span.text.clone(),
                     char_start: char_offset,
                     char_end: char_offset + span_len,
+                    page_id: self.page_id,
                 });
                 char_offset += span_len;
             }
@@ -388,17 +389,7 @@ pub struct SerializableCharSpan {
     pub text: String,
     pub char_start: usize,
     pub char_end: usize,
-}
-
-impl From<&CharSpan> for SerializableCharSpan {
-    fn from(span: &CharSpan) -> Self {
-        Self {
-            bbox: span.bbox.clone(),
-            text: span.text.clone(),
-            char_start: span.char_start_idx,
-            char_end: span.char_end_idx,
-        }
-    }
+    pub page_id: usize,
 }
 
 #[derive(Debug, Clone)]

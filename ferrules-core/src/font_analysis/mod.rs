@@ -102,7 +102,7 @@ pub fn correct_block(block: &mut crate::blocks::Block) {
         }
         BlockType::ListBlock(list_block) => {
             for item in &mut list_block.items {
-                apply_word_corrections(item);
+                apply_word_corrections(&mut item.text);
             }
         }
         BlockType::Title(title) => {

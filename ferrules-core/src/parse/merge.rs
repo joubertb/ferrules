@@ -626,6 +626,7 @@ pub(crate) fn merge_elements_into_blocks(
                                         text: span.text,
                                         char_start: span.char_start + offset,
                                         char_end: span.char_end + offset,
+                                        page_id: span.page_id,
                                     },
                                 );
                             }
@@ -690,10 +691,14 @@ pub(crate) fn merge_elements_into_blocks(
                     apply_corrections_to_text(curr_el.text_block.text.clone())
                 };
 
+                let first_item_char_spans = curr_el.get_serializable_char_spans();
                 let mut list_block = Block {
                     id: block_id,
                     kind: BlockType::ListBlock(List {
-                        items: vec![first_item_text],
+                        items: vec![crate::blocks::ListItem {
+                            text: first_item_text,
+                            char_spans: first_item_char_spans,
+                        }],
                     }),
                     pages_id: vec![curr_el.page_id],
                     bbox: curr_el.bbox,
@@ -726,7 +731,11 @@ pub(crate) fn merge_elements_into_blocks(
 
                         // Manually add the processed text to the list instead of using merge
                         if let BlockType::ListBlock(list) = &mut list_block.kind {
-                            list.items.push(processed_item_text);
+                            let item_char_spans = next_el.get_serializable_char_spans();
+                            list.items.push(crate::blocks::ListItem {
+                                text: processed_item_text,
+                                char_spans: item_char_spans,
+                            });
                         }
                         list_block.bbox.merge(&next_el.bbox);
                     } else {
@@ -1735,8 +1744,8 @@ mod tests {
         assert_eq!(blocks.len(), 2);
         if let BlockType::ListBlock(list) = &blocks[0].kind {
             assert_eq!(list.items.len(), 2);
-            assert_eq!(list.items[0], "First item");
-            assert_eq!(list.items[1], "Second item");
+            assert_eq!(list.items[0].text, "First item");
+            assert_eq!(list.items[1].text, "Second item");
         } else {
             panic!("Expected ListItem");
         }

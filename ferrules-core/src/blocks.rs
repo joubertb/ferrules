@@ -52,7 +52,7 @@ impl Title {
 
 impl List {
     /// Get the list items
-    pub fn items(&self) -> &[String] {
+    pub fn items(&self) -> &[ListItem] {
         &self.items
     }
 }
@@ -71,8 +71,16 @@ pub struct TextBlock {
 }
 
 #[derive(Debug, Default, Deserialize, Serialize)]
+pub struct ListItem {
+    pub(crate) text: String,
+    /// Character spans with bounding boxes for sentence highlighting
+    #[serde(skip_serializing_if = "Vec::is_empty", default)]
+    pub(crate) char_spans: Vec<SerializableCharSpan>,
+}
+
+#[derive(Debug, Default, Deserialize, Serialize)]
 pub struct List {
-    pub(crate) items: Vec<String>,
+    pub(crate) items: Vec<ListItem>,
 }
 
 #[derive(Debug, Default, Deserialize, Serialize)]
@@ -158,6 +166,7 @@ impl Block {
                             text: span.text,
                             char_start: span.char_start + offset,
                             char_end: span.char_end + offset,
+                            page_id: span.page_id,
                         });
                     }
 
@@ -175,7 +184,13 @@ impl Block {
                     // Apply word-level corrections to list item text
                     correction::apply_word_corrections(&mut txt);
 
-                    list.items.push(txt);
+                    // Collect char_spans from element
+                    let char_spans = element.get_serializable_char_spans();
+
+                    list.items.push(ListItem {
+                        text: txt,
+                        char_spans,
+                    });
                     Ok(())
                 } else {
                     bail!("can't merge element in Listblock")

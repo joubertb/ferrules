@@ -76,7 +76,7 @@ impl Renderer for HTMLRenderer {
             BlockType::ListBlock(list) => {
                 let mut ul = HtmlElement::new(HtmlTag::UnorderedList);
                 for item in &list.items {
-                    let clean_text = LIST_BULLET_REGEX.replace(item, "").into_owned();
+                    let clean_text = LIST_BULLET_REGEX.replace(&item.text, "").into_owned();
                     let li = HtmlElement::new(HtmlTag::ListElement)
                         .with_child(clean_text.as_str().into())
                         .into();
