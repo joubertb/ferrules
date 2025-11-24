@@ -22,27 +22,20 @@ pub(crate) fn parse_text_spans<'a>(
     let mut char_iter = chars.peekable();
 
     while let Some(char) = char_iter.next() {
-        let char_text = char.unicode_char().unwrap_or_default().to_string();
+        let mut char_text = char.unicode_char().unwrap_or_default().to_string();
+        let char_code = char.unicode_value();
 
-        // Debug specific character sequences for Vifijil analysis
-        if char_text == "V"
-            || char_text == "i"
-            || char_text == "f"
-            || char_text == "j"
-            || char_text == "l"
-            || char_text == "-"
-            || char_text == "‐"
-        {
-            let char_y = char
-                .tight_bounds()
-                .map(|b| page_bbox.height() - b.bottom.value)
-                .unwrap_or(0.0);
-            debug_print!(
-                "🔍 CHAR: '{}' (U+{:04X}) at y={:.1}",
-                char_text,
-                char.unicode_value(),
-                char_y
-            );
+        // Convert soft hyphen (U+00AD) to regular hyphen so it can be detected and removed later
+        if char_code == 0x00AD {
+            char_text = "-".to_string();
+        }
+
+        // U+0002 (STX - Start of Text) is used by some PDFs to mark hyphenated line breaks
+        // When we see U+0002, it means the word continues on the next line without a hyphen
+        // Convert U+0002 to a regular hyphen so downstream hyphen removal logic will join the words
+        // Example: "eva" + U+0002 + "sion" becomes "eva-sion" which gets cleaned to "evasion"
+        if char_code == 0x0002 {
+            char_text = "-".to_string();
         }
 
         // Check for line-ending hyphen pattern: only regular hyphens should be removed

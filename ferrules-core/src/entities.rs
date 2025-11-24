@@ -310,23 +310,32 @@ impl Element {
     /// Get serializable char spans with absolute character indices
     /// Used for PDF sentence highlighting in the UI
     pub fn get_serializable_char_spans(&self) -> Vec<SerializableCharSpan> {
+        // Flatten line_spans into a single vector for hyphen removal
+        let mut all_spans: Vec<CharSpan> = self
+            .line_spans
+            .iter()
+            .flat_map(|line| line.iter())
+            .cloned()
+            .collect();
+
+        // Apply hyphen removal to combine split words like "eva-" + "sion" → "evasion"
+        // This must happen BEFORE serialization to ensure char_spans reflect the corrected text
+        crate::modtext::apply_hyphen_removal_to_spans(&mut all_spans);
+
+        // Now create serializable spans with updated char offsets
         let mut result = Vec::new();
         let mut char_offset: usize = 0;
 
-        for line_spans in &self.line_spans {
-            for span in line_spans {
-                let span_len = span.text.chars().count();
-                result.push(SerializableCharSpan {
-                    bbox: span.bbox.clone(),
-                    text: span.text.clone(),
-                    char_start: char_offset,
-                    char_end: char_offset + span_len,
-                    page_id: self.page_id,
-                });
-                char_offset += span_len;
-            }
-            // Account for newline/space added between lines
-            char_offset += 1;
+        for span in all_spans {
+            let span_len = span.text.chars().count();
+            result.push(SerializableCharSpan {
+                bbox: span.bbox.clone(),
+                text: span.text.clone(),
+                char_start: char_offset,
+                char_end: char_offset + span_len,
+                page_id: self.page_id,
+            });
+            char_offset += span_len;
         }
 
         result

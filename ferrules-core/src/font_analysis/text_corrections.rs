@@ -71,9 +71,19 @@ pub fn fix_math_symbol_corruptions(text: &str) -> String {
 /// Apply basic character filtering to remove control characters
 ///
 /// This provides UTF-8 cleanup that works regardless of other correction availability.
+/// U+0002 (STX) is converted to hyphen as it's used by some PDFs for line-break hyphenation.
 pub fn filter_control_characters(text: &str) -> String {
     text.chars()
-        .filter(|&c| !c.is_control() || c == '\n' || c == '\r' || c == '\t')
+        .map(|c| {
+            // U+0002 (STX - Start of Text) is used by some PDFs to mark hyphenated line breaks
+            // Convert it to a regular hyphen so downstream logic can join the words
+            if c == '\u{0002}' {
+                '-'
+            } else {
+                c
+            }
+        })
+        .filter(|&c| !c.is_control() || c == '\n' || c == '\r' || c == '\t' || c == '-')
         .collect()
 }
 
@@ -84,7 +94,7 @@ pub fn apply_character_corrections(text: &str) -> String {
     // Apply control character corrections first, then filter remaining control characters
     text.chars()
         .filter_map(|c| match c {
-            '\u{0002}' => None, // STX control character → remove (line-break hyphenation)
+            '\u{0002}' => Some('-'), // STX control character → hyphen (line-break hyphenation marker)
             '\u{0012}' => Some('('), // DC2 control character → opening parenthesis
             '\u{0013}' => Some(')'), // DC3 control character → closing parenthesis
             '\u{0000}' => Some('('), // NULL character → opening parenthesis

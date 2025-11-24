@@ -54,6 +54,7 @@ fn remove_line_ending_hyphens(spans: &mut Vec<crate::entities::CharSpan>) {
 
         // Check if current span ends with line-ending hyphen pattern
         // Only process regular hyphens (U+002D), not em-dashes (U+2014) or en-dashes (U+2013)
+        // Note: U+0002 control characters are converted to hyphens in native.rs for consistent handling
         if current_span.text.len() > 1
             && current_span.text.ends_with('-')  // Regular hyphen only
             && !current_span.text.ends_with('—') // Not em-dash
@@ -355,6 +356,11 @@ pub fn process_text_with_spans(
     );
 
     cleaned_text
+}
+
+/// Public wrapper for hyphen removal, used by entities.rs during serialization
+pub fn apply_hyphen_removal_to_spans(spans: &mut Vec<crate::entities::CharSpan>) {
+    remove_line_ending_hyphens(spans);
 }
 
 /// Determine if two word parts likely form a compound word that should keep its hyphen
