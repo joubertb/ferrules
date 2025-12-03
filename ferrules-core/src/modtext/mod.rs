@@ -358,11 +358,6 @@ pub fn process_text_with_spans(
     cleaned_text
 }
 
-/// Public wrapper for hyphen removal, used by entities.rs during serialization
-pub fn apply_hyphen_removal_to_spans(spans: &mut Vec<crate::entities::CharSpan>) {
-    remove_line_ending_hyphens(spans);
-}
-
 /// Determine if two word parts likely form a compound word that should keep its hyphen
 ///
 /// This function identifies common compound word patterns to prevent incorrect hyphen removal.
