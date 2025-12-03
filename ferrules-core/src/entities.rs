@@ -309,33 +309,47 @@ impl Element {
 
     /// Get serializable char spans with absolute character indices
     /// Used for PDF sentence highlighting in the UI
+    ///
+    /// Character indices match the fertext which is built by:
+    /// 1. `concatenate_spans_with_spacing()` - adds spaces between spans within each line
+    ///    based on horizontal/vertical gaps (using `should_add_space_between_spans`)
+    /// 2. `.join(" ")` - joins lines with a space character
+    ///
+    /// No hyphen joining is done here - that's handled by the Python worker for TTS.
+    /// This keeps char_spans aligned with the original PDF text for accurate highlighting.
     pub fn get_serializable_char_spans(&self) -> Vec<SerializableCharSpan> {
-        // Flatten line_spans into a single vector for hyphen removal
-        let mut all_spans: Vec<CharSpan> = self
-            .line_spans
-            .iter()
-            .flat_map(|line| line.iter())
-            .cloned()
-            .collect();
-
-        // Apply hyphen removal to combine split words like "eva-" + "sion" → "evasion"
-        // This must happen BEFORE serialization to ensure char_spans reflect the corrected text
-        crate::modtext::apply_hyphen_removal_to_spans(&mut all_spans);
-
-        // Now create serializable spans with updated char offsets
         let mut result = Vec::new();
         let mut char_offset: usize = 0;
 
-        for span in all_spans {
-            let span_len = span.text.chars().count();
-            result.push(SerializableCharSpan {
-                bbox: span.bbox.clone(),
-                text: span.text.clone(),
-                char_start: char_offset,
-                char_end: char_offset + span_len,
-                page_id: self.page_id,
-            });
-            char_offset += span_len;
+        for (line_idx, line) in self.line_spans.iter().enumerate() {
+            // Add space before this line (except for the first line)
+            // This matches the .join(" ") behavior in fertext construction
+            if line_idx > 0 && !line.is_empty() {
+                char_offset += 1;
+            }
+
+            for (span_idx, span) in line.iter().enumerate() {
+                // Check if we need to add space before this span (within the line)
+                if span_idx > 0 {
+                    let prev_span = &line[span_idx - 1];
+                    // Use the same spacing logic as concatenate_spans_with_spacing
+                    let needs_space =
+                        crate::spacing::should_add_space_between_spans(prev_span, span, 5.0);
+                    if needs_space {
+                        char_offset += 1;
+                    }
+                }
+
+                let span_len = span.text.chars().count();
+                result.push(SerializableCharSpan {
+                    bbox: span.bbox.clone(),
+                    text: span.text.clone(),
+                    char_start: char_offset,
+                    char_end: char_offset + span_len,
+                    page_id: self.page_id,
+                });
+                char_offset += span_len;
+            }
         }
 
         result

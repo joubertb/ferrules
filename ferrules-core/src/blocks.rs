@@ -73,6 +73,8 @@ pub struct TextBlock {
 #[derive(Debug, Default, Deserialize, Serialize)]
 pub struct ListItem {
     pub(crate) text: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub(crate) fertext: Option<String>,
     /// Character spans with bounding boxes for sentence highlighting
     #[serde(skip_serializing_if = "Vec::is_empty", default)]
     pub(crate) char_spans: Vec<SerializableCharSpan>,
@@ -179,7 +181,8 @@ impl Block {
             BlockType::ListBlock(list) => {
                 if let ElementType::ListItem = &element.kind {
                     self.bbox.merge(&element.bbox);
-                    let mut txt = element.text_block.text.trim().to_string();
+                    let original_text = element.text_block.text.trim().to_string();
+                    let mut txt = original_text.clone();
 
                     // Apply word-level corrections to list item text
                     correction::apply_word_corrections(&mut txt);
@@ -189,6 +192,7 @@ impl Block {
 
                     list.items.push(ListItem {
                         text: txt,
+                        fertext: Some(original_text),
                         char_spans,
                     });
                     Ok(())

@@ -568,11 +568,9 @@ pub(crate) fn merge_elements_into_blocks(
                     id: block_id,
                     kind: crate::blocks::BlockType::TextBlock(TextBlock {
                         text: corrected_text.clone(),
-                        fertext: if corrected_text != original_text {
-                            Some(original_text.clone())
-                        } else {
-                            None
-                        },
+                        // Always set fertext to preserve original text for char_span alignment
+                        // char_spans are indexed to the original text, so fertext must always exist
+                        fertext: Some(original_text.clone()),
                         char_spans: curr_el.get_serializable_char_spans(),
                         sentence_ends: Vec::new(), // Will be computed after merging
                     }),
@@ -675,7 +673,7 @@ pub(crate) fn merge_elements_into_blocks(
             }
             ElementType::ListItem => {
                 // Process first list item with HTML tag detection
-                let first_item_text = if !curr_el.line_spans.is_empty() {
+                let (first_item_text, first_item_original) = if !curr_el.line_spans.is_empty() {
                     debug_print!(
                         "📋 LIST ITEM WITH SPANS: Processing first list item with {} line_spans for HTML tag detection",
                         curr_el.line_spans.len()
@@ -686,9 +684,14 @@ pub(crate) fn merge_elements_into_blocks(
                         .map(|line_spans| concatenate_spans_with_spacing(line_spans))
                         .collect::<Vec<String>>()
                         .join(" ");
-                    crate::modtext::process_text_with_spans(&original_text, &curr_el.line_spans)
+                    let processed = crate::modtext::process_text_with_spans(
+                        &original_text,
+                        &curr_el.line_spans,
+                    );
+                    (processed, original_text)
                 } else {
-                    apply_corrections_to_text(curr_el.text_block.text.clone())
+                    let original = curr_el.text_block.text.clone();
+                    (apply_corrections_to_text(original.clone()), original)
                 };
 
                 let first_item_char_spans = curr_el.get_serializable_char_spans();
@@ -697,6 +700,7 @@ pub(crate) fn merge_elements_into_blocks(
                     kind: BlockType::ListBlock(List {
                         items: vec![crate::blocks::ListItem {
                             text: first_item_text,
+                            fertext: Some(first_item_original),
                             char_spans: first_item_char_spans,
                         }],
                     }),
@@ -710,7 +714,8 @@ pub(crate) fn merge_elements_into_blocks(
                         let next_el = element_it.next().unwrap();
 
                         // Process additional list item with HTML tag detection before merging
-                        let processed_item_text = if !next_el.line_spans.is_empty() {
+                        let (processed_item_text, item_original) = if !next_el.line_spans.is_empty()
+                        {
                             debug_print!(
                                 "📋 LIST ITEM WITH SPANS: Processing additional list item with {} line_spans for HTML tag detection",
                                 next_el.line_spans.len()
@@ -721,12 +726,14 @@ pub(crate) fn merge_elements_into_blocks(
                                 .map(|line_spans| concatenate_spans_with_spacing(line_spans))
                                 .collect::<Vec<String>>()
                                 .join(" ");
-                            crate::modtext::process_text_with_spans(
+                            let processed = crate::modtext::process_text_with_spans(
                                 &original_text,
                                 &next_el.line_spans,
-                            )
+                            );
+                            (processed, original_text)
                         } else {
-                            apply_corrections_to_text(next_el.text_block.text.clone())
+                            let original = next_el.text_block.text.clone();
+                            (apply_corrections_to_text(original.clone()), original)
                         };
 
                         // Manually add the processed text to the list instead of using merge
@@ -734,6 +741,7 @@ pub(crate) fn merge_elements_into_blocks(
                             let item_char_spans = next_el.get_serializable_char_spans();
                             list.items.push(crate::blocks::ListItem {
                                 text: processed_item_text,
+                                fertext: Some(item_original),
                                 char_spans: item_char_spans,
                             });
                         }
@@ -760,11 +768,8 @@ pub(crate) fn merge_elements_into_blocks(
                                 id: block_id,
                                 kind: crate::blocks::BlockType::TextBlock(TextBlock {
                                     text: processed_text.clone(),
-                                    fertext: if processed_text != original_text {
-                                        Some(original_text)
-                                    } else {
-                                        None
-                                    },
+                                    // Always set fertext for char_span alignment
+                                    fertext: Some(original_text),
                                     char_spans,
                                     sentence_ends,
                                 }),
@@ -832,11 +837,8 @@ pub(crate) fn merge_elements_into_blocks(
                                         id: block_id,
                                         kind: crate::blocks::BlockType::TextBlock(TextBlock {
                                             text: processed_text.clone(),
-                                            fertext: if processed_text != original_text {
-                                                Some(original_text)
-                                            } else {
-                                                None
-                                            },
+                                            // Always set fertext for char_span alignment
+                                            fertext: Some(original_text),
                                             char_spans: Vec::new(),
                                             sentence_ends,
                                         }),
@@ -1398,11 +1400,8 @@ pub(crate) fn merge_elements_into_blocks(
                     id: block_id,
                     kind: BlockType::Header(TextBlock {
                         text: processed_text.clone(),
-                        fertext: if processed_text != original_text {
-                            Some(original_text)
-                        } else {
-                            None
-                        },
+                        // Always set fertext for char_span alignment
+                        fertext: Some(original_text),
                         char_spans: Vec::new(),
                         sentence_ends: Vec::new(),
                     }),
@@ -1446,11 +1445,8 @@ pub(crate) fn merge_elements_into_blocks(
                     id: block_id,
                     kind: BlockType::Footer(TextBlock {
                         text: processed_text.clone(),
-                        fertext: if processed_text != original_text {
-                            Some(original_text)
-                        } else {
-                            None
-                        },
+                        // Always set fertext for char_span alignment
+                        fertext: Some(original_text),
                         char_spans: Vec::new(),
                         sentence_ends: Vec::new(),
                     }),
@@ -1508,11 +1504,8 @@ pub(crate) fn merge_elements_into_blocks(
                     kind: BlockType::Title(Title {
                         level: *lvl,
                         text: processed_text.clone(),
-                        fertext: if processed_text != original_text {
-                            Some(original_text)
-                        } else {
-                            None
-                        },
+                        // Always set fertext for char_span alignment
+                        fertext: Some(original_text),
                         char_spans: curr_el.get_serializable_char_spans(),
                         sentence_ends: Vec::new(),
                     }),

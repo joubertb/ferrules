@@ -90,14 +90,20 @@ pub fn correct_spans_with_dictionary(spans: &mut [crate::entities::CharSpan]) {
 ///
 /// This is a compatibility wrapper that provides the same API as the previous
 /// correction module's correct_block function.
+///
+/// After applying corrections, sentence_ends is recomputed since corrections
+/// may change the text length (e.g., ligature expansion changes character count).
 pub fn correct_block(block: &mut crate::blocks::Block) {
     use crate::blocks::BlockType;
+    use crate::sentence_detection::detect_sentence_ends;
 
     match &mut block.kind {
         BlockType::TextBlock(text_block) => {
             apply_word_corrections(&mut text_block.text);
             if let Some(ref mut fertext) = text_block.fertext {
                 apply_word_corrections(fertext);
+                // Recompute sentence_ends since corrections may change text length
+                text_block.sentence_ends = detect_sentence_ends(fertext);
             }
         }
         BlockType::ListBlock(list_block) => {
@@ -109,6 +115,8 @@ pub fn correct_block(block: &mut crate::blocks::Block) {
             apply_word_corrections(&mut title.text);
             if let Some(ref mut fertext) = title.fertext {
                 apply_word_corrections(fertext);
+                // Recompute sentence_ends since corrections may change text length
+                title.sentence_ends = detect_sentence_ends(fertext);
             }
         }
         BlockType::Header(header) => {

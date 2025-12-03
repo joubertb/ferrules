@@ -122,4 +122,120 @@ mod tests {
         let ends = detect_sentence_ends(text);
         assert_eq!(ends.len(), 2);
     }
+
+    #[test]
+    fn test_mathbert_sentence_boundary() {
+        // Test case from actual PDF where sentence boundary splits a word
+        let text = "three tasks. Moreover, we qualitatively";
+        let ends = detect_sentence_ends(text);
+        println!("Text: {:?}", text);
+        println!("Detected ends: {:?}", ends);
+
+        // The period is at position 11
+        // The next sentence "Moreover, we qualitatively" should NOT split the word
+        for (i, end) in ends.iter().enumerate() {
+            let char_at_end: char = text.chars().nth(*end).unwrap();
+            println!("End {}: position {} = '{}'", i, end, char_at_end);
+        }
+
+        // First sentence ends at position 11 (the '.')
+        assert_eq!(ends[0], 11, "First sentence should end at period position");
+    }
+
+    #[test]
+    fn test_real_mathbert_text() {
+        // Actual text from the problematic PDF block
+        let text = "isting methods on all those three tasks. Moreover, we qualitatively show";
+        let ends = detect_sentence_ends(text);
+        println!("Text length: {}", text.len());
+        println!("Detected ends: {:?}", ends);
+
+        // Find where "three tasks." ends
+        let period_pos = text.find("tasks.").map(|i| i + 5); // position of the period
+        println!("Period after 'tasks' at position: {:?}", period_pos);
+
+        for (i, end) in ends.iter().enumerate() {
+            if *end < text.len() {
+                let char_at_end: char = text.chars().nth(*end).unwrap();
+                println!("End {}: position {} = '{}'", i, end, char_at_end);
+            }
+        }
+    }
+
+    #[test]
+    fn test_debug_sentence_segmentation() {
+        // The actual problematic part of the fertext
+        let text = "isting methods on all those three tasks. Moreover, we qualitatively";
+
+        println!("=== Debug sentence segmentation ===");
+        println!("Text: {:?}", text);
+        println!("Text length (chars): {}", text.chars().count());
+        println!();
+
+        let mut char_offset = 0;
+        for (i, segment) in text.split_sentence_bounds().enumerate() {
+            let segment_len = segment.chars().count();
+            let start = char_offset;
+            char_offset += segment_len;
+
+            println!(
+                "Segment {}: [{}, {}) len={} {:?}",
+                i, start, char_offset, segment_len, segment
+            );
+
+            let trimmed = segment.trim_end();
+            if !trimmed.is_empty() {
+                let last_char = trimmed.chars().last().unwrap();
+                if matches!(last_char, '.' | '!' | '?' | '…') {
+                    let punct_offset = char_offset - segment_len + trimmed.chars().count() - 1;
+                    println!(
+                        "  -> Sentence ends at position {} (char '{}')",
+                        punct_offset,
+                        text.chars().nth(punct_offset).unwrap_or('?')
+                    );
+                }
+            }
+        }
+    }
+
+    #[test]
+    fn test_full_block5_fertext() {
+        // This is the actual fertext from mathbert.pdf block 5
+        // Note: "demon- rate" is corrupted text from PDF extraction
+        let text = "Large-scale pre-trained models like BERT, have obtained a great success in various Natural Lan- guage Processing (NLP) tasks, while it is still a challenge to adapt them to the math-related tasks. Current pre-trained models neglect the structural features and the semantic correspondence between formula and its context. To address these issues, we propose a novel pre-trained model, namely Math- BERT , which is jointly trained with mathematical formulas and their corresponding contexts. In addi- tion, in order to further capture the semantic-level structural features of formulas, a new pre-training task is designed to predict the masked formula sub- structures extracted from the Operator Tree (OPT), which is the semantic structural representation of formulas. We conduct various experiments on three downstream tasks to evaluate the performance of MathBERT, including mathematical information retrieval, formula topic classification and formula headline generation. Experimental results demon- rate that MathBERT significantly outperforms ex- isting methods on all those three tasks. Moreover, we qualitatively show that this pre-trained model effectively captures the semantic-level structural information of formulas. To the best of our knowl- edge, MathBERT is the first pre-trained model for mathematical formula understanding.";
+
+        println!("Text length: {} chars", text.chars().count());
+
+        let ends = detect_sentence_ends(text);
+        println!("Detected ends: {:?}", ends);
+
+        // Find where "three tasks." ends
+        let tasks_idx = text.find("three tasks.").unwrap();
+        let period_pos = tasks_idx + 11; // position of the '.'
+        println!(
+            "\"three tasks.\" period at position {}: '{}'",
+            period_pos,
+            text.chars().nth(period_pos).unwrap()
+        );
+
+        // Check if sentence_ends includes this position
+        // If using inclusive positioning, should be 1090
+        // If using exclusive positioning (for Python slicing), should be 1091
+        println!();
+        for (i, end) in ends.iter().enumerate() {
+            if *end > 950 && *end < 1150 {
+                println!(
+                    "End {}: position {} = '{}'",
+                    i,
+                    end,
+                    text.chars().nth(*end).unwrap_or('?')
+                );
+            }
+        }
+
+        // The period at position 1090 should be included in sentence_ends
+        // Either as 1090 (inclusive) or there should be an end close to it
+        let closest_end = ends.iter().filter(|&&e| e >= 1080 && e <= 1100).next();
+        println!("\nClosest end to period position 1090: {:?}", closest_end);
+    }
 }
