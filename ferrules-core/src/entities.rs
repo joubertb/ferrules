@@ -415,6 +415,20 @@ pub struct SerializableCharSpan {
     pub page_id: usize,
 }
 
+/// Specifies the type of a CharSpan for selective processing
+///
+/// Different span types may skip certain processing stages. For example,
+/// fractions should not have subscript/superscript detection applied since
+/// they are already formatted correctly.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+pub enum SpanType {
+    /// Normal text span - all processing applied
+    #[default]
+    Normal,
+    /// Fraction span - skips subscript/superscript detection
+    Fraction,
+}
+
 #[derive(Debug, Clone)]
 pub struct CharSpan {
     pub bbox: BBox,
@@ -428,13 +442,11 @@ pub struct CharSpan {
     // Font diagnostic information
     pub original_unicode: Option<char>,
     pub has_corruption: bool,
+    /// Type of span for selective processing
+    pub span_type: SpanType,
 }
 
 impl CharSpan {
-    /// Y-position threshold for line break detection in CharSpan::append.
-    /// Characters with Y difference greater than this are placed in separate spans.
-    const LINE_BREAK_Y_THRESHOLD: f32 = 5.0;
-
     pub fn new_from_char(char: &PdfPageTextChar, page_bbox: &BBox) -> Self {
         let font_name = char.font_name();
         let original_unicode = char.unicode_char();
@@ -510,6 +522,7 @@ impl CharSpan {
             char_end_idx: char.index(),
             original_unicode,
             has_corruption,
+            span_type: SpanType::Normal,
         }
     }
     pub fn append(&mut self, char: &PdfPageTextChar, page_bbox: &BBox) -> Option<()> {
@@ -531,8 +544,9 @@ impl CharSpan {
             );
 
             // Break on significant Y-position change (line break) for consistent line-level granularity
+            const LINE_BREAK_Y_THRESHOLD: f32 = 5.0;
             let y_diff = (char_bbox.y0 - self.bbox.y0).abs();
-            if y_diff > Self::LINE_BREAK_Y_THRESHOLD {
+            if y_diff > LINE_BREAK_Y_THRESHOLD {
                 return None;
             }
 

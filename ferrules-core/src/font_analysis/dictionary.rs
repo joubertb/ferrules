@@ -58,10 +58,7 @@ impl Default for SmartCorrectionConfig {
 /// Lightweight smart corrector with no owned data
 /// Safe to clone and use across multiple threads
 #[derive(Debug, Clone)]
-pub struct SmartCorrector {
-    #[allow(dead_code)]
-    config: SmartCorrectionConfig,
-}
+pub struct SmartCorrector {}
 
 impl SmartCorrector {
     /// Get or create the global SmartCorrector instance (recommended for efficiency)
@@ -72,7 +69,7 @@ impl SmartCorrector {
             Self::init_cache(&config)?;
             Self::init_thread_dictionary()?;
             info!("✅ SmartCorrector initialized (global instance)");
-            Ok(SmartCorrector { config })
+            Ok(SmartCorrector {})
         })
     }
 
@@ -86,7 +83,9 @@ impl SmartCorrector {
             info!("✅ SmartCorrector initialized (new instance)");
         }
 
-        Ok(Self { config })
+        // Config is used for initialization only, not stored
+        let _ = config;
+        Ok(Self {})
     }
 
     #[cfg(feature = "correction-engine")]

@@ -7,12 +7,12 @@
 //!
 //! ## Usage
 //!
-//! ### Mathematical Notation Processing
+//! ### Text Processing with Tags
 //! ```rust
 //! use ferrules_core::modtext;
 //!
-//! // Process mathematical subscripts and superscripts for better readability
-//! let enhanced = modtext::process_mathematical_notation(&char_spans);
+//! // Process text spans with subscript/superscript detection and HTML tags
+//! let enhanced = modtext::unified_text_processing(&char_spans, false);
 //! ```
 //!
 //! ### Feature Flag
@@ -20,6 +20,7 @@
 //! all functions return unmodified text for minimal impact on performance.
 
 use crate::debug_print;
+use crate::entities::SpanType;
 
 /// Remove end-of-line hyphens from span text
 ///
@@ -78,8 +79,20 @@ fn remove_line_ending_hyphens(spans: &mut Vec<crate::entities::CharSpan>) {
             {
                 // Skip hyphen removal for likely compound words
                 // Common compound word patterns that should be preserved
-                let word_before = current_span.text.trim_end_matches('-');
-                let word_after = &next_span.text;
+                // Extract just the last word before the hyphen (not the entire span)
+                let text_without_hyphen = current_span.text.trim_end_matches('-');
+                let word_before = text_without_hyphen
+                    .rsplit(|c: char| c.is_whitespace() || c == '(' || c == ')')
+                    .next()
+                    .unwrap_or(text_without_hyphen);
+                // Extract just the first word from next span (stop at punctuation or space)
+                let word_after = next_span
+                    .text
+                    .split(|c: char| {
+                        c.is_whitespace() || c == '.' || c == ',' || c == ')' || c == '('
+                    })
+                    .next()
+                    .unwrap_or(&next_span.text);
 
                 // Check for common compound word patterns
                 let likely_compound = is_likely_compound_word(word_before, word_after);
@@ -95,7 +108,8 @@ fn remove_line_ending_hyphens(spans: &mut Vec<crate::entities::CharSpan>) {
                 }
 
                 // Combine: remove hyphen and join with next span
-                let combined_text = format!("{}{}", word_before, next_span.text);
+                // Use the full text without hyphen, not just the word_before
+                let combined_text = format!("{}{}", text_without_hyphen, next_span.text);
 
                 debug_print!(
                     "🔗 HYPHEN REMOVAL: '{}' + '{}' → '{}'",
@@ -150,35 +164,7 @@ fn apply_text_corrections_to_spans(spans: &mut [crate::entities::CharSpan]) {
 }
 
 #[cfg(feature = "modtext")]
-pub mod mathematical;
-
-#[cfg(feature = "modtext")]
 pub mod script_notation;
-
-/// Process text spans for mathematical notation enhancement
-///
-/// This is the main entry point for mathematical text processing.
-/// When the `modtext` feature is disabled, this returns the original text unchanged.
-///
-/// # Example
-/// ```rust
-/// use ferrules_core::modtext;
-///
-/// let enhanced = modtext::process_mathematical_notation(&char_spans);
-/// ```
-#[allow(dead_code)]
-pub fn process_mathematical_notation(spans: &[crate::entities::CharSpan]) -> String {
-    #[cfg(feature = "modtext")]
-    {
-        script_notation::apply_text_formatting(spans)
-    }
-
-    #[cfg(not(feature = "modtext"))]
-    {
-        // When feature is disabled, just concatenate the text without processing
-        spans.iter().map(|s| s.text.as_str()).collect()
-    }
-}
 
 /// Process text spans to add all appropriate tags (bold, subscript, superscript, formula)
 ///
@@ -219,22 +205,6 @@ pub fn unified_text_processing(spans: &[crate::entities::CharSpan], is_formula: 
 /// This maintains backward compatibility while using the new unified pipeline
 pub fn add_tags(spans: &[crate::entities::CharSpan]) -> String {
     unified_text_processing(spans, true) // Formulas get HTML corrections
-}
-
-/// Detect inline subscript patterns within text
-///
-/// When the `modtext` feature is disabled, this returns None.
-#[allow(dead_code)]
-pub fn detect_inline_subscript_pattern(_text: &str) -> Option<(String, String)> {
-    #[cfg(feature = "modtext")]
-    {
-        script_notation::detect_inline_subscript(_text)
-    }
-
-    #[cfg(not(feature = "modtext"))]
-    {
-        None
-    }
 }
 
 /// Process CharSpans into a flattened vector with line break detection
@@ -292,6 +262,7 @@ fn process_spans_with_line_breaks(
                         char_end_idx: span.char_end_idx,
                         original_unicode: None,
                         has_corruption: false,
+                        span_type: SpanType::Normal,
                     };
                     all_spans.push(separator_span);
 
@@ -366,59 +337,9 @@ fn is_likely_compound_word(word_before: &str, word_after: &str) -> bool {
     let before_lower = word_before.to_lowercase();
     let after_lower = word_after.to_lowercase();
 
-    // Common compound word patterns
-    let compound_patterns = [
-        // Technical/academic compounds
-        ("state", "of"),
-        ("art", "of"),
-        ("up", "to"),
-        ("well", "known"),
-        ("well", "established"),
-        ("high", "quality"),
-        ("high", "performance"),
-        ("low", "level"),
-        ("high", "level"),
-        ("real", "time"),
-        ("real", "world"),
-        ("large", "scale"),
-        ("small", "scale"),
-        ("fine", "tuned"),
-        ("pre", "trained"),
-        ("multi", "layer"),
-        ("multi", "head"),
-        ("cross", "attention"),
-        ("self", "attention"),
-        ("end", "to"),
-        ("to", "end"),
-        // Common prefixes that form compounds
-        ("non", ""),
-        ("pre", ""),
-        ("post", ""),
-        ("anti", ""),
-        ("pro", ""),
-        ("semi", ""),
-        ("multi", ""),
-        ("inter", ""),
-        ("intra", ""),
-        ("extra", ""),
-        ("ultra", ""),
-        ("super", ""),
-        ("sub", ""),
-        ("over", ""),
-        ("under", ""),
-        ("out", ""),
-        // Common academic/technical suffixes
-        ("", "based"),
-        ("", "driven"),
-        ("", "aware"),
-        ("", "specific"),
-        ("", "related"),
-        ("", "oriented"),
-        ("", "focused"),
-        ("", "free"),
-        ("", "like"),
-        ("", "wide"),
-    ];
+    // Common compound word patterns - not currently used since we rely on dictionary
+    // But kept here for reference if needed
+    let compound_patterns: [(&str, &str); 0] = [];
 
     // Check exact pattern matches
     for (first, second) in compound_patterns.iter() {
@@ -431,31 +352,7 @@ fn is_likely_compound_word(word_before: &str, word_after: &str) -> bool {
 
     // Additional heuristics for compound words:
 
-    // 1. Both parts are short (likely compound elements)
-    if word_before.len() <= 4 && word_after.len() <= 4 {
-        return true;
-    }
-
-    // 2. Pattern like "X-of-Y" compounds (state-of-the-art)
-    if after_lower.starts_with("of")
-        || after_lower.starts_with("the")
-        || after_lower.starts_with("a")
-    {
-        return true;
-    }
-
-    // 3. Technical prefixes
-    let tech_prefixes = [
-        "AI", "ML", "NLP", "LLM", "API", "GUI", "CLI", "HTTP", "HTTPS", "JSON", "XML",
-    ];
-    if tech_prefixes
-        .iter()
-        .any(|&prefix| before_lower == prefix.to_lowercase())
-    {
-        return true;
-    }
-
-    // 4. Numbers followed by units or descriptors (not usually line breaks)
+    // Numbers followed by units or descriptors (not usually line breaks)
     if word_before.chars().any(|c| c.is_numeric()) && word_after.len() <= 8 {
         return true;
     }
