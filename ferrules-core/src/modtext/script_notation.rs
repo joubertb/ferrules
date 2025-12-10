@@ -294,7 +294,7 @@
 //! - **Why extended range?** - Widens search area while maintaining MIN_BASELINE_SEPARATION filtering
 //! - **Statistical basis** - Mode calculation needs sufficient samples to avoid random outliers
 
-use crate::entities::CharSpan;
+use crate::entities::{CharSpan, SpanType};
 use crate::{debug_print, debug_println};
 use lazy_static::lazy_static;
 
@@ -324,9 +324,6 @@ const CLUSTERING_FONT_DIFFERENCE_THRESHOLD: f32 = 0.9; // One font must be <90% 
 
 /// Font-aware clustering: Y-threshold multiplier for spans with significant font differences
 const CLUSTERING_EXTENDED_Y_THRESHOLD_MULTIPLIER: f32 = 1.5; // Allow 50% more Y difference
-
-/// Relative baseline shift threshold - minimum shift as fraction of font size for script detection
-const RELATIVE_BASELINE_THRESHOLD: f32 = 0.3; // 30% of font size
 
 // === Per-Line Baseline Detection Constants ===
 // Note: LINE_DETECTION_THRESHOLD removed - we now use local Y-proximity filtering instead
@@ -365,91 +362,162 @@ const DEBUG_CHAR_LIMIT: usize = 100; // Character limit for debug output
 const DEBUG_TEXT_LIMIT: usize = 50; // Text limit for debug display
 const DEBUG_CLUSTER_TEXT_LIMIT: usize = 20; // Text limit for cluster debug display
 
-/// Configuration for subscript detection thresholds
-#[derive(Debug, Clone)]
-#[allow(dead_code)]
-pub(crate) struct SubscriptDetectionConfig {
-    /// Minimum absolute baseline shift (in points) to consider subscript detection
-    pub absolute_baseline_threshold: f32,
-
-    /// Maximum font size ratio (current/base) for text to be considered subscript
-    /// Default: 0.85 means font must be 85% or smaller than base font
-    pub font_size_ratio_threshold: f32,
-
-    /// Minimum relative baseline shift (as fraction of base font size)
-    /// Default: 0.3 means shift must be 30% or more of base font size
-    pub relative_baseline_threshold: f32,
-
-    /// Whether both font size AND baseline shift conditions must be met
-    /// true = AND logic (both conditions required)
-    /// false = OR logic (either condition sufficient)
-    pub use_and_logic: bool,
-
-    /// Threshold for returning to baseline to close subscript tags
-    pub return_threshold: f32,
-}
-
-impl Default for SubscriptDetectionConfig {
-    fn default() -> Self {
-        Self {
-            absolute_baseline_threshold: 3.0,
-            font_size_ratio_threshold: FONT_SIZE_SCRIPT_THRESHOLD,
-            relative_baseline_threshold: RELATIVE_BASELINE_THRESHOLD,
-            use_and_logic: true,
-            return_threshold: 2.0,
-        }
-    }
-}
-
-impl SubscriptDetectionConfig {
-    /// Create a more permissive configuration for PDFs with subtle subscripts
-    #[allow(dead_code)]
-    pub fn permissive() -> Self {
-        Self {
-            absolute_baseline_threshold: 2.0,
-            font_size_ratio_threshold: 0.95,
-            relative_baseline_threshold: 0.15,
-            use_and_logic: false, // OR logic - either condition works
-            return_threshold: 1.5,
-        }
-    }
-
-    /// Create a strict configuration for PDFs with clear subscript formatting
-    #[allow(dead_code)]
-    pub fn strict() -> Self {
-        Self {
-            absolute_baseline_threshold: 4.0,
-            font_size_ratio_threshold: 0.75,
-            relative_baseline_threshold: 0.4,
-            use_and_logic: true, // AND logic - both conditions required
-            return_threshold: 3.0,
-        }
-    }
-}
-
-/// Tag types that can be applied to text spans
-#[derive(Debug, Clone, PartialEq)]
-#[allow(dead_code)]
-pub(crate) enum TagType {
-    Bold,
-    Subscript,
-    Superscript,
-}
-
-/// Represents a range of characters that should be wrapped with a specific tag
-#[derive(Debug, Clone)]
-#[allow(dead_code)]
-pub(crate) struct TagRange {
-    pub start_span_index: usize,
-    pub end_span_index: usize,
-    pub start_char_index: usize,
-    pub end_char_index: usize,
-    pub tag_type: TagType,
-    pub content_spans: Vec<CharSpan>, // For recursive processing
-}
+// === Fraction Detection Constants ===
+// Detects mathematical fractions where numerator/denominator are vertically stacked
+// without a visible fraction bar (which PDFs render as a drawn line, not text)
+const FRACTION_GAP_THRESHOLD: f32 = 0.6; // Max gap between numerator and denominator (pt)
+const FRACTION_X_OVERLAP_MIN: f32 = 0.95; // Min horizontal overlap ratio (95%)
+const FRACTION_WIDTH_RATIO_MIN: f32 = 0.8; // Min width ratio between num/denom (80%)
+const FRACTION_MAX_TEXT_LEN: usize = 10; // Max length of numerator/denominator
+const FRACTION_MAX_HEIGHT: f32 = 10.0; // Max span height (pt) - fractions use smaller font
 
 /// Detect if superscript characters should be converted to subscripts in mathematical context
 /// This handles cases like D = {d1, d2} which should become D = {d<sub>1</sub>, d<sub>2</sub>}
+/// Check if a character is a Mathematical Italic letter
+fn is_math_italic(c: char) -> bool {
+    matches!(c, '𝐀'..='𝐳' | '𝐴'..='𝑧' | '𝑨'..='𝒛')
+}
+
+/// Check if text looks like an index (digits, unicode superscripts, single letters, math italic, uppercase letters)
+fn has_potential_index_pattern(text: &str) -> bool {
+    let text_no_spaces: String = text.chars().filter(|c| !c.is_whitespace()).collect();
+    let char_count_no_spaces = text_no_spaces.chars().count();
+
+    char_count_no_spaces <= 2
+        && (text_no_spaces.chars().all(|c| c.is_ascii_digit())
+            || text_no_spaces
+                .chars()
+                .any(|c| matches!(c, '¹' | '²' | '³' | '⁴' | '⁵' | '⁶' | '⁷' | '⁸' | '⁹' | '⁰'))
+            || (char_count_no_spaces == 1
+                && text_no_spaces.chars().next().unwrap().is_ascii_lowercase())
+            || (char_count_no_spaces == 1
+                && text_no_spaces
+                    .chars()
+                    .next()
+                    .map(|c| is_math_italic(c))
+                    .unwrap_or(false))
+            || (char_count_no_spaces == 2 && {
+                let mut chars = text_no_spaces.chars();
+                let first = chars.next().unwrap();
+                let second = chars.next().unwrap();
+                is_math_italic(first) && is_math_italic(second)
+            })
+            || (char_count_no_spaces == 1
+                && text_no_spaces.chars().next().unwrap().is_ascii_uppercase())
+            || (char_count_no_spaces == 2
+                && text_no_spaces.chars().all(|c| c.is_ascii_uppercase())))
+}
+
+/// Check if positioned higher than adjacent spans (true superscript position)
+fn is_true_superscript_position(
+    current_span: &CharSpan,
+    span_index: usize,
+    spans: &[CharSpan],
+) -> bool {
+    let current_y = current_span.bbox.y0;
+    let threshold = 1.5;
+
+    let higher_than_prev = if span_index > 0 {
+        let prev_y = spans[span_index - 1].bbox.y0;
+        current_y < prev_y - threshold
+    } else {
+        false
+    };
+
+    let higher_than_next = if span_index + 1 < spans.len() {
+        let next_y = spans[span_index + 1].bbox.y0;
+        current_y < next_y - threshold
+    } else {
+        false
+    };
+
+    higher_than_prev || higher_than_next
+}
+
+/// Context analysis results for mathematical patterns
+struct MathContextIndicators {
+    has_set_notation: bool,
+    has_equals_sign: bool,
+    has_mathematical_variable: bool,
+    has_academic_context: bool,
+    has_indexed_variables: bool,
+}
+
+/// Analyze context window for mathematical patterns
+fn analyze_context_for_math_indicators(context_text: &str) -> MathContextIndicators {
+    let has_set_notation = (context_text.contains('{') && context_text.contains('}'))
+        || (context_text.contains('(') && context_text.contains(')'))
+        || (context_text.contains("= (") && context_text.contains(','))
+        || (context_text.contains("= {") && context_text.contains(','));
+
+    let has_equals_sign = context_text.contains('=');
+
+    let has_mathematical_variable = context_text.chars().any(|c| {
+        matches!(
+            c,
+            '𝐀'..='𝐳' | '𝐴'..='𝑧' | '𝑨'..='𝒛'
+        )
+    });
+
+    let has_academic_context = context_text.to_lowercase().contains("document")
+        || context_text.to_lowercase().contains("dataset")
+        || context_text.contains("...")
+        || context_text.contains(". . .");
+
+    let has_indexed_variables = if has_set_notation {
+        let digit_count = context_text.chars().filter(|c| c.is_ascii_digit()).count();
+        let has_ellipsis = context_text.contains("...") || context_text.contains(". . .");
+        let has_multiple_indices = digit_count >= 2;
+        let has_comma_separation = context_text.contains(',') && has_multiple_indices;
+
+        has_ellipsis || has_multiple_indices || has_comma_separation
+    } else {
+        false
+    };
+
+    MathContextIndicators {
+        has_set_notation,
+        has_equals_sign,
+        has_mathematical_variable,
+        has_academic_context,
+        has_indexed_variables,
+    }
+}
+
+/// Detect patterns like "c²=a²+b²" (algebraic exponent expressions)
+fn is_algebraic_exponent_expression(context_text: &str) -> bool {
+    let mut exponent_pattern_count = 0;
+    let context_chars: Vec<char> = context_text.chars().collect();
+
+    for i in 0..context_chars.len().saturating_sub(1) {
+        let c = context_chars[i];
+        let next = context_chars[i + 1];
+
+        if (c.is_ascii_lowercase() || c.is_ascii_uppercase()) && next == '2' {
+            let is_part_of_year = i > 0 && context_chars[i - 1].is_ascii_digit();
+            if !is_part_of_year {
+                exponent_pattern_count += 1;
+            }
+        }
+    }
+
+    let has_plus_minus_operators = context_text.contains('+') || context_text.contains('-');
+    has_plus_minus_operators && exponent_pattern_count >= 2
+}
+
+/// Check for indexed set sequence patterns like "E={ e1, e2,..., eLE }"
+fn is_indexed_set_sequence(context_text: &str) -> bool {
+    let has_any_set_bracket = context_text.contains('{')
+        || context_text.contains('}')
+        || context_text.contains('(')
+        || context_text.contains(')');
+    let has_commas = context_text.contains(',');
+    let has_ellipsis = context_text.contains("...") || context_text.contains(". . .");
+    let digit_count = context_text.chars().filter(|c| c.is_ascii_digit()).count();
+
+    has_any_set_bracket && has_commas && has_ellipsis && digit_count >= 2
+}
+
 fn should_convert_superscript_to_subscript_in_math_context(
     current_span: &CharSpan,
     span_index: usize,
@@ -457,16 +525,7 @@ fn should_convert_superscript_to_subscript_in_math_context(
 ) -> bool {
     let text_trimmed = current_span.text.trim();
 
-    // Check if this contains digits or single characters that might be mathematical indices
-    let has_potential_index = text_trimmed.len() <= 2
-        && (
-            text_trimmed.chars().all(|c| c.is_ascii_digit()) ||  // Regular digits: 1, 2, 3
-        text_trimmed.chars().any(|c| matches!(c,
-            '¹' | '²' | '³' | '⁴' | '⁵' | '⁶' | '⁷' | '⁸' | '⁹' | '⁰'  // Unicode superscripts
-        )) ||
-        (text_trimmed.len() == 1 && text_trimmed.chars().next().unwrap().is_ascii_lowercase())
-            // Single letters: i, j, k, n
-        );
+    let has_potential_index = has_potential_index_pattern(text_trimmed);
 
     debug_print!(
         "🔍 MATH INDEX CHECK: '{}' has_potential_index={}",
@@ -478,66 +537,55 @@ fn should_convert_superscript_to_subscript_in_math_context(
         return false;
     }
 
-    // Look for mathematical context in a wider window (±8 spans to catch full context)
-    let window_start = span_index.saturating_sub(8);
-    let window_end = (span_index + 9).min(spans.len());
+    if is_true_superscript_position(current_span, span_index, spans) {
+        debug_print!(
+            "🔍 TRUE SUPERSCRIPT POSITION: '{}' is positioned higher than adjacent spans, not converting to subscript",
+            text_trimmed
+        );
+        return false;
+    }
+
+    let window_start = span_index.saturating_sub(25);
+    let window_end = (span_index + 26).min(spans.len());
     let context_text: String = spans[window_start..window_end]
         .iter()
         .map(|s| s.text.as_str())
         .collect();
 
-    // Specific set notation patterns that should use subscripts
-    // Check for parentheses notation like ( 𝑡1 , 𝑡2 , . . . , 𝑡𝑘 )
-    let has_set_notation = (context_text.contains('{') && context_text.contains('}'))
-        || (context_text.contains('(') && context_text.contains(')'));
-    let has_equals_sign = context_text.contains('=');
+    if is_algebraic_exponent_expression(&context_text) {
+        return false;
+    }
 
-    // Look for mathematical variables (Unicode mathematical symbols are strong indicators)
-    let has_mathematical_variable = context_text.chars().any(|c|
-        // Unicode mathematical script characters are definitive
-        matches!(c, '𝑑' | '𝑥' | '𝑦' | '𝑧' | '𝑛' | '𝑚' | '𝑞' | '𝑟' | '𝐀'..='𝑍' | '𝒂'..='𝒛'));
+    let indicators = analyze_context_for_math_indicators(&context_text);
 
-    // Check for academic/mathematical context keywords
-    let has_academic_context = context_text.to_lowercase().contains("document")
-        || context_text.to_lowercase().contains("dataset")
-        || context_text.contains("...")
-        || context_text.contains(". . .");
+    let is_set_notation_context = indicators.has_set_notation
+        && indicators.has_equals_sign
+        && (indicators.has_mathematical_variable
+            || indicators.has_academic_context
+            || indicators.has_indexed_variables);
 
-    // Look for set notation with indexed elements pattern
-    // Patterns:
-    // - DX = { dx1, dx2, ...}
-    // - QR = { qr1, qr2, ... qrn }
-    // - Any = { prefix1, prefix2, ..., prefixN }
-    let has_indexed_variables = if has_set_notation {
-        // Count digits in the context (likely subscripts in set notation)
-        let digit_count = context_text.chars().filter(|c| c.is_ascii_digit()).count();
+    let is_math_variable_context = indicators.has_mathematical_variable
+        && indicators.has_equals_sign
+        && indicators.has_academic_context;
 
-        // Look for ellipsis patterns (various forms)
-        let has_ellipsis = context_text.contains("...") || context_text.contains(". . .");
+    let is_comma_separated_math_sequence = indicators.has_mathematical_variable
+        && indicators.has_academic_context
+        && context_text.contains(',')
+        && (context_text.contains(')') || context_text.contains('}'));
 
-        // Multiple digits in a set context strongly suggests indexing
-        let has_multiple_indices = digit_count >= 2;
-
-        // Look for comma-separated pattern which is typical in sets
-        let has_comma_separation = context_text.contains(',') && has_multiple_indices;
-
-        has_ellipsis || has_multiple_indices || has_comma_separation
-    } else {
-        false
-    };
-
-    let is_mathematical_context = has_set_notation
-        && has_equals_sign
-        && (has_mathematical_variable || has_academic_context || has_indexed_variables);
+    let is_mathematical_context = is_set_notation_context
+        || is_math_variable_context
+        || is_comma_separated_math_sequence
+        || is_indexed_set_sequence(&context_text);
 
     debug_print!(
         "🧮 SET NOTATION CHECK: '{}' | set={} equals={} var={} academic={} indexed={} → convert={}",
         text_trimmed,
-        has_set_notation,
-        has_equals_sign,
-        has_mathematical_variable,
-        has_academic_context,
-        has_indexed_variables,
+        indicators.has_set_notation,
+        indicators.has_equals_sign,
+        indicators.has_mathematical_variable,
+        indicators.has_academic_context,
+        indicators.has_indexed_variables,
         is_mathematical_context
     );
     debug_print!(
@@ -548,6 +596,88 @@ fn should_convert_superscript_to_subscript_in_math_context(
     is_mathematical_context
 }
 
+/// Check if text contains prime symbols
+fn is_prime_symbol(text: &str) -> bool {
+    text == "'" || text == "′" || text == "″" || text == "‴"
+}
+
+/// Check if script detection should be skipped for this span
+fn should_skip_script_detection(span: &CharSpan) -> bool {
+    span.text.trim().is_empty() || span.span_type == SpanType::Fraction
+}
+
+/// Confidence calculation results for script detection
+struct ScriptConfidence {
+    v: f32,                 // Normalized vertical offset
+    s: f32,                 // Font shrinkage
+    confidence: f32,        // Composite confidence score
+    has_smaller_font: bool, // Font size threshold check
+}
+
+/// Calculate composite confidence score for subscript/superscript detection
+fn calculate_script_confidence(
+    span: &CharSpan,
+    sequential_diff: f32,
+    base_font_size: f32,
+    is_subscript: bool,
+) -> ScriptConfidence {
+    // Normalize by BASE font size, not current span's font size
+    let v = sequential_diff / base_font_size;
+
+    let s = if span.font_size < base_font_size {
+        1.0 - (span.font_size / base_font_size)
+    } else {
+        0.0
+    };
+
+    // Calculate directional confidence (subscript uses positive v, superscript uses negative v)
+    let raw_score = if is_subscript {
+        VERTICAL_WEIGHT * v.max(0.0) + SIZE_WEIGHT * s
+    } else {
+        VERTICAL_WEIGHT * (-v).max(0.0) + SIZE_WEIGHT * s
+    };
+
+    let denom = VERTICAL_WEIGHT * VERTICAL_REF + SIZE_WEIGHT * SIZE_REF;
+    let confidence =
+        (raw_score / denom).clamp(CONFIDENCE_NORMALIZATION_MIN, CONFIDENCE_NORMALIZATION_MAX);
+
+    let has_smaller_font = span.font_size < base_font_size * FONT_SIZE_SCRIPT_THRESHOLD;
+
+    ScriptConfidence {
+        v,
+        s,
+        confidence,
+        has_smaller_font,
+    }
+}
+
+/// Format script detection decision for debug output
+fn format_script_decision(
+    confidence: &ScriptConfidence,
+    is_likely: bool,
+    threshold: f32,
+    font_size_ratio: f32,
+) -> String {
+    if is_likely {
+        format!(
+            "✓ COMPOSITE_REAL (v={:.3} s={:.3} conf={:.3})",
+            confidence.v, confidence.s, confidence.confidence
+        )
+    } else if confidence.confidence <= threshold {
+        format!(
+            "LOW_CONFIDENCE (conf={:.3}<{:.3})",
+            confidence.confidence, threshold
+        )
+    } else if !confidence.has_smaller_font {
+        format!(
+            "FONT_TOO_LARGE (ratio={:.3}>={:.3})",
+            font_size_ratio, FONT_SIZE_SCRIPT_THRESHOLD
+        )
+    } else {
+        "UNKNOWN_REJECT".to_string()
+    }
+}
+
 /// Check if this baseline/font change represents a real superscript based on positioning and font metrics
 fn is_real_superscript(
     current_span: &CharSpan,
@@ -556,19 +686,13 @@ fn is_real_superscript(
     _is_first_span: bool,
     confidence_threshold: f32,
 ) -> bool {
-    // Real superscripts should have:
-    // 1. Significant font size reduction (typically 70% or smaller of base text)
-    // 2. UPWARD movement from previous character (NEGATIVE sequential_diff in PDF coordinates)
-    // 3. Movement that's proportional to character's font size
-
     let text_trimmed = current_span.text.trim();
-    if text_trimmed.is_empty() {
+
+    if should_skip_script_detection(current_span) {
         return false;
     }
 
-    // Special case: Prime symbols should always be superscripts regardless of positioning
-    if text_trimmed == "'" || text_trimmed == "′" || text_trimmed == "″" || text_trimmed == "‴"
-    {
+    if is_prime_symbol(text_trimmed) {
         return true;
     }
 
@@ -577,48 +701,25 @@ fn is_real_superscript(
         return false;
     }
 
-    // Apply composite scoring (ChatGPT approach)
-    // Normalize by BASE font size, not current span's font size
-    let v = sequential_diff / base_font_size; // Normalized vertical offset (negative for upward)
-    let s = if current_span.font_size < base_font_size {
-        1.0 - (current_span.font_size / base_font_size) // Font shrinkage
-    } else {
-        0.0
-    };
+    let script_conf = calculate_script_confidence(
+        current_span,
+        sequential_diff,
+        base_font_size,
+        false, // is_subscript = false for superscript
+    );
 
-    // Calculate superscript confidence
-    let raw_sup = VERTICAL_WEIGHT * (-v).max(0.0) + SIZE_WEIGHT * s;
-    let denom = VERTICAL_WEIGHT * VERTICAL_REF + SIZE_WEIGHT * SIZE_REF;
-    let sup_confidence =
-        (raw_sup / denom).clamp(CONFIDENCE_NORMALIZATION_MIN, CONFIDENCE_NORMALIZATION_MAX);
-
-    // Use passed confidence threshold parameter
-
-    // Require both confidence threshold AND smaller font
-    let has_smaller_font = current_span.font_size < base_font_size * FONT_SIZE_SCRIPT_THRESHOLD;
-    let is_likely_superscript = sup_confidence > confidence_threshold && has_smaller_font;
+    let is_likely_superscript =
+        script_conf.confidence > confidence_threshold && script_conf.has_smaller_font;
 
     let font_size_ratio = current_span.font_size / base_font_size;
     let relative_sequential_shift = sequential_diff / current_span.font_size;
 
-    let decision_detail = if is_likely_superscript {
-        format!(
-            "COMPOSITE_REAL (v={:.3} s={:.3} conf={:.3})",
-            v, s, sup_confidence
-        )
-    } else if sup_confidence <= confidence_threshold {
-        format!(
-            "LOW_CONFIDENCE (conf={:.3}<{:.3})",
-            sup_confidence, confidence_threshold
-        )
-    } else if !has_smaller_font {
-        format!(
-            "FONT_TOO_LARGE (ratio={:.3}>={:.3})",
-            font_size_ratio, FONT_SIZE_SCRIPT_THRESHOLD
-        )
-    } else {
-        "UNKNOWN_REJECT".to_string()
-    };
+    let decision_detail = format_script_decision(
+        &script_conf,
+        is_likely_superscript,
+        confidence_threshold,
+        font_size_ratio,
+    );
 
     debug_print!(
         "🔍 SUPERSCRIPT CHECK: '{}' font_ratio={:.2} sequential_shift_ratio={:.2} → {}",
@@ -629,6 +730,405 @@ fn is_real_superscript(
     );
 
     is_likely_superscript
+}
+
+// === Fraction Detection ===
+// Detects mathematical fractions where numerator/denominator are vertically stacked
+// PDF fraction bars are drawn as graphic lines (not text), so we detect fractions
+// by finding vertically stacked, horizontally aligned mathematical expressions
+
+/// Represents a detected fraction with indices into the spans array
+#[derive(Debug)]
+struct DetectedFraction {
+    numerator_idx: usize,
+    denominator_idx: usize,
+}
+
+/// Represents a detected multi-span fraction where numerator/denominator span multiple spans
+#[derive(Debug)]
+struct DetectedMultiSpanFraction {
+    numerator_indices: Vec<usize>,
+    denominator_indices: Vec<usize>,
+}
+
+/// Represents a group of horizontally adjacent spans at similar Y-positions
+/// Used to combine individual character spans into logical expression groups
+#[derive(Debug)]
+struct SpanGroup {
+    indices: Vec<usize>,
+    combined_text: String,
+    bbox_x0: f32,
+    bbox_x1: f32,
+    bbox_y0: f32, // Top of the group (min y0)
+    bbox_y1: f32, // Bottom of the group (max y1)
+}
+
+/// Check if a text string looks like a mathematical expression (not regular words)
+fn is_math_expression(text: &str) -> bool {
+    let text = text.trim();
+    if text.is_empty() {
+        return false;
+    }
+
+    // Contains digits or operators
+    let has_digits = text.chars().any(|c| c.is_ascii_digit());
+    let has_operators = text
+        .chars()
+        .any(|c| matches!(c, '+' | '-' | '*' | '/' | '='));
+    let is_short_var = text.len() <= 3 && text.chars().all(|c| c.is_alphabetic());
+
+    // Exclude citation patterns (ending in ; ] ))
+    if text.ends_with(';') || text.ends_with(']') || text.ends_with(')') {
+        return false;
+    }
+
+    // Exclude regular lowercase words longer than 3 chars
+    if text.len() > 3
+        && text.chars().all(|c| c.is_alphabetic())
+        && text.chars().all(|c| c.is_lowercase())
+    {
+        return false;
+    }
+
+    has_digits || has_operators || is_short_var
+}
+
+/// Constants for span grouping (used for multi-span fraction detection)
+const SPAN_GROUP_Y_TOLERANCE: f32 = 3.0; // Max Y-position difference to be considered same line
+const SPAN_GROUP_MAX_X_GAP: f32 = 8.0; // Max horizontal gap between spans in a group
+const SPAN_MAX_INDIVIDUAL_WIDTH: f32 = 15.0; // Max width for individual spans to be considered for fraction grouping
+
+/// Group horizontally adjacent spans by Y-position into logical expression groups
+/// This helps detect fractions where numerator/denominator are made of multiple character spans
+fn group_horizontal_spans(spans: &[CharSpan]) -> Vec<SpanGroup> {
+    if spans.is_empty() {
+        return Vec::new();
+    }
+
+    // First, cluster spans by Y-position (group spans on the same visual line)
+    let mut y_clusters: Vec<Vec<(usize, &CharSpan)>> = Vec::new();
+
+    for (idx, span) in spans.iter().enumerate() {
+        // Skip whitespace-only or newline spans
+        let text = span.text.trim();
+        if text.is_empty() || text == "\r\n" || text == "\n" {
+            continue;
+        }
+
+        // Skip spans that are too wide - they're likely regular text, not fraction characters
+        // Multi-span fractions consist of narrow individual character spans
+        let span_width = span.bbox.x1 - span.bbox.x0;
+        if span_width > SPAN_MAX_INDIVIDUAL_WIDTH {
+            continue;
+        }
+
+        // Find a cluster with similar Y position
+        let span_y = span.bbox.y0;
+        let mut found_cluster = false;
+        for cluster in y_clusters.iter_mut() {
+            // Check if this span belongs to this cluster (Y within tolerance of any span in cluster)
+            let cluster_y_min = cluster
+                .iter()
+                .map(|(_, s)| s.bbox.y0)
+                .fold(f32::MAX, f32::min);
+            let cluster_y_max = cluster
+                .iter()
+                .map(|(_, s)| s.bbox.y0)
+                .fold(f32::MIN, f32::max);
+
+            // Span belongs to cluster if within Y_TOLERANCE of the cluster's Y range
+            if span_y >= cluster_y_min - SPAN_GROUP_Y_TOLERANCE
+                && span_y <= cluster_y_max + SPAN_GROUP_Y_TOLERANCE
+            {
+                cluster.push((idx, span));
+                found_cluster = true;
+                break;
+            }
+        }
+
+        if !found_cluster {
+            y_clusters.push(vec![(idx, span)]);
+        }
+    }
+
+    // Sort each cluster by X position to get proper reading order
+    for cluster in y_clusters.iter_mut() {
+        cluster.sort_by(|a, b| {
+            a.1.bbox
+                .x0
+                .partial_cmp(&b.1.bbox.x0)
+                .unwrap_or(std::cmp::Ordering::Equal)
+        });
+    }
+
+    // Now group horizontally adjacent spans within each Y-cluster
+    let mut groups: Vec<SpanGroup> = Vec::new();
+
+    for cluster in y_clusters {
+        let mut current_group: Option<SpanGroup> = None;
+
+        for (idx, span) in cluster {
+            let text = span.text.trim();
+
+            let can_extend = current_group.as_ref().map_or(false, |group| {
+                // Check if horizontally adjacent (small gap)
+                let x_gap = span.bbox.x0 - group.bbox_x1;
+                x_gap < SPAN_GROUP_MAX_X_GAP && x_gap >= -1.0
+            });
+
+            if can_extend {
+                let group = current_group.as_mut().unwrap();
+                group.indices.push(idx);
+                group.combined_text.push_str(text);
+                group.bbox_x1 = span.bbox.x1;
+                group.bbox_y0 = group.bbox_y0.min(span.bbox.y0);
+                group.bbox_y1 = group.bbox_y1.max(span.bbox.y1);
+            } else {
+                // Finalize current group if it exists
+                if let Some(group) = current_group.take() {
+                    if is_math_expression(&group.combined_text) {
+                        groups.push(group);
+                    }
+                }
+                // Start new group
+                current_group = Some(SpanGroup {
+                    indices: vec![idx],
+                    combined_text: text.to_string(),
+                    bbox_x0: span.bbox.x0,
+                    bbox_x1: span.bbox.x1,
+                    bbox_y0: span.bbox.y0,
+                    bbox_y1: span.bbox.y1,
+                });
+            }
+        }
+
+        // Don't forget the last group in this cluster
+        if let Some(group) = current_group {
+            if is_math_expression(&group.combined_text) {
+                groups.push(group);
+            }
+        }
+    }
+
+    groups
+}
+
+/// Max width for multi-span fraction groups (pt) - prevents detecting text lines as fractions
+const FRACTION_MAX_GROUP_WIDTH: f32 = 50.0;
+/// Max text length for multi-span fraction groups - prevents sentence-length "fractions"
+const FRACTION_MAX_GROUP_TEXT_LEN: usize = 15;
+
+/// Check if two span groups form a mathematical fraction
+fn is_fraction_group_pair(top_group: &SpanGroup, bottom_group: &SpanGroup) -> bool {
+    // Must be mathematical expressions (already checked in group_horizontal_spans)
+    if top_group.combined_text.is_empty() || bottom_group.combined_text.is_empty() {
+        return false;
+    }
+
+    // Multi-span fractions should be SHORT - math like "a+b" not "sentence that spans the line"
+    if top_group.combined_text.len() > FRACTION_MAX_GROUP_TEXT_LEN
+        || bottom_group.combined_text.len() > FRACTION_MAX_GROUP_TEXT_LEN
+    {
+        return false;
+    }
+
+    // Check width - fractions are compact, not spanning entire text lines
+    let top_width = top_group.bbox_x1 - top_group.bbox_x0;
+    let bottom_width = bottom_group.bbox_x1 - bottom_group.bbox_x0;
+    if top_width > FRACTION_MAX_GROUP_WIDTH || bottom_width > FRACTION_MAX_GROUP_WIDTH {
+        return false;
+    }
+
+    // Check height (fractions use smaller font, so each part should be small)
+    let top_height = top_group.bbox_y1 - top_group.bbox_y0;
+    let bottom_height = bottom_group.bbox_y1 - bottom_group.bbox_y0;
+    if top_height > FRACTION_MAX_HEIGHT || bottom_height > FRACTION_MAX_HEIGHT {
+        return false;
+    }
+
+    // Check vertical gap - must be small (fraction bar position)
+    // For multi-span fractions, allow slightly larger gap since spans may have different baselines
+    let gap = bottom_group.bbox_y0 - top_group.bbox_y1;
+    if !(-1.0..=FRACTION_GAP_THRESHOLD + 4.0).contains(&gap) {
+        return false;
+    }
+
+    // Check horizontal alignment (groups must overlap horizontally)
+    let overlap_start = top_group.bbox_x0.max(bottom_group.bbox_x0);
+    let overlap_end = top_group.bbox_x1.min(bottom_group.bbox_x1);
+    let overlap = (overlap_end - overlap_start).max(0.0);
+    let min_width = top_width.min(bottom_width);
+    if min_width <= 0.0 {
+        return false;
+    }
+    let overlap_ratio = overlap / min_width;
+    // Require good horizontal alignment for fractions
+    if overlap_ratio < 0.7 {
+        return false;
+    }
+
+    // Check width similarity
+    let w_ratio = if top_width.max(bottom_width) == 0.0 {
+        0.0
+    } else {
+        top_width.min(bottom_width) / top_width.max(bottom_width)
+    };
+    // Require similar widths for fractions
+    if w_ratio < 0.5 {
+        return false;
+    }
+
+    debug_print!(
+        "📐 MULTI-SPAN FRACTION DETECTED: '{}' / '{}' (gap={:.2}pt, overlap={:.0}%, width_ratio={:.0}%, top_width={:.1}pt)",
+        top_group.combined_text,
+        bottom_group.combined_text,
+        gap,
+        overlap_ratio * 100.0,
+        w_ratio * 100.0,
+        top_width
+    );
+
+    true
+}
+
+/// Detect multi-span fractions where numerator/denominator consist of multiple character spans
+fn detect_multi_span_fractions(spans: &[CharSpan]) -> Vec<DetectedMultiSpanFraction> {
+    let groups = group_horizontal_spans(spans);
+
+    let mut fractions = Vec::new();
+
+    // Check all pairs of groups for fraction patterns
+    for (i, top_group) in groups.iter().enumerate() {
+        for (j, bottom_group) in groups.iter().enumerate() {
+            if i == j {
+                continue;
+            }
+            // Top group must be above bottom group
+            if top_group.bbox_y0 >= bottom_group.bbox_y0 {
+                continue;
+            }
+
+            if is_fraction_group_pair(top_group, bottom_group) {
+                fractions.push(DetectedMultiSpanFraction {
+                    numerator_indices: top_group.indices.clone(),
+                    denominator_indices: bottom_group.indices.clone(),
+                });
+            }
+        }
+    }
+
+    fractions
+}
+
+/// Calculate horizontal overlap ratio between two spans (0.0 to 1.0)
+fn x_overlap_ratio(span1: &CharSpan, span2: &CharSpan) -> f32 {
+    let x1_start = span1.bbox.x0;
+    let x1_end = span1.bbox.x1;
+    let x2_start = span2.bbox.x0;
+    let x2_end = span2.bbox.x1;
+
+    let overlap_start = x1_start.max(x2_start);
+    let overlap_end = x1_end.min(x2_end);
+    let overlap = (overlap_end - overlap_start).max(0.0);
+
+    let min_width = (x1_end - x1_start).min(x2_end - x2_start);
+    if min_width <= 0.0 {
+        return 0.0;
+    }
+    overlap / min_width
+}
+
+/// Calculate width ratio between two spans (smaller/larger, 0.0 to 1.0)
+fn width_ratio(span1: &CharSpan, span2: &CharSpan) -> f32 {
+    let w1 = span1.bbox.x1 - span1.bbox.x0;
+    let w2 = span2.bbox.x1 - span2.bbox.x0;
+    if w1.max(w2) == 0.0 {
+        return 0.0;
+    }
+    w1.min(w2) / w1.max(w2)
+}
+
+/// Check if two spans form a mathematical fraction (numerator over denominator)
+fn is_fraction_pair(top_span: &CharSpan, bottom_span: &CharSpan) -> bool {
+    let top_text = top_span.text.trim();
+    let bottom_text = bottom_span.text.trim();
+
+    // Basic length checks
+    if top_text.is_empty() || bottom_text.is_empty() {
+        return false;
+    }
+    if top_text.len() > FRACTION_MAX_TEXT_LEN || bottom_text.len() > FRACTION_MAX_TEXT_LEN {
+        return false;
+    }
+
+    // Must be mathematical expressions
+    if !is_math_expression(top_text) || !is_math_expression(bottom_text) {
+        return false;
+    }
+
+    // Check height (fractions use smaller font)
+    let top_height = top_span.bbox.y1 - top_span.bbox.y0;
+    let bottom_height = bottom_span.bbox.y1 - bottom_span.bbox.y0;
+    if top_height > FRACTION_MAX_HEIGHT || bottom_height > FRACTION_MAX_HEIGHT {
+        return false;
+    }
+
+    // Check vertical gap - must be very small (fraction bar position)
+    let gap = bottom_span.bbox.y0 - top_span.bbox.y1;
+    if !(-0.5..=FRACTION_GAP_THRESHOLD).contains(&gap) {
+        return false;
+    }
+
+    // Check horizontal alignment
+    let overlap = x_overlap_ratio(top_span, bottom_span);
+    if overlap < FRACTION_X_OVERLAP_MIN {
+        return false;
+    }
+
+    // Check width similarity
+    let w_ratio = width_ratio(top_span, bottom_span);
+    if w_ratio < FRACTION_WIDTH_RATIO_MIN {
+        return false;
+    }
+
+    debug_print!(
+        "📐 FRACTION DETECTED: '{}' / '{}' (gap={:.2}pt, overlap={:.0}%, width_ratio={:.0}%)",
+        top_text,
+        bottom_text,
+        gap,
+        overlap * 100.0,
+        w_ratio * 100.0
+    );
+
+    true
+}
+
+/// Detect all fractions in a list of spans
+/// Returns pairs of (numerator_idx, denominator_idx) for detected fractions
+fn detect_fractions(spans: &[CharSpan]) -> Vec<DetectedFraction> {
+    let mut fractions = Vec::new();
+
+    // Check all pairs of spans
+    for (i, top_span) in spans.iter().enumerate() {
+        for (j, bottom_span) in spans.iter().enumerate() {
+            if i == j {
+                continue;
+            }
+            // Top span must be above bottom span (lower y0 in PDF coords means higher on page)
+            if top_span.bbox.y0 >= bottom_span.bbox.y0 {
+                continue;
+            }
+
+            if is_fraction_pair(top_span, bottom_span) {
+                fractions.push(DetectedFraction {
+                    numerator_idx: i,
+                    denominator_idx: j,
+                });
+            }
+        }
+    }
+
+    fractions
 }
 
 /// Check if this baseline/font change represents a real subscript based on positioning and font metrics
@@ -642,19 +1142,13 @@ fn is_real_subscript(
     _current_index: usize,
     confidence_threshold: f32,
 ) -> bool {
-    // Real subscripts should have:
-    // 1. Significant font size reduction (typically 70% or smaller of base text)
-    // 2. DOWNWARD movement from previous character (POSITIVE sequential_diff in PDF coordinates)
-    // 3. Movement that's proportional to font size
-
     let text_trimmed = current_span.text.trim();
-    if text_trimmed.is_empty() {
+
+    if should_skip_script_detection(current_span) {
         return false;
     }
 
-    // Special case: Prime symbols should never be subscripts (they are always superscripts)
-    if text_trimmed == "'" || text_trimmed == "′" || text_trimmed == "″" || text_trimmed == "‴"
-    {
+    if is_prime_symbol(text_trimmed) {
         return false;
     }
 
@@ -664,7 +1158,6 @@ fn is_real_subscript(
     }
 
     // SPECIAL CASE: Mathematical variable subscripts (ni, nj, etc.) - be more lenient
-    let text_trimmed = current_span.text.trim();
     let is_mathematical_variable_case = if _current_index > 0 {
         let prev_text = _spans[_current_index - 1].text.trim();
         let is_var_case = prev_text.len() == 1
@@ -682,7 +1175,6 @@ fn is_real_subscript(
                     || text.contains('∩')
             });
 
-        // Debug output for the specific ni, nj cases
         if prev_text == "n" && (text_trimmed == "i" || text_trimmed == "j") {
             debug_print!(
                 "🔍 MATH VAR DEBUG: prev='{}' curr='{}' is_var_case={} diff={:.1} font_ratio={:.2}",
@@ -699,53 +1191,31 @@ fn is_real_subscript(
         false
     };
 
-    // Apply composite scoring (ChatGPT approach)
-    // Normalize by BASE font size, not current span's font size
-    let v = sequential_diff / base_font_size; // Normalized vertical offset (positive for downward)
-    let s = if current_span.font_size < base_font_size {
-        1.0 - (current_span.font_size / base_font_size) // Font shrinkage
-    } else {
-        0.0
-    };
+    let script_conf = calculate_script_confidence(
+        current_span,
+        sequential_diff,
+        base_font_size,
+        true, // is_subscript = true
+    );
 
-    // Calculate subscript confidence
-    let raw_sub = VERTICAL_WEIGHT * v.max(0.0) + SIZE_WEIGHT * s;
-    let denom = VERTICAL_WEIGHT * VERTICAL_REF + SIZE_WEIGHT * SIZE_REF;
-    let sub_confidence =
-        (raw_sub / denom).clamp(CONFIDENCE_NORMALIZATION_MIN, CONFIDENCE_NORMALIZATION_MAX);
-
-    // Use passed confidence threshold parameter (but be more lenient for mathematical variables)
     let effective_threshold = if is_mathematical_variable_case {
-        confidence_threshold * 0.1 // Much more lenient for mathematical variables
+        confidence_threshold * 0.1
     } else {
         confidence_threshold
     };
 
-    // Require both confidence threshold AND smaller font
-    let has_smaller_font = current_span.font_size < base_font_size * FONT_SIZE_SCRIPT_THRESHOLD;
-    let is_likely_subscript = sub_confidence > effective_threshold && has_smaller_font;
+    let is_likely_subscript =
+        script_conf.confidence > effective_threshold && script_conf.has_smaller_font;
 
     let font_size_ratio = current_span.font_size / base_font_size;
     let relative_sequential_shift = sequential_diff / current_span.font_size;
 
-    let decision_detail = if is_likely_subscript {
-        format!(
-            "✓ COMPOSITE_REAL (v={:.3} s={:.3} conf={:.3})",
-            v, s, sub_confidence
-        )
-    } else if sub_confidence <= confidence_threshold {
-        format!(
-            "LOW_CONFIDENCE (conf={:.3}<{:.3})",
-            sub_confidence, confidence_threshold
-        )
-    } else if !has_smaller_font {
-        format!(
-            "FONT_TOO_LARGE (ratio={:.3}>={:.3})",
-            font_size_ratio, FONT_SIZE_SCRIPT_THRESHOLD
-        )
-    } else {
-        "UNKNOWN_REJECT".to_string()
-    };
+    let decision_detail = format_script_decision(
+        &script_conf,
+        is_likely_subscript,
+        confidence_threshold,
+        font_size_ratio,
+    );
 
     debug_print!(
         "🔍 SUBSCRIPT DETAILED: '{}' font={:.1}/{:.1}({:.3}) sequential={:.1}({:.3}) thresholds=font<{FONT_SIZE_SCRIPT_THRESHOLD}&shift_abs>{PROPORTIONAL_SCRIPT_THRESHOLD}&upward<0.2 → {}",
@@ -972,12 +1442,24 @@ fn apply_clustering_formatting(spans: &[CharSpan]) -> String {
         }
 
         // Handle script changes based on clustering results
-        if is_sub && !in_subscript && !in_superscript {
+        // Apply mathematical context override: convert superscripts to subscripts in math notation
+        let mut actual_is_sub = is_sub;
+        let mut actual_is_sup = is_sup;
+        if is_sup && should_convert_superscript_to_subscript_in_math_context(span, i, spans) {
+            actual_is_sup = false;
+            actual_is_sub = true;
+            debug_print!(
+                "🧮 CLUSTER MATH OVERRIDE: Converting '{}' from superscript to subscript",
+                text_trimmed
+            );
+        }
+
+        if actual_is_sub && !in_subscript && !in_superscript {
             result.push_str("<sub>");
             tag_stack.push("</sub>");
             in_subscript = true;
             debug_print!("⬇️ CLUSTER SUB START: '{}'", text_trimmed);
-        } else if is_sup && !in_superscript && !in_subscript {
+        } else if actual_is_sup && !in_superscript && !in_subscript {
             // Skip <sup> tag for prime characters (apostrophes in superscript position)
             let is_prime = text_trimmed == "'";
             if !is_prime {
@@ -988,7 +1470,7 @@ fn apply_clustering_formatting(spans: &[CharSpan]) -> String {
             } else {
                 debug_print!("⬆️ CLUSTER PRIME: Skipping <sup> for prime character");
             }
-        } else if !is_sub && !is_sup {
+        } else if !actual_is_sub && !actual_is_sup {
             // Return to normal text
             if in_subscript {
                 close_tags_until(&mut result, &mut tag_stack, "</sub>");
@@ -1170,6 +1652,140 @@ pub(crate) fn apply_text_formatting(spans: &[CharSpan]) -> String {
     if spans.is_empty() {
         return String::new();
     }
+
+    // === FRACTION DETECTION ===
+    // Detect mathematical fractions (vertically stacked expressions without visible fraction bar)
+    // and create modified spans with "/" inserted between numerator and denominator
+    //
+    // First try single-span fraction detection (e.g., "1+2" over "3+4")
+    // If no single-span fractions found, try multi-span detection (e.g., "a" "+" "b" over "c" "+" "d")
+    let fractions = detect_fractions(spans);
+    let multi_span_fractions = if fractions.is_empty() {
+        detect_multi_span_fractions(spans)
+    } else {
+        Vec::new()
+    };
+
+    let spans_to_use: Vec<CharSpan> = if !fractions.is_empty() {
+        // Create a set of denominator indices (these will be skipped in output)
+        let denominator_indices: std::collections::HashSet<usize> =
+            fractions.iter().map(|f| f.denominator_idx).collect();
+
+        // Create modified spans where numerator text gets "/(denominator)" appended
+        let mut modified_spans: Vec<CharSpan> = Vec::with_capacity(spans.len());
+        for (i, span) in spans.iter().enumerate() {
+            // Check if this span is a numerator
+            if let Some(frac) = fractions.iter().find(|f| f.numerator_idx == i) {
+                // Append "/" and denominator text to this span
+                let denom_span = &spans[frac.denominator_idx];
+                let denom_text = denom_span.text.trim();
+                let mut new_span = span.clone();
+                new_span.text = format!("{}/{denom_text}", span.text.trim());
+                // Adjust bbox to span both numerator and denominator to prevent sub/sup detection
+                // Center the Y position between numerator and denominator
+                new_span.bbox.y0 = span.bbox.y0.min(denom_span.bbox.y0);
+                new_span.bbox.y1 = span.bbox.y1.max(denom_span.bbox.y1);
+                // Also expand X to cover both spans
+                new_span.bbox.x0 = span.bbox.x0.min(denom_span.bbox.x0);
+                new_span.bbox.x1 = span.bbox.x1.max(denom_span.bbox.x1);
+                // Use a larger font size to prevent small-font subscript detection
+                new_span.font_size = new_span.font_size.max(denom_span.font_size);
+                // Mark as fraction to skip subscript/superscript detection
+                new_span.span_type = SpanType::Fraction;
+                modified_spans.push(new_span);
+            } else if !denominator_indices.contains(&i) {
+                // Not a denominator, include as-is
+                modified_spans.push(span.clone());
+            }
+            // Skip denominators entirely (they're included in numerator text now)
+        }
+        modified_spans
+    } else if !multi_span_fractions.is_empty() {
+        // Handle multi-span fractions (e.g., "a+b" over "c+d" where each char is a separate span)
+        let mut all_num_indices: std::collections::HashSet<usize> =
+            std::collections::HashSet::new();
+        let mut all_denom_indices: std::collections::HashSet<usize> =
+            std::collections::HashSet::new();
+        for frac in &multi_span_fractions {
+            for &idx in &frac.numerator_indices {
+                all_num_indices.insert(idx);
+            }
+            for &idx in &frac.denominator_indices {
+                all_denom_indices.insert(idx);
+            }
+        }
+
+        let mut modified_spans: Vec<CharSpan> = Vec::new();
+        let mut processed_fractions: std::collections::HashSet<usize> =
+            std::collections::HashSet::new();
+
+        for (i, span) in spans.iter().enumerate() {
+            // Check if this span is the first span of a numerator
+            if let Some((frac_idx, frac)) = multi_span_fractions
+                .iter()
+                .enumerate()
+                .find(|(_, f)| f.numerator_indices.first() == Some(&i))
+            {
+                if processed_fractions.contains(&frac_idx) {
+                    continue;
+                }
+                processed_fractions.insert(frac_idx);
+
+                // Collect numerator text
+                let num_text: String = frac
+                    .numerator_indices
+                    .iter()
+                    .map(|&idx| spans[idx].text.trim())
+                    .collect::<Vec<_>>()
+                    .join(" ");
+
+                // Collect denominator text
+                let denom_text: String = frac
+                    .denominator_indices
+                    .iter()
+                    .map(|&idx| spans[idx].text.trim())
+                    .collect::<Vec<_>>()
+                    .join(" ");
+
+                // Compute combined bbox
+                let mut combined_bbox = span.bbox.clone();
+                for &idx in frac
+                    .numerator_indices
+                    .iter()
+                    .chain(frac.denominator_indices.iter())
+                {
+                    let s = &spans[idx];
+                    combined_bbox.x0 = combined_bbox.x0.min(s.bbox.x0);
+                    combined_bbox.x1 = combined_bbox.x1.max(s.bbox.x1);
+                    combined_bbox.y0 = combined_bbox.y0.min(s.bbox.y0);
+                    combined_bbox.y1 = combined_bbox.y1.max(s.bbox.y1);
+                }
+
+                // Find max font size
+                let max_font_size = frac
+                    .numerator_indices
+                    .iter()
+                    .chain(frac.denominator_indices.iter())
+                    .map(|&idx| spans[idx].font_size)
+                    .fold(0.0f32, |a, b| a.max(b));
+
+                let mut new_span = span.clone();
+                new_span.text = format!("{num_text} / {denom_text}");
+                new_span.bbox = combined_bbox;
+                new_span.font_size = max_font_size;
+                new_span.span_type = SpanType::Fraction;
+                modified_spans.push(new_span);
+            } else if !all_num_indices.contains(&i) && !all_denom_indices.contains(&i) {
+                // Not part of any fraction, include as-is
+                modified_spans.push(span.clone());
+            }
+            // Skip spans that are part of fractions (handled above)
+        }
+        modified_spans
+    } else {
+        spans.to_vec()
+    };
+    let spans = &spans_to_use[..];
 
     // HYBRID APPROACH: Check if we need clustering for complex formulas
     // Debug output for the specific problematic text
@@ -1828,13 +2444,6 @@ pub(crate) fn is_bold_text(span: &CharSpan) -> bool {
     false
 }
 
-/// Detect inline subscript patterns (stub for compatibility)
-pub(crate) fn detect_inline_subscript(_text: &str) -> Option<(String, String)> {
-    // TODO: Implement inline pattern detection for cases where subscripts
-    // appear within single text spans without font/baseline changes
-    None
-}
-
 /// Cluster characters into baseline groups for multiple-baseline subscript detection
 /// Returns clusters where each cluster represents characters sharing similar Y positions
 fn cluster_baselines(spans: &[CharSpan], y_threshold: f32) -> Vec<Vec<usize>> {
@@ -2072,7 +2681,9 @@ fn detect_using_sequential_comparison(
 
             let prev = &spans[idx - 1];
             let curr = &spans[idx];
-            let diff = calculate_baseline_difference(curr, prev.bbox.y1);
+            // Compare y0 (top) to y0 (top) for consistent baseline comparison
+            // Using y1 (bottom) causes issues when subscripts have smaller font sizes
+            let diff = calculate_baseline_difference(curr, prev.bbox.y0);
 
             let is_sub = is_real_subscript(curr, diff, prev.font_size, spans, idx, COMPOSITE_SUBSCRIPT_CONFIDENCE_THRESHOLD);
             let is_sup = is_real_superscript(curr, diff, prev.font_size, false, COMPOSITE_SUBSCRIPT_CONFIDENCE_THRESHOLD);
@@ -2407,92 +3018,124 @@ fn detect_subscripts_in_cluster_with_local_analysis(
             continue;
         }
 
-        // Use LOCAL mode baseline - only characters within ±3pt Y-range of current character
-        // This prevents baseline skew when clusters span multiple lines
-        const LOCAL_BASELINE_RANGE: f32 = 3.0; // ±3 points
+        // For subscript/superscript detection, the most reliable baseline is the PREVIOUS character
+        // When current span has smaller font (potential sub/superscript), use previous span's y0
+        // This matches the sequential comparison approach which works well
+        const LOCAL_BASELINE_RANGE: f32 = 4.0; // ±4 points
         const MIN_BASELINE_SEPARATION: f32 = 1.0; // Exclude chars too close to current position
 
         let local_baseline = {
             let current_y = current_span.bbox.y0;
-            let mut local_candidates: Vec<f32> = cluster_indices
-                .iter()
-                .filter(|&&idx| idx != span_idx) // Exclude current span
-                .filter(|&&idx| {
-                    let y_diff = (spans[idx].bbox.y0 - current_y).abs();
-                    y_diff > MIN_BASELINE_SEPARATION && y_diff <= LOCAL_BASELINE_RANGE
-                    // Must be separated but within range
-                })
-                .filter(|&&idx| spans[idx].font_size >= max_font_size * FONT_SIZE_SCRIPT_THRESHOLD)
-                .map(|&idx| spans[idx].bbox.y0)
-                .collect();
 
-            // If we don't have enough local candidates, try a slightly wider range
-            const MIN_RELIABLE_CANDIDATES: usize = 3; // Need at least 3 candidates for reliable baseline
-            if local_candidates.len() < MIN_RELIABLE_CANDIDATES {
-                const EXTENDED_LOCAL_RANGE: f32 = 5.0; // Try ±5pt if ±3pt didn't work
-                local_candidates = cluster_indices
+            // PRIORITY 1: If current span has smaller font size, use PREVIOUS span as baseline
+            // This is the most reliable approach for subscript/superscript detection
+            let has_smaller_font =
+                current_span.font_size < max_font_size * FONT_SIZE_SCRIPT_THRESHOLD;
+            let prev_span_baseline = if has_smaller_font && span_idx > 0 {
+                let prev = &spans[span_idx - 1];
+                // Use previous span only if it has larger font (is main text)
+                if prev.font_size >= max_font_size * FONT_SIZE_SCRIPT_THRESHOLD {
+                    debug_print!(
+                        "📍 PREV BASELINE for '{}': using previous span '{}' y0={:.1} (smaller font detected)",
+                        current_span.text.trim(),
+                        prev.text.trim(),
+                        prev.bbox.y0
+                    );
+                    Some(prev.bbox.y0)
+                } else {
+                    None
+                }
+            } else {
+                None
+            };
+
+            // If we have a previous span baseline, use it directly
+            if prev_span_baseline.is_some() {
+                prev_span_baseline
+            } else {
+                // PRIORITY 2: Fall back to local mode baseline calculation
+                let mut local_candidates: Vec<f32> = cluster_indices
                     .iter()
-                    .filter(|&&idx| idx != span_idx)
+                    .filter(|&&idx| idx != span_idx) // Exclude current span
                     .filter(|&&idx| {
                         let y_diff = (spans[idx].bbox.y0 - current_y).abs();
-                        y_diff > MIN_BASELINE_SEPARATION && y_diff <= EXTENDED_LOCAL_RANGE
+                        y_diff > MIN_BASELINE_SEPARATION && y_diff <= LOCAL_BASELINE_RANGE
+                        // Must be separated but within range
                     })
                     .filter(|&&idx| {
                         spans[idx].font_size >= max_font_size * FONT_SIZE_SCRIPT_THRESHOLD
                     })
                     .map(|&idx| spans[idx].bbox.y0)
                     .collect();
-            }
 
-            if local_candidates.len() >= MIN_RELIABLE_CANDIDATES {
-                // Calculate mode from local candidates
-                use std::collections::HashMap;
-                let mut y_counts: HashMap<i32, usize> = HashMap::new();
-                for &y in &local_candidates {
-                    let rounded = (y * 2.0).round() as i32;
-                    *y_counts.entry(rounded).or_insert(0) += 1;
+                // If we don't have enough local candidates, try a slightly wider range
+                const MIN_RELIABLE_CANDIDATES: usize = 3; // Need at least 3 candidates for reliable baseline
+                if local_candidates.len() < MIN_RELIABLE_CANDIDATES {
+                    const EXTENDED_LOCAL_RANGE: f32 = 5.0; // Try ±5pt if ±3pt didn't work
+                    local_candidates = cluster_indices
+                        .iter()
+                        .filter(|&&idx| idx != span_idx)
+                        .filter(|&&idx| {
+                            let y_diff = (spans[idx].bbox.y0 - current_y).abs();
+                            y_diff > MIN_BASELINE_SEPARATION && y_diff <= EXTENDED_LOCAL_RANGE
+                        })
+                        .filter(|&&idx| {
+                            spans[idx].font_size >= max_font_size * FONT_SIZE_SCRIPT_THRESHOLD
+                        })
+                        .map(|&idx| spans[idx].bbox.y0)
+                        .collect();
                 }
 
-                // Find mode with deterministic tie-breaking (prefer lower Y = higher on page)
-                if let Some((&mode_rounded, _)) =
-                    y_counts.iter().max_by(|(y1, count1), (y2, count2)| {
-                        count1.cmp(count2).then_with(|| y2.cmp(y1)) // Higher count wins; if tied, lower Y wins
-                    })
-                {
-                    let mode_f32 = mode_rounded as f32 / 2.0;
-                    let local_baseline_value = local_candidates
-                        .iter()
-                        .min_by(|&&a, &&b| {
-                            let dist_a = (a - mode_f32).abs();
-                            let dist_b = (b - mode_f32).abs();
-                            dist_a.partial_cmp(&dist_b).unwrap()
-                        })
-                        .copied();
+                if local_candidates.len() >= MIN_RELIABLE_CANDIDATES {
+                    // Calculate mode from local candidates
+                    use std::collections::HashMap;
+                    let mut y_counts: HashMap<i32, usize> = HashMap::new();
+                    for &y in &local_candidates {
+                        let rounded = (y * 2.0).round() as i32;
+                        *y_counts.entry(rounded).or_insert(0) += 1;
+                    }
 
-                    debug_print!(
+                    // Find mode with deterministic tie-breaking (prefer lower Y = higher on page)
+                    if let Some((&mode_rounded, _)) =
+                        y_counts.iter().max_by(|(y1, count1), (y2, count2)| {
+                            count1.cmp(count2).then_with(|| y2.cmp(y1)) // Higher count wins; if tied, lower Y wins
+                        })
+                    {
+                        let mode_f32 = mode_rounded as f32 / 2.0;
+                        let local_baseline_value = local_candidates
+                            .iter()
+                            .min_by(|&&a, &&b| {
+                                let dist_a = (a - mode_f32).abs();
+                                let dist_b = (b - mode_f32).abs();
+                                dist_a.partial_cmp(&dist_b).unwrap()
+                            })
+                            .copied();
+
+                        debug_print!(
                         "📍 LOCAL BASELINE for '{}': {:.1} (from {} local candidates within ±{}pt)",
                         current_span.text.trim(),
                         local_baseline_value.unwrap_or(0.0),
                         local_candidates.len(),
                         LOCAL_BASELINE_RANGE
                     );
-                    local_baseline_value
+                        local_baseline_value
+                    } else {
+                        debug_print!(
+                            "⚠️ LOCAL BASELINE: No mode found for '{}'",
+                            current_span.text.trim()
+                        );
+                        None
+                    }
                 } else {
+                    // Not enough local candidates, fall back to cluster baseline
                     debug_print!(
-                        "⚠️ LOCAL BASELINE: No mode found for '{}'",
-                        current_span.text.trim()
-                    );
-                    None
-                }
-            } else {
-                // Not enough local candidates, fall back to cluster baseline
-                debug_print!(
                     "⚠️ LOCAL BASELINE: Only {} local candidates for '{}', using cluster baseline",
                     local_candidates.len(),
                     current_span.text.trim()
                 );
-                cluster_baseline
-            }
+                    cluster_baseline
+                }
+            } // End of else block for prev_span_baseline check
         };
 
         let baseline = local_baseline;
@@ -2682,6 +3325,7 @@ mod tests {
             char_end_idx: text.len(),
             original_unicode: None,
             has_corruption: false,
+            span_type: SpanType::Normal,
         }
     }
 
