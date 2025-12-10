@@ -394,7 +394,7 @@ fn has_potential_index_pattern(text: &str) -> bool {
                 && text_no_spaces
                     .chars()
                     .next()
-                    .map(|c| is_math_italic(c))
+                    .map(is_math_italic)
                     .unwrap_or(false))
             || (char_count_no_spaces == 2 && {
                 let mut chars = text_no_spaces.chars();
@@ -870,10 +870,10 @@ fn group_horizontal_spans(spans: &[CharSpan]) -> Vec<SpanGroup> {
         for (idx, span) in cluster {
             let text = span.text.trim();
 
-            let can_extend = current_group.as_ref().map_or(false, |group| {
+            let can_extend = current_group.as_ref().is_some_and(|group| {
                 // Check if horizontally adjacent (small gap)
                 let x_gap = span.bbox.x0 - group.bbox_x1;
-                x_gap < SPAN_GROUP_MAX_X_GAP && x_gap >= -1.0
+                (-1.0..SPAN_GROUP_MAX_X_GAP).contains(&x_gap)
             });
 
             if can_extend {

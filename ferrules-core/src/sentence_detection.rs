@@ -235,7 +235,7 @@ mod tests {
 
         // The period at position 1090 should be included in sentence_ends
         // Either as 1090 (inclusive) or there should be an end close to it
-        let closest_end = ends.iter().filter(|&&e| e >= 1080 && e <= 1100).next();
+        let closest_end = ends.iter().find(|&&e| (1080..=1100).contains(&e));
         println!("\nClosest end to period position 1090: {:?}", closest_end);
     }
 }
