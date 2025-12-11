@@ -31,7 +31,7 @@ clap = { version = "4.5.20", features = ["derive"] }
 # pdf reader
 imageproc = "0.25.0"
 ab_glyph = "0.2.29"
-pdfium-render = { version = "0.8.27", features = [
+pdfium-render = { version = "=0.8.27", features = [
     "static",
     "bindings",
     "sync",
@@ -43,7 +43,7 @@ flate2 = "1.0"
 image = "0.25.5"
 ndarray = "0.16.1"
 plsfix = "0.1.7"
-ort = { version = "=2.0.0-rc.9", features = ["fetch-models"] }
+ort = { version = "=2.0.0-rc.10", features = ["fetch-models"] }
 serde_millis = "0.1.1"
 kmeans = "1.1.0"
 # Rendering
@@ -60,7 +60,7 @@ moka = { version = "0.12", features = ["future"], optional = true }
 unicode-segmentation = "1.12"
 
 [target.'cfg(target_os = "macos")'.dependencies]
-ort = { version = "=2.0.0-rc.9", features = ["coreml", "fetch-models"] }
+ort = { version = "=2.0.0-rc.10", features = ["coreml", "fetch-models"] }
 objc2 = { version = "^0.5.2" }
 objc2-foundation = { version = "^0.2.2" }
 objc2-vision = { version = "^0.2.2", features = [
@@ -73,7 +73,7 @@ objc2-vision = { version = "^0.2.2", features = [
 ] }
 
 [target.'cfg(target_os = "linux")'.dependencies]
-ort = { version = "=2.0.0-rc.9", features = [
+ort = { version = "=2.0.0-rc.10", features = [
     "fetch-models",
     "half",
     "cuda",

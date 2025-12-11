@@ -4,10 +4,11 @@ use lazy_static::lazy_static;
 use ndarray::{s, Array4, ArrayBase, Axis, Dim, OwnedRepr};
 use ort::{
     execution_providers::{
-        CPUExecutionProvider, CUDAExecutionProvider, CoreMLExecutionProvider,
-        TensorRTExecutionProvider,
+        coreml::CoreMLComputeUnits, CPUExecutionProvider, CUDAExecutionProvider,
+        CoreMLExecutionProvider, TensorRTExecutionProvider,
     },
-    session::{builder::GraphOptimizationLevel, Session},
+    session::{builder::GraphOptimizationLevel, run_options::RunOptions, Session},
+    value::Tensor,
 };
 
 use crate::{debug_print, entities::BBox};
@@ -103,9 +104,11 @@ impl LayoutBBox {
     }
 }
 
+use tokio::sync::Mutex;
+
 #[derive(Debug)]
 pub struct ORTLayoutParser {
-    session: Session,
+    session: Mutex<Session>,
     output_name: String,
     pub config: ORTConfig,
 }
@@ -130,16 +133,23 @@ impl ORTLayoutParser {
         &self,
         input: ArrayBase<OwnedRepr<f32>, Dim<[usize; 4]>>,
     ) -> anyhow::Result<ArrayBase<OwnedRepr<f32>, Dim<[usize; 3]>>> {
-        let outputs = &self.session.run_async(ort::inputs![input]?)?.await?;
+        let input_tensor = Tensor::from_array(input)?;
+        let run_options = RunOptions::new()?;
 
-        let output_tensor = outputs
+        let mut session = self.session.lock().await;
+        let outputs = session.run_async(ort::inputs![input_tensor], &run_options)?.await?;
+
+        let output_value = outputs
             .get(&self.output_name)
-            .context("can't get the value of first output")?
-            .try_extract_tensor::<f32>()?;
+            .context("can't get the value of first output")?;
+        let (shape, data) = output_value.try_extract_tensor::<f32>()?;
 
-        let output_tensor = output_tensor
-            .to_shape(Self::OUTPUT_SIZE)
-            .unwrap()
+        // Convert shape from i64 to usize for ndarray
+        let shape_usize: Vec<usize> = shape.iter().map(|&d| d as usize).collect();
+
+        // Reshape from flat data to the expected output shape
+        let output_tensor = ndarray::ArrayView::from_shape(shape_usize.as_slice(), data)?
+            .into_shape_with_order(Self::OUTPUT_SIZE)?
             .to_owned();
 
         Ok(output_tensor)
@@ -192,13 +202,11 @@ impl ORTLayoutParser {
                     );
                 }
                 OrtExecutionProvider::CoreML { ane_only } => {
-                    let provider = CoreMLExecutionProvider::default();
-                    let provider = if *ane_only {
-                        provider.with_ane_only().build()
-                    } else {
-                        provider.build()
-                    };
-                    execution_providers.push(provider)
+                    let mut provider = CoreMLExecutionProvider::default();
+                    if *ane_only {
+                        provider = provider.with_compute_units(CoreMLComputeUnits::CPUAndNeuralEngine);
+                    }
+                    execution_providers.push(provider.build())
                 }
                 OrtExecutionProvider::CPU => {
                     execution_providers.push(CPUExecutionProvider::default().build());
@@ -228,7 +236,7 @@ impl ORTLayoutParser {
             .to_owned();
 
         Ok(Self {
-            session,
+            session: Mutex::new(session),
             output_name,
             config,
         })
@@ -238,16 +246,22 @@ impl ORTLayoutParser {
         &self,
         input: ArrayBase<OwnedRepr<f32>, Dim<[usize; 4]>>,
     ) -> anyhow::Result<ArrayBase<OwnedRepr<f32>, Dim<[usize; 3]>>> {
-        let outputs = &self.session.run(ort::inputs![input]?)?;
+        let input_tensor = Tensor::from_array(input)?;
 
-        let output_tensor = outputs
+        let mut session = self.session.blocking_lock();
+        let outputs = session.run(ort::inputs![input_tensor])?;
+
+        let output_value = outputs
             .get(&self.output_name)
-            .context("can't get the value of first output")?
-            .try_extract_tensor::<f32>()?;
+            .context("can't get the value of first output")?;
+        let (shape, data) = output_value.try_extract_tensor::<f32>()?;
 
-        let output_tensor = output_tensor
-            .to_shape(Self::OUTPUT_SIZE)
-            .unwrap()
+        // Convert shape from i64 to usize for ndarray
+        let shape_usize: Vec<usize> = shape.iter().map(|&d| d as usize).collect();
+
+        // Reshape from flat data to the expected output shape
+        let output_tensor = ndarray::ArrayView::from_shape(shape_usize.as_slice(), data)?
+            .into_shape_with_order(Self::OUTPUT_SIZE)?
             .to_owned();
 
         Ok(output_tensor)
