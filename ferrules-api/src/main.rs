@@ -176,6 +176,7 @@ enum ParseEvent {
     #[serde(rename = "complete")]
     Complete {
         document: serde_json::Value,
+        markdown_url: String,
         total_pages: usize,
     },
     #[serde(rename = "cancelled")]
@@ -378,6 +379,41 @@ async fn get_image_handler(
     }
 }
 
+/// Handler to retrieve markdown output
+#[tracing::instrument(skip_all)]
+async fn get_markdown_handler(
+    Path(job_id): Path<String>,
+) -> Result<impl IntoResponse, (StatusCode, Json<ApiResponse<()>>)> {
+    if job_id.contains("..") || job_id.contains('/') || job_id.contains('\\') {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(ApiResponse {
+                success: false,
+                data: None,
+                error: Some("Invalid job_id: path traversal not allowed".to_string()),
+            }),
+        ));
+    }
+
+    let markdown_path = PathBuf::from(format!("/tmp/ferrules-api/{}/raw.md", job_id));
+
+    match tokio::fs::read_to_string(&markdown_path).await {
+        Ok(content) => Ok(Response::builder()
+            .status(StatusCode::OK)
+            .header(CONTENT_TYPE, "text/markdown; charset=utf-8")
+            .body(Body::from(content))
+            .unwrap()),
+        Err(_) => Err((
+            StatusCode::NOT_FOUND,
+            Json(ApiResponse {
+                success: false,
+                data: None,
+                error: Some("Markdown file not found".to_string()),
+            }),
+        )),
+    }
+}
+
 fn update_formula_img_paths(doc: &mut ferrules_core::entities::ParsedDocument, job_id: &str) {
     use ferrules_core::blocks::BlockType;
 
@@ -392,7 +428,7 @@ fn update_formula_img_paths(doc: &mut ferrules_core::entities::ParsedDocument, j
     }
 }
 
-fn cleanup_old_image_dirs(hours: u64) -> anyhow::Result<()> {
+fn cleanup_old_job_dirs(hours: u64) -> anyhow::Result<()> {
     let base_dir = PathBuf::from("/tmp/ferrules-api");
     if !base_dir.exists() {
         return Ok(());
@@ -414,13 +450,9 @@ fn cleanup_old_image_dirs(hours: u64) -> anyhow::Result<()> {
                 if let Ok(age) = now.duration_since(modified) {
                     if age > cutoff {
                         if let Err(e) = std::fs::remove_dir_all(&path) {
-                            tracing::warn!(
-                                "Failed to remove old image directory {:?}: {}",
-                                path,
-                                e
-                            );
+                            tracing::warn!("Failed to remove old job directory {:?}: {}", path, e);
                         } else {
-                            tracing::info!("Removed old image directory: {:?}", path);
+                            tracing::info!("Removed old job directory: {:?}", path);
                         }
                     }
                 }
@@ -504,6 +536,7 @@ async fn main() {
         .route("/debug/:doc_name", get(get_debug_handler))
         .route("/debug/:doc_name", delete(delete_debug_handler))
         .route("/images/:job_id/figures/:filename", get(get_image_handler))
+        .route("/markdown/:job_id", get(get_markdown_handler))
         .with_state(app_state)
         .layer(OtelAxumLayer::default())
         .layer(DefaultBodyLimit::max(MAX_SIZE_LIMIT));
@@ -520,10 +553,10 @@ async fn main() {
                 tracing::debug!("Debug file cleanup completed");
             }
 
-            if let Err(e) = cleanup_old_image_dirs(1) {
-                tracing::warn!("Failed to cleanup old image directories: {}", e);
+            if let Err(e) = cleanup_old_job_dirs(1) {
+                tracing::warn!("Failed to cleanup old job directories: {}", e);
             } else {
-                tracing::debug!("Image directory cleanup completed");
+                tracing::debug!("Job directory cleanup completed");
             }
         }
     });
@@ -1063,11 +1096,25 @@ async fn parse_document_sse_handler(
             Ok(mut doc) => {
                 if !cancellation_token_clone.is_cancelled() {
                     // Save formula images to /tmp/ferrules-api/{job_id}/figures/
-                    let figures_dir =
-                        PathBuf::from(format!("/tmp/ferrules-api/{}/figures", job_id));
+                    let job_dir = PathBuf::from(format!("/tmp/ferrules-api/{}", job_id));
+                    let figures_dir = job_dir.join("figures");
                     let _ = std::fs::create_dir_all(&figures_dir);
                     if let Err(e) = save_doc_images(&figures_dir, &doc) {
                         tracing::warn!("Failed to save formula images: {}", e);
+                    }
+
+                    // Generate and save markdown
+                    let markdown_url = format!("/markdown/{}", job_id);
+                    match to_markdown(&doc, &doc.doc_name, None) {
+                        Ok(markdown) => {
+                            let markdown_path = job_dir.join("raw.md");
+                            if let Err(e) = std::fs::write(&markdown_path, &markdown) {
+                                tracing::warn!("Failed to save markdown: {}", e);
+                            }
+                        }
+                        Err(e) => {
+                            tracing::warn!("Failed to generate markdown: {}", e);
+                        }
                     }
 
                     // Update formula_img paths to full API paths
@@ -1076,6 +1123,7 @@ async fn parse_document_sse_handler(
                     let _ = tx_clone
                         .send(ParseEvent::Complete {
                             document: serde_json::to_value(&doc).unwrap_or_default(),
+                            markdown_url,
                             total_pages: doc.pages.len(),
                         })
                         .await;
