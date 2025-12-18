@@ -137,7 +137,9 @@ impl ORTLayoutParser {
         let run_options = RunOptions::new()?;
 
         let mut session = self.session.lock().await;
-        let outputs = session.run_async(ort::inputs![input_tensor], &run_options)?.await?;
+        let outputs = session
+            .run_async(ort::inputs![input_tensor], &run_options)?
+            .await?;
 
         let output_value = outputs
             .get(&self.output_name)
@@ -204,7 +206,8 @@ impl ORTLayoutParser {
                 OrtExecutionProvider::CoreML { ane_only } => {
                     let mut provider = CoreMLExecutionProvider::default();
                     if *ane_only {
-                        provider = provider.with_compute_units(CoreMLComputeUnits::CPUAndNeuralEngine);
+                        provider =
+                            provider.with_compute_units(CoreMLComputeUnits::CPUAndNeuralEngine);
                     }
                     execution_providers.push(provider.build())
                 }
