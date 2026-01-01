@@ -7,8 +7,10 @@ pub type TitleLevel = u8;
 
 #[derive(Debug, Default, Deserialize, Serialize)]
 pub struct ImageBlock {
-    pub(crate) id: usize,
-    pub(crate) caption: Option<String>,
+    pub id: usize,
+    pub caption: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub image_path: Option<String>,
 }
 
 impl ImageBlock {
@@ -19,10 +21,12 @@ impl ImageBlock {
 
 #[derive(Debug, Default, Deserialize, Serialize)]
 pub struct FigureBlock {
-    pub(crate) id: usize,
-    pub(crate) embedded_texts: Vec<String>,
-    pub(crate) image_bbox: Option<BBox>,
-    pub(crate) caption: Option<String>,
+    pub id: usize,
+    pub embedded_texts: Vec<String>,
+    pub image_bbox: Option<BBox>,
+    pub caption: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub image_path: Option<String>,
 }
 
 impl FigureBlock {

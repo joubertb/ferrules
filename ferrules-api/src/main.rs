@@ -414,16 +414,27 @@ async fn get_markdown_handler(
     }
 }
 
-fn update_formula_img_paths(doc: &mut ferrules_core::entities::ParsedDocument, job_id: &str) {
+fn update_image_paths(doc: &mut ferrules_core::entities::ParsedDocument, job_id: &str) {
     use ferrules_core::blocks::BlockType;
 
     for block in &mut doc.blocks {
-        if let BlockType::Formula(ref mut formula) = block.kind {
-            if let Some(ref path) = formula.formula_img {
-                if let Some(filename) = path.split('/').next_back() {
-                    formula.formula_img = Some(format!("/images/{}/figures/{}", job_id, filename));
+        match &mut block.kind {
+            BlockType::Formula(ref mut formula) => {
+                if let Some(ref path) = formula.formula_img {
+                    if let Some(filename) = path.split('/').next_back() {
+                        formula.formula_img =
+                            Some(format!("/images/{}/figures/{}", job_id, filename));
+                    }
                 }
             }
+            BlockType::Image(ref mut image) => {
+                image.image_path = Some(format!("/images/{}/figures/img_{}.png", job_id, image.id));
+            }
+            BlockType::Figure(ref mut figure) => {
+                figure.image_path =
+                    Some(format!("/images/{}/figures/fig_{}.png", job_id, figure.id));
+            }
+            _ => {}
         }
     }
 }
@@ -769,7 +780,7 @@ async fn parse_document_handler(
     }
 
     // Update formula_img paths to full API paths
-    update_formula_img_paths(&mut doc, &doc_name);
+    update_image_paths(&mut doc, &doc_name);
 
     let accept_header = headers.get(ACCEPT).and_then(|h| h.to_str().ok());
 
@@ -1118,7 +1129,7 @@ async fn parse_document_sse_handler(
                     }
 
                     // Update formula_img paths to full API paths
-                    update_formula_img_paths(&mut doc, &job_id.to_string());
+                    update_image_paths(&mut doc, &job_id.to_string());
 
                     let _ = tx_clone
                         .send(ParseEvent::Complete {

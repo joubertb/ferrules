@@ -325,6 +325,7 @@ fn post_process_figure_blocks(blocks: &mut Vec<Block>) {
                         embedded_texts: figure_elements,
                         image_bbox: Some(block.bbox.clone()),
                         caption: image_block.caption.clone(),
+                        image_path: None,
                     }),
                     pages_id: block.pages_id.clone(),
                     bbox: figure_bbox,
@@ -500,6 +501,7 @@ pub(crate) fn merge_elements_into_blocks(
                             embedded_texts: figure_elements,
                             image_bbox: figure_image_bbox,
                             caption: Some(caption_text),
+                            image_path: None,
                         }),
                         pages_id: vec![curr_el.page_id],
                         bbox: figure_bbox,
@@ -816,6 +818,7 @@ pub(crate) fn merge_elements_into_blocks(
                                         kind: BlockType::Image(ImageBlock {
                                             id: image_id,
                                             caption: Some(caption_text),
+                                            image_path: None,
                                         }),
                                         pages_id: vec![next_el.page_id],
                                         bbox: curr_el.bbox,
@@ -922,6 +925,7 @@ pub(crate) fn merge_elements_into_blocks(
                                                 kind: crate::blocks::BlockType::Image(ImageBlock {
                                                     id: image_id,
                                                     caption: Some(caption_text),
+                                                    image_path: None,
                                                 }),
                                                 pages_id: vec![curr_el.page_id],
                                                 bbox: curr_el.bbox.clone(),
@@ -964,6 +968,7 @@ pub(crate) fn merge_elements_into_blocks(
                                     kind: crate::blocks::BlockType::Image(ImageBlock {
                                         id: image_id,
                                         caption, // From Caption element
+                                        image_path: None,
                                     }),
                                     pages_id: vec![curr_el.page_id],
                                     bbox: curr_el.bbox.clone(), // From Image element (correct)
@@ -1077,6 +1082,7 @@ pub(crate) fn merge_elements_into_blocks(
                                         embedded_texts: figure_elements,
                                         image_bbox: Some(curr_el.bbox.clone()),
                                         caption: None,
+                                        image_path: None,
                                     },
                                 ),
                                 pages_id: vec![curr_el.page_id],
@@ -1092,6 +1098,7 @@ pub(crate) fn merge_elements_into_blocks(
                                 kind: crate::blocks::BlockType::Image(ImageBlock {
                                     id: image_id,
                                     caption: None,
+                                    image_path: None,
                                 }),
                                 pages_id: vec![curr_el.page_id],
                                 bbox: curr_el.bbox,
@@ -1164,6 +1171,7 @@ pub(crate) fn merge_elements_into_blocks(
                                                     embedded_texts: figure_elements,
                                                     image_bbox: Some(curr_el.bbox.clone()),
                                                     caption: Some(caption_text),
+                                                    image_path: None,
                                                 },
                                             ),
                                             pages_id: vec![curr_el.page_id],
@@ -1176,6 +1184,7 @@ pub(crate) fn merge_elements_into_blocks(
                                             kind: crate::blocks::BlockType::Image(ImageBlock {
                                                 id: image_id,
                                                 caption: Some(caption_text),
+                                                image_path: None,
                                             }),
                                             pages_id: vec![curr_el.page_id],
                                             bbox: curr_el.bbox,
@@ -1220,6 +1229,7 @@ pub(crate) fn merge_elements_into_blocks(
                                                     embedded_texts: figure_elements,
                                                     image_bbox: Some(curr_el.bbox.clone()),
                                                     caption: None,
+                                                    image_path: None,
                                                 },
                                             ),
                                             pages_id: vec![curr_el.page_id],
@@ -1232,6 +1242,7 @@ pub(crate) fn merge_elements_into_blocks(
                                             kind: crate::blocks::BlockType::Image(ImageBlock {
                                                 id: image_id,
                                                 caption: None,
+                                                image_path: None,
                                             }),
                                             pages_id: vec![curr_el.page_id],
                                             bbox: curr_el.bbox,
@@ -1292,6 +1303,7 @@ pub(crate) fn merge_elements_into_blocks(
                                                 embedded_texts: figure_elements,
                                                 image_bbox: Some(curr_el.bbox.clone()),
                                                 caption: Some(caption_text),
+                                                image_path: None,
                                             },
                                         ),
                                         pages_id: vec![curr_el.page_id],
@@ -1304,6 +1316,7 @@ pub(crate) fn merge_elements_into_blocks(
                                         kind: crate::blocks::BlockType::Image(ImageBlock {
                                             id: image_id,
                                             caption: Some(caption_text),
+                                            image_path: None,
                                         }),
                                         pages_id: vec![curr_el.page_id],
                                         bbox: curr_el.bbox,
@@ -1340,6 +1353,7 @@ pub(crate) fn merge_elements_into_blocks(
                                                 embedded_texts: figure_elements,
                                                 image_bbox: Some(curr_el.bbox.clone()),
                                                 caption: None,
+                                                image_path: None,
                                             },
                                         ),
                                         pages_id: vec![curr_el.page_id],
@@ -1352,6 +1366,7 @@ pub(crate) fn merge_elements_into_blocks(
                                         kind: crate::blocks::BlockType::Image(ImageBlock {
                                             id: image_id,
                                             caption: None,
+                                            image_path: None,
                                         }),
                                         pages_id: vec![curr_el.page_id],
                                         bbox: curr_el.bbox,
