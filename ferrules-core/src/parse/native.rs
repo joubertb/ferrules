@@ -2,7 +2,9 @@ use std::{ops::Range, sync::Arc, time::Instant};
 
 use anyhow::Context;
 use image::DynamicImage;
-use pdfium_render::prelude::{PdfPage, PdfPageTextChar, PdfRenderConfig, Pdfium};
+use pdfium_render::prelude::{
+    PdfDocumentMetadataTagType, PdfPage, PdfPageTextChar, PdfRenderConfig, Pdfium,
+};
 use tracing::{instrument, Span};
 
 use crate::{
@@ -281,6 +283,7 @@ pub struct ParseNativePageResult {
     pub metadata: ParseNativeMetadata,
     pub is_count_result: bool,
     pub total_page_count: Option<usize>,
+    pub pdf_title: Option<String>,
 }
 
 #[derive(Debug, Clone)]
@@ -368,6 +371,7 @@ pub(crate) fn parse_page_native(
         },
         is_count_result: false,
         total_page_count: None,
+        pdf_title: None,
     })
 }
 
@@ -406,11 +410,20 @@ fn handle_parse_native_req(
     );
 
     let mut document = pdfium.load_pdf_from_byte_slice(&processed_pdf_data, password.as_deref())?;
+
+    // Extract PDF title from document metadata before taking mutable borrow for pages
+    let pdf_title = document
+        .metadata()
+        .get(PdfDocumentMetadataTagType::Title)
+        .map(|tag| tag.value().to_string())
+        .filter(|s| !s.trim().is_empty());
+
     let mut pages: Vec<_> = document.pages_mut().iter().enumerate().collect();
 
     // If only counting pages, send the count and return early
     if count_only {
         let total_pages = pages.len();
+
         use image::{DynamicImage, ImageBuffer};
         let dummy_image = DynamicImage::ImageRgb8(ImageBuffer::new(1, 1));
 
@@ -431,6 +444,7 @@ fn handle_parse_native_req(
             },
             is_count_result: true,
             total_page_count: Some(total_pages),
+            pdf_title,
         };
         sender_tx.blocking_send(Ok(count_result))?;
         return Ok(());

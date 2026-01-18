@@ -96,4 +96,4 @@ pub mod spacing;
 pub mod utils;
 
 mod parse;
-pub use parse::document::{FerrulesParseConfig, FerrulesParser};
+pub use parse::document::{FerrulesParseConfig, FerrulesParser, PdfMetadataResult};

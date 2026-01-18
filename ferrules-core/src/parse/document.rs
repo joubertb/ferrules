@@ -52,6 +52,15 @@ impl Default for FerrulesParseConfig<'_> {
     }
 }
 
+/// Result from PDF metadata extraction (page count and document metadata)
+#[derive(Debug, Clone)]
+pub struct PdfMetadataResult {
+    /// Total number of pages in the document
+    pub page_count: usize,
+    /// PDF title from document metadata (if present)
+    pub title: Option<String>,
+}
+
 async fn parse_task<F, C>(
     parse_native_result: ParseNativePageResult,
     layout_queue: ParseLayoutQueue,
@@ -183,6 +192,49 @@ impl FerrulesParser {
         }
     }
 
+    /// Gets PDF metadata including page count and title from the document.
+    /// This is more efficient than calling get_page_count separately when you need both.
+    pub async fn get_pdf_metadata(
+        &self,
+        doc: &[u8],
+        password: Option<&str>,
+    ) -> anyhow::Result<PdfMetadataResult> {
+        use super::native::ParseNativeRequest;
+
+        // Create a channel to receive the count result
+        let (result_tx, mut result_rx) = mpsc::channel(1);
+
+        // Create a count-only request
+        let request =
+            ParseNativeRequest::new_count_only(doc, password, result_tx, get_debug_context());
+
+        // Send the request to the native queue
+        self.native_queue
+            .push(request)
+            .await
+            .context("Failed to send metadata request to native queue")?;
+
+        // Wait for the result
+        let result = result_rx
+            .recv()
+            .await
+            .context("Failed to receive metadata result")?
+            .context("Native parsing error")?;
+
+        // Extract metadata from the result
+        if result.is_count_result {
+            let page_count = result
+                .total_page_count
+                .context("Count result missing total_page_count")?;
+            Ok(PdfMetadataResult {
+                page_count,
+                title: result.pdf_title,
+            })
+        } else {
+            anyhow::bail!("Received non-count result for metadata request")
+        }
+    }
+
     /// Parses a document into a structured format with optional page-level progress callback
     ///
     /// # Arguments
@@ -253,21 +305,47 @@ impl FerrulesParser {
             )
             .await?;
 
+        // Post-processing timing instrumentation
+        let post_pages_start = Instant::now();
+
+        // Element extraction
+        let extract_start = Instant::now();
         let all_elements = parsed_pages
             .iter()
             .flat_map(|p| p.elements.clone())
             .collect::<Vec<_>>();
+        tracing::info!(
+            "⏱️ Element extraction took {:?} ({} elements)",
+            extract_start.elapsed(),
+            all_elements.len()
+        );
 
+        // Title analysis
+        let title_start = Instant::now();
         let titles = all_elements
             .iter()
             .filter(|e| matches!(e.kind, ElementType::Title | ElementType::Subtitle))
             .collect::<Vec<_>>();
 
         let title_level = title_levels_kmeans(&titles, 6);
+        tracing::info!(
+            "⏱️ Title k-means took {:?} ({} titles)",
+            title_start.elapsed(),
+            titles.len()
+        );
 
+        // Page heights map
+        let page_heights_start = Instant::now();
         let page_heights: HashMap<usize, f32> =
             parsed_pages.iter().map(|sp| (sp.id, sp.height)).collect();
+        tracing::info!(
+            "⏱️ Page heights map took {:?} ({} pages)",
+            page_heights_start.elapsed(),
+            page_heights.len()
+        );
 
+        // Convert to doc pages
+        let doc_pages_start = Instant::now();
         let doc_pages = parsed_pages
             .into_iter()
             .map(|sp| Page {
@@ -278,8 +356,24 @@ impl FerrulesParser {
                 image: sp.image,
             })
             .collect();
+        tracing::info!(
+            "⏱️ Doc pages conversion took {:?}",
+            doc_pages_start.elapsed()
+        );
 
+        // Merge elements into blocks (the slow one)
+        let merge_start = Instant::now();
         let blocks = merge_elements_into_blocks(all_elements, title_level, page_heights)?;
+        tracing::info!(
+            "⏱️ merge_elements_into_blocks took {:?} ({} blocks)",
+            merge_start.elapsed(),
+            blocks.len()
+        );
+
+        tracing::info!(
+            "⏱️ Total parse_document post-processing took {:?}",
+            post_pages_start.elapsed()
+        );
 
         let duration = start_time.elapsed();
 

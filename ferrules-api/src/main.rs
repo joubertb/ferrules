@@ -166,7 +166,11 @@ struct ParseOptions {
 #[serde(tag = "type")]
 enum ParseEvent {
     #[serde(rename = "job_started")]
-    JobStarted { job_id: Uuid },
+    JobStarted {
+        job_id: Uuid,
+        total_pages: usize,
+        title: Option<String>,
+    },
     #[serde(rename = "progress")]
     Progress {
         pages_completed: usize,
@@ -175,7 +179,8 @@ enum ParseEvent {
     },
     #[serde(rename = "complete")]
     Complete {
-        document: serde_json::Value,
+        /// URL to fetch the document JSON (instead of embedding 40MB+ in SSE)
+        document_url: String,
         markdown_url: String,
         total_pages: usize,
     },
@@ -414,6 +419,40 @@ async fn get_markdown_handler(
     }
 }
 
+/// Handler to serve document JSON from disk
+async fn get_document_handler(
+    Path(job_id): Path<String>,
+) -> Result<impl IntoResponse, (StatusCode, Json<ApiResponse<()>>)> {
+    if job_id.contains("..") || job_id.contains('/') || job_id.contains('\\') {
+        return Err((
+            StatusCode::BAD_REQUEST,
+            Json(ApiResponse {
+                success: false,
+                data: None,
+                error: Some("Invalid job_id: path traversal not allowed".to_string()),
+            }),
+        ));
+    }
+
+    let document_path = PathBuf::from(format!("/tmp/ferrules-api/{}/document.json", job_id));
+
+    match tokio::fs::read(&document_path).await {
+        Ok(content) => Ok(Response::builder()
+            .status(StatusCode::OK)
+            .header(CONTENT_TYPE, "application/json; charset=utf-8")
+            .body(Body::from(content))
+            .unwrap()),
+        Err(_) => Err((
+            StatusCode::NOT_FOUND,
+            Json(ApiResponse {
+                success: false,
+                data: None,
+                error: Some("Document file not found".to_string()),
+            }),
+        )),
+    }
+}
+
 fn update_image_paths(doc: &mut ferrules_core::entities::ParsedDocument, job_id: &str) {
     use ferrules_core::blocks::BlockType;
 
@@ -548,6 +587,7 @@ async fn main() {
         .route("/debug/:doc_name", delete(delete_debug_handler))
         .route("/images/:job_id/figures/:filename", get(get_image_handler))
         .route("/markdown/:job_id", get(get_markdown_handler))
+        .route("/document/:job_id", get(get_document_handler))
         .with_state(app_state)
         .layer(OtelAxumLayer::default())
         .layer(DefaultBodyLimit::max(MAX_SIZE_LIMIT));
@@ -1013,9 +1053,6 @@ async fn parse_document_sse_handler(
         })?
     };
 
-    // Send job started event
-    let _ = tx.send(ParseEvent::JobStarted { job_id }).await;
-
     // Spawn parsing task
     let tx_clone = tx.clone();
     let parser = state.parser.clone();
@@ -1039,19 +1076,28 @@ async fn parse_document_sse_handler(
             return;
         }
 
-        // Get page count using the fixed method
-        let total_pages = match parser.get_page_count(&mmap, config.password).await {
-            Ok(count) => count,
+        // Get PDF metadata (page count and title)
+        let (total_pages, pdf_title) = match parser.get_pdf_metadata(&mmap, config.password).await {
+            Ok(metadata) => (metadata.page_count, metadata.title),
             Err(e) => {
                 let _ = tx_clone
                     .send(ParseEvent::Error {
-                        message: format!("Failed to get page count: {e}"),
+                        message: format!("Failed to get PDF metadata: {e}"),
                     })
                     .await;
                 job_manager.complete_job(job_id).await;
                 return;
             }
         };
+
+        // Send job started event with metadata
+        let _ = tx_clone
+            .send(ParseEvent::JobStarted {
+                job_id,
+                total_pages,
+                title: pdf_title,
+            })
+            .await;
 
         let pages_completed = std::sync::Arc::new(std::sync::atomic::AtomicUsize::new(0));
         let tx_progress = tx_clone.clone();
@@ -1074,6 +1120,11 @@ async fn parse_document_sse_handler(
                     total_pages,
                     page_id,
                 });
+
+                // Log when all pages are parsed (merge_elements_into_blocks runs inside parse_document)
+                if completed == total_pages {
+                    tracing::info!("All pages parsed, merge_elements_into_blocks starting...");
+                }
             }
         };
 
@@ -1106,15 +1157,21 @@ async fn parse_document_sse_handler(
         match result {
             Ok(mut doc) => {
                 if !cancellation_token_clone.is_cancelled() {
-                    // Save formula images to /tmp/ferrules-api/{job_id}/figures/
+                    use std::time::Instant;
+                    let post_start = Instant::now();
+
+                    // Save formula images
+                    let img_start = Instant::now();
                     let job_dir = PathBuf::from(format!("/tmp/ferrules-api/{}", job_id));
                     let figures_dir = job_dir.join("figures");
                     let _ = std::fs::create_dir_all(&figures_dir);
                     if let Err(e) = save_doc_images(&figures_dir, &doc) {
                         tracing::warn!("Failed to save formula images: {}", e);
                     }
+                    tracing::info!("⏱️ save_doc_images took {:?}", img_start.elapsed());
 
-                    // Generate and save markdown
+                    // Generate markdown
+                    let md_start = Instant::now();
                     let markdown_url = format!("/markdown/{}", job_id);
                     match to_markdown(&doc, &doc.doc_name, None) {
                         Ok(markdown) => {
@@ -1127,13 +1184,36 @@ async fn parse_document_sse_handler(
                             tracing::warn!("Failed to generate markdown: {}", e);
                         }
                     }
+                    tracing::info!("⏱️ to_markdown took {:?}", md_start.elapsed());
 
-                    // Update formula_img paths to full API paths
+                    // Finalize (update paths + JSON serialization)
+                    let path_start = Instant::now();
                     update_image_paths(&mut doc, &job_id.to_string());
+                    tracing::info!("⏱️ update_image_paths took {:?}", path_start.elapsed());
 
+                    // Serialize and save document JSON to disk (instead of sending 40MB+ via SSE)
+                    let json_start = Instant::now();
+                    let json_string = serde_json::to_string(&doc).unwrap_or_default();
+                    let json_path = job_dir.join("document.json");
+                    if let Err(e) = std::fs::write(&json_path, &json_string) {
+                        tracing::warn!("Failed to save document JSON: {}", e);
+                    }
+                    tracing::info!(
+                        "⏱️ JSON serialization + save took {:?} ({} bytes)",
+                        json_start.elapsed(),
+                        json_string.len()
+                    );
+
+                    tracing::info!(
+                        "⏱️ Total API post-processing took {:?}",
+                        post_start.elapsed()
+                    );
+
+                    // Send URL instead of full document to keep SSE lightweight
+                    let document_url = format!("/document/{}", job_id);
                     let _ = tx_clone
                         .send(ParseEvent::Complete {
-                            document: serde_json::to_value(&doc).unwrap_or_default(),
+                            document_url,
                             markdown_url,
                             total_pages: doc.pages.len(),
                         })

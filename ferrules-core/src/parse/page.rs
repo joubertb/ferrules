@@ -133,6 +133,7 @@ where
         metadata: parse_native_metadata,
         is_count_result: _,
         total_page_count: _,
+        pdf_title: _,
     } = parse_native_result;
     let (layout_tx, layout_rx) = tokio::sync::oneshot::channel();
 
