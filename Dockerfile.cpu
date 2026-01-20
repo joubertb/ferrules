@@ -33,6 +33,15 @@ COPY . .
 # Build the application
 RUN cargo build --release -p ferrules-api
 
+# Download ONNX Runtime CPU library
+# The load-dynamic feature requires the main libonnxruntime.so to be installed separately
+ARG ONNXRUNTIME_VERSION=1.22.0
+RUN mkdir -p /app/onnx_libs && \
+    curl -L https://github.com/microsoft/onnxruntime/releases/download/v${ONNXRUNTIME_VERSION}/onnxruntime-linux-x64-${ONNXRUNTIME_VERSION}.tgz | \
+    tar xzf - -C /app/onnx_libs --strip-components=2 --wildcards "*/lib/libonnxruntime.so*" && \
+    echo "ONNX Runtime libraries:" && \
+    ls -la /app/onnx_libs/
+
 # Runtime stage
 FROM ubuntu:${UBUNTU_VERSION}
 
@@ -48,7 +57,7 @@ RUN mkdir -p /app/models
 
 # Copy the binary and libs from builder
 COPY --from=builder /app/target/release/ferrules-api /app/ferrules-api
-COPY --from=builder /app/target/release/*onnxruntime*.so* /usr/local/lib/
+COPY --from=builder /app/onnx_libs/ /usr/local/lib/
 
 # Copy runtime dependencies
 COPY --from=builder /app/models/ /app/models/
