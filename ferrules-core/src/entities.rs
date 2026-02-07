@@ -108,20 +108,12 @@ pub struct BBox {
 }
 
 impl BBox {
-    fn from_pdfrect(
-        PdfRect {
-            bottom,
-            left,
-            top,
-            right,
-        }: PdfRect,
-        page_height: f32,
-    ) -> Self {
+    fn from_pdfrect(rect: PdfRect, page_height: f32) -> Self {
         Self {
-            x0: left.value,
-            y0: page_height - top.value,
-            x1: right.value,
-            y1: page_height - bottom.value,
+            x0: rect.left().value,
+            y0: page_height - rect.top().value,
+            x1: rect.right().value,
+            y1: page_height - rect.bottom().value,
         }
     }
 
@@ -712,7 +704,7 @@ impl CharSpan {
             font_name,
             font_weight: char.font_weight(),
             font_size: char.unscaled_font_size().value,
-            rotation: char.get_rotation_clockwise_degrees(),
+            rotation: char.angle_degrees().unwrap_or(0.0),
             char_start_idx: char.index(),
             char_end_idx: char.index(),
             original_unicode,
@@ -721,7 +713,7 @@ impl CharSpan {
         }
     }
     pub fn append(&mut self, char: &PdfPageTextChar, page_bbox: &BBox) -> Option<()> {
-        let char_rotation = char.get_rotation_clockwise_degrees();
+        let char_rotation = char.angle_degrees().unwrap_or(0.0);
         let char_font_size = char.unscaled_font_size().value;
         let char_font_name = char.font_name();
         let char_font_weight = char.font_weight();

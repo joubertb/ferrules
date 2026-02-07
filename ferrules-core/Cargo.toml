@@ -31,10 +31,11 @@ clap = { version = "4.5.20", features = ["derive"] }
 # pdf reader
 imageproc = "0.25.0"
 ab_glyph = "0.2.29"
-pdfium-render = { version = "=0.8.27", features = [
+pdfium-render = { version = "=0.8.34", default-features = false, features = [
     "static",
-    "bindings",
     "sync",
+    "image",
+    "pdfium_6666",
 ] }
 lopdf = "0.34.0"
 adobe-cmap-parser = "0.4.1"
