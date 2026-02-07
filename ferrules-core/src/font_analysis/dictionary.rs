@@ -611,6 +611,10 @@ impl SmartCorrector {
 
     /// Correct all words in a text string (synchronous)
     pub fn correct_text_sync(&self, text: &str) -> String {
+        // Preserve whitespace-only text (split_whitespace would lose it)
+        if text.trim().is_empty() {
+            return text.to_string();
+        }
         let words: Vec<&str> = text.split_whitespace().collect();
         let mut corrected_words = Vec::with_capacity(words.len());
 
@@ -658,6 +662,10 @@ impl SmartCorrector {
 
     /// Correct all words in a text string (async)
     pub async fn correct_text(&self, text: &str) -> String {
+        // Preserve whitespace-only text (split_whitespace would lose it)
+        if text.trim().is_empty() {
+            return text.to_string();
+        }
         let words: Vec<&str> = text.split_whitespace().collect();
         let mut corrected_words = Vec::with_capacity(words.len());
 

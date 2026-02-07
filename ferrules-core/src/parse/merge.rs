@@ -24,14 +24,196 @@ fn apply_corrections_to_text(text: String) -> String {
     crate::font_analysis::correct_assembled_text(&text)
 }
 
+/// Join lines with smart word-break handling
+///
+/// When joining lines, handles two cases:
+/// 1. Word split across lines without hyphen (e.g., "ye" + "t" → "yet")
+/// 2. Hyphenated line breaks (e.g., "No-" + "tably" → "Notably")
+/// 3. Multi-fragment hyphenated words (e.g., "conver- sa tions" → "conversations")
+#[cfg(feature = "correction-engine")]
+fn join_lines_smart(lines: &[String]) -> String {
+    use crate::font_analysis::dictionary::SmartCorrector;
+
+    if lines.is_empty() {
+        return String::new();
+    }
+
+    let mut result = lines[0].clone();
+
+    for line in lines.iter().skip(1) {
+        if line.is_empty() {
+            continue;
+        }
+
+        // Get the last word fragment of current result and first word fragment of next line
+        let result_word_start = result
+            .rfind(|c: char| c.is_whitespace() || c == ',' || c == '.' || c == ';')
+            .map(|i| i + 1)
+            .unwrap_or(0);
+        let word_before = &result[result_word_start..];
+
+        let line_word_end = line
+            .find(|c: char| c.is_whitespace() || c == ',' || c == '.' || c == ';')
+            .unwrap_or(line.len());
+        let word_after = &line[..line_word_end];
+
+        // Case 1: Check for hyphenated line break (e.g., "No-" + "tably" → "Notably")
+        let hyphen_join = if word_before.ends_with('-')
+            && word_before.len() > 1
+            && word_before
+                .chars()
+                .rev()
+                .nth(1)
+                .map(|c| c.is_alphabetic())
+                .unwrap_or(false)
+            && !word_after.is_empty()
+            && word_after
+                .chars()
+                .next()
+                .map(|c| c.is_alphabetic())
+                .unwrap_or(false)
+        {
+            // Try joining without the hyphen
+            let word_before_no_hyphen = &word_before[..word_before.len() - 1];
+            let joined = format!("{}{}", word_before_no_hyphen, word_after);
+            if joined.len() <= 20 && SmartCorrector::is_valid_word(&joined) {
+                Some(word_before_no_hyphen.len())
+            } else {
+                None
+            }
+        } else {
+            None
+        };
+
+        if let Some(chars_to_remove) = hyphen_join {
+            // Remove the hyphen from result and join without space
+            let remove_from = result.len() - (word_before.len() - chars_to_remove);
+            result.truncate(remove_from);
+            result.push_str(line);
+            continue;
+        }
+
+        // Case 2: Check for word split without hyphen (e.g., "ye" + "t" → "yet")
+        let should_join_without_space = !word_before.is_empty()
+            && !word_after.is_empty()
+            && word_before
+                .chars()
+                .last()
+                .map(|c| c.is_alphabetic())
+                .unwrap_or(false)
+            && word_after
+                .chars()
+                .next()
+                .map(|c| c.is_alphabetic())
+                .unwrap_or(false)
+            && crate::spacing::should_join_fragments(word_before, word_after);
+
+        if should_join_without_space {
+            // Join without space - word was split across lines
+            result.push_str(line);
+        } else {
+            // Normal join with space
+            result.push(' ');
+            result.push_str(line);
+        }
+    }
+
+    // Post-process: fix hyphenated multi-fragment words (e.g., "conver- sa tions" → "conversations")
+    fix_hyphenated_fragments(&mut result);
+
+    result
+}
+
+/// Fix hyphenated multi-fragment words in text
+/// Handles patterns like "word- x y" where "wordxy" is a valid word
+#[cfg(feature = "correction-engine")]
+fn fix_hyphenated_fragments(text: &mut String) {
+    use crate::font_analysis::dictionary::SmartCorrector;
+
+    // Find patterns like "word- " (hyphen followed by space)
+    let chars: Vec<char> = text.chars().collect();
+    let mut new_text = String::with_capacity(text.len());
+    let mut i = 0;
+
+    while i < chars.len() {
+        // Look for "X- " pattern where X is alphabetic
+        if chars[i] == '-'
+            && i > 0
+            && chars[i - 1].is_alphabetic()
+            && i + 1 < chars.len()
+            && chars[i + 1] == ' '
+        {
+            // Find the word before the hyphen
+            let word_start = new_text
+                .rfind(|c: char| c.is_whitespace() || c == ',' || c == '.' || c == ';')
+                .map(|idx| idx + 1)
+                .unwrap_or(0);
+            let word_before = &new_text[word_start..];
+
+            // Find fragments after the hyphen (up to 3 fragments)
+            let mut fragments: Vec<String> = Vec::new();
+            let mut j = i + 2; // Skip "- "
+            while j < chars.len() && fragments.len() < 3 {
+                if chars[j].is_whitespace() {
+                    j += 1;
+                    continue;
+                }
+                // Collect a fragment
+                let frag_start = j;
+                while j < chars.len()
+                    && !chars[j].is_whitespace()
+                    && !matches!(chars[j], ',' | '.' | ';' | ':')
+                {
+                    j += 1;
+                }
+                if j > frag_start {
+                    fragments.push(chars[frag_start..j].iter().collect());
+                }
+                // Stop at punctuation (but not whitespace)
+                if j < chars.len() && matches!(chars[j], ',' | '.' | ';' | ':') {
+                    break;
+                }
+            }
+
+            // Try joining word_before with fragments
+            if !fragments.is_empty() {
+                let joined: String = format!("{}{}", word_before, fragments.join(""));
+                if joined.len() <= 25 && SmartCorrector::is_valid_word(&joined) {
+                    // Replace word_before with joined word and skip the hyphen and fragments
+                    new_text.truncate(word_start);
+                    new_text.push_str(&joined);
+                    // Calculate how many chars to skip
+                    let skip_len: usize =
+                        2 + fragments.iter().map(|f| f.len()).sum::<usize>() + fragments.len() - 1;
+                    i += 1 + skip_len;
+                    continue;
+                }
+            }
+        }
+
+        new_text.push(chars[i]);
+        i += 1;
+    }
+
+    *text = new_text;
+}
+
+#[cfg(not(feature = "correction-engine"))]
+fn join_lines_smart(lines: &[String]) -> String {
+    lines.join(" ")
+}
+
 /// Concatenate CharSpans within a line with proper spacing
 /// Adds spaces between spans when there's a horizontal or vertical gap
+/// Also prevents spurious spaces within words using dictionary validation
 fn concatenate_spans_with_spacing(line_spans: &[crate::entities::CharSpan]) -> String {
     if line_spans.is_empty() {
         return String::new();
     }
 
     let mut result = String::new();
+    // Track the start of the current word (index in result where last space/punctuation was)
+    let mut word_start_idx: usize = 0;
 
     for (i, span) in line_spans.iter().enumerate() {
         if i == 0 {
@@ -49,13 +231,83 @@ fn concatenate_spans_with_spacing(line_spans: &[crate::entities::CharSpan]) -> S
             let needs_space = crate::spacing::should_add_space_between_spans(prev_span, span, 5.0);
 
             if needs_space {
-                result.push(' ');
+                // Before adding a space, check if joining would create a valid word.
+                // Only apply word-join logic for same-font spans. Different fonts indicate
+                // different semantic entities (e.g., math variable "D" in italic vs body
+                // text "is" in roman) — the space between them is intentional.
+                let prev_base_font = prev_span
+                    .font_name
+                    .split('+')
+                    .next_back()
+                    .unwrap_or(&prev_span.font_name);
+                let curr_base_font = span
+                    .font_name
+                    .split('+')
+                    .next_back()
+                    .unwrap_or(&span.font_name);
+                let same_font = prev_base_font == curr_base_font;
+
+                let should_skip_space =
+                    same_font && should_skip_space_for_word_join(&result, word_start_idx, span);
+
+                if should_skip_space {
+                    // Don't add space - join the word fragments
+                    result.push_str(&span.text);
+                } else {
+                    result.push(' ');
+                    word_start_idx = result.len(); // New word starts after space
+                    result.push_str(&span.text);
+                }
+            } else {
+                result.push_str(&span.text);
             }
-            result.push_str(&span.text);
+        }
+
+        // Update word_start_idx if span ends with whitespace or punctuation
+        if let Some(last_boundary) = span
+            .text
+            .rfind(|c: char| c.is_whitespace() || c == ',' || c == '.' || c == ';')
+        {
+            // Adjust word_start_idx to point to after the boundary in the result
+            word_start_idx = result.len() - span.text.len() + last_boundary + 1;
         }
     }
 
     result
+}
+
+/// Check if we should skip adding a space because joining creates a valid word.
+/// Extracts word fragments from context and delegates to `should_join_fragments`.
+#[cfg(feature = "correction-engine")]
+fn should_skip_space_for_word_join(
+    result: &str,
+    word_start_idx: usize,
+    next_span: &crate::entities::CharSpan,
+) -> bool {
+    // Get the word fragment accumulated so far
+    let word_so_far = if word_start_idx < result.len() {
+        &result[word_start_idx..]
+    } else {
+        return false;
+    };
+
+    // Get the first word fragment from the next span
+    let next_word_start = next_span
+        .text
+        .split(|c: char| c.is_whitespace() || c == ',' || c == '.' || c == ';')
+        .next()
+        .unwrap_or(&next_span.text);
+
+    crate::spacing::should_join_fragments(word_so_far, next_word_start)
+}
+
+#[cfg(not(feature = "correction-engine"))]
+fn should_skip_space_for_word_join(
+    _result: &str,
+    _word_start_idx: usize,
+    _next_span: &crate::entities::CharSpan,
+) -> bool {
+    false
 }
 
 /// This constant defines the minimum required intersection ratio between the bounding box of an
@@ -529,19 +781,22 @@ pub(crate) fn merge_elements_into_blocks(
                 // Get truly original text by reconstructing from raw CharSpans (before any HTML tag processing)
                 let original_text = if !curr_el.line_spans.is_empty() {
                     // Reconstruct original text from CharSpans
-                    curr_el
+                    let lines: Vec<String> = curr_el
                         .line_spans
                         .iter()
                         .map(|line_spans| {
                             // Space-aware concatenation of spans within a line
                             concatenate_spans_with_spacing(line_spans)
                         })
-                        .collect::<Vec<String>>()
-                        .join(" ")
+                        .collect();
+
+                    // Smart line joining that handles word breaks across lines
+                    join_lines_smart(&lines)
                 } else {
                     // Fallback to current text if no spans available
                     curr_el.text_block.text.clone()
                 };
+
                 let processed_text = if !curr_el.line_spans.is_empty() {
                     debug_print!(
                         "🎯 TEXT WITH SPANS: Processing {} line_spans for subscript detection",

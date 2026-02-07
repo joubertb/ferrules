@@ -198,7 +198,113 @@ pub fn unified_text_processing(spans: &[crate::entities::CharSpan], is_formula: 
     apply_text_corrections_to_spans(&mut processed_spans);
 
     // Apply subscript/superscript detection and HTML tag creation
-    script_notation::apply_text_formatting(&processed_spans)
+    let result = script_notation::apply_text_formatting(&processed_spans);
+
+    // Post-process to remove spurious spaces within words
+    // This fixes patterns like "ye t" → "yet" where PDF extraction incorrectly split words
+    remove_spurious_spaces(&result)
+}
+
+/// Remove spurious spaces within words using dictionary validation
+///
+/// PDF extraction sometimes introduces spaces within words (e.g., "ye t" instead of "yet").
+/// This function scans for such patterns and removes the space if joining creates a valid word.
+/// It also handles multi-fragment cases like "convers a tions" → "conversations".
+#[cfg(feature = "correction-engine")]
+fn remove_spurious_spaces(text: &str) -> String {
+    use crate::font_analysis::dictionary::SmartCorrector;
+
+    let mut result = String::with_capacity(text.len());
+    let chars: Vec<char> = text.chars().collect();
+    let mut i = 0;
+
+    while i < chars.len() {
+        // Look for single-space patterns that might be spurious
+        if chars[i] == ' ' {
+            // Find the word fragment before the space
+            let word_start = result
+                .rfind(|c: char| c.is_whitespace() || c == ',' || c == '.' || c == ';' || c == ':')
+                .map(|idx| idx + 1)
+                .unwrap_or(0);
+            let word_before = &result[word_start..];
+
+            // Find the word fragment after the space (until next space/punctuation)
+            let mut word_after_end = i + 1;
+            while word_after_end < chars.len()
+                && !chars[word_after_end].is_whitespace()
+                && !matches!(chars[word_after_end], ',' | '.' | ';' | ':')
+            {
+                word_after_end += 1;
+            }
+            let word_after: String = chars[i + 1..word_after_end].iter().collect();
+
+            // Never join across standalone dashes — they are semantic separators
+            // (e.g., "input - detecting" should NOT become "input-detecting")
+            let is_dash_like =
+                word_after == "-" || word_after == "--" || word_after == "—" || word_after == "–";
+            let before_ends_with_dash = word_before.ends_with('-')
+                || word_before.ends_with('—')
+                || word_before.ends_with('–');
+
+            if is_dash_like || before_ends_with_dash {
+                result.push(chars[i]);
+                i += 1;
+                continue;
+            }
+
+            // Check if joining would create a valid word from fragments
+            if crate::spacing::should_join_fragments(word_before, &word_after) {
+                // Don't add the space - continue without it
+                i += 1;
+                continue;
+            }
+
+            // Multi-fragment lookahead: check if there's another short fragment after word_after
+            // This handles cases like "convers a tions" where "conversa" and "ations" aren't words
+            // but "conversations" is valid
+            if !word_before.is_empty()
+                && !word_after.is_empty()
+                && word_after.len() <= 3
+                && word_after_end < chars.len()
+                && chars[word_after_end] == ' '
+            {
+                // Find the next fragment after the second space
+                let mut next_frag_end = word_after_end + 1;
+                while next_frag_end < chars.len()
+                    && !chars[next_frag_end].is_whitespace()
+                    && !matches!(chars[next_frag_end], ',' | '.' | ';' | ':')
+                {
+                    next_frag_end += 1;
+                }
+                let next_fragment: String =
+                    chars[word_after_end + 1..next_frag_end].iter().collect();
+
+                // Try joining all three fragments
+                let triple_len = word_before.len() + word_after.len() + next_fragment.len();
+                if !next_fragment.is_empty() && (2..=20).contains(&triple_len) {
+                    let triple_joined = format!("{}{}{}", word_before, word_after, next_fragment);
+
+                    if SmartCorrector::is_valid_word(&triple_joined) {
+                        // Skip this space AND the fragment AND the next space
+                        // We'll handle them all at once by not adding the space
+                        // and letting the next iterations handle the rest
+                        i += 1;
+                        continue;
+                    }
+                }
+            }
+        }
+
+        result.push(chars[i]);
+        i += 1;
+    }
+
+    result
+}
+
+#[cfg(not(feature = "correction-engine"))]
+fn remove_spurious_spaces(text: &str) -> String {
+    text.to_string()
 }
 
 /// Legacy wrapper for add_tags - now uses unified processing
@@ -358,4 +464,73 @@ fn is_likely_compound_word(word_before: &str, word_after: &str) -> bool {
     }
 
     false
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    /// Initialize the dictionary for tests that need it
+    #[cfg(feature = "correction-engine")]
+    fn init_dictionary() {
+        use crate::font_analysis::dictionary::{SmartCorrectionConfig, SmartCorrector};
+        let config = SmartCorrectionConfig::default();
+        let _ = SmartCorrector::new(config);
+    }
+
+    #[test]
+    #[cfg(feature = "correction-engine")]
+    fn test_remove_spurious_spaces_preserves_dash_separators() {
+        init_dictionary();
+        // Standalone dashes between words should be preserved with their spaces
+        let text = "evaluating user input - detecting malicious content";
+        let result = remove_spurious_spaces(text);
+        assert_eq!(
+            result, text,
+            "Space before standalone dash should be preserved"
+        );
+    }
+
+    #[test]
+    #[cfg(feature = "correction-engine")]
+    fn test_remove_spurious_spaces_preserves_double_dash() {
+        init_dictionary();
+        let text = "categories -- direct injection attacks";
+        let result = remove_spurious_spaces(text);
+        assert_eq!(
+            result, text,
+            "Spaces around double dash should be preserved"
+        );
+    }
+
+    #[test]
+    #[cfg(feature = "correction-engine")]
+    fn test_remove_spurious_spaces_preserves_em_dash() {
+        init_dictionary();
+        let text = "models \u{2014} where alignment";
+        let result = remove_spurious_spaces(text);
+        assert_eq!(result, text, "Spaces around em-dash should be preserved");
+    }
+
+    #[test]
+    #[cfg(feature = "correction-engine")]
+    fn test_remove_spurious_spaces_preserves_en_dash() {
+        init_dictionary();
+        let text = "models \u{2013} where alignment";
+        let result = remove_spurious_spaces(text);
+        assert_eq!(result, text, "Spaces around en-dash should be preserved");
+    }
+
+    #[test]
+    #[cfg(feature = "correction-engine")]
+    fn test_remove_spurious_spaces_still_fixes_split_words() {
+        init_dictionary();
+        // The normal case should still work: spurious spaces within words
+        let text = "ye t another wo rd";
+        let result = remove_spurious_spaces(text);
+        assert_eq!(
+            result, "yet another word",
+            "Spurious spaces within words should still be removed"
+        );
+    }
 }

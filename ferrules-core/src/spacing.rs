@@ -4,6 +4,9 @@
 /// to ensure proper word boundaries are detected in PDF text extraction.
 use crate::entities::CharSpan;
 
+#[cfg(feature = "correction-engine")]
+use crate::font_analysis::dictionary::SmartCorrector;
+
 /// Character width estimation factor
 /// This represents the average character width as a fraction of font size
 /// Based on typical proportional font characteristics
@@ -18,6 +21,12 @@ const AVERAGE_CHAR_WIDTH_FACTOR: f32 = 0.55;
 /// - Sensitive enough to catch word boundaries with minimal spacing
 /// - Conservative enough to avoid false positives
 const WORD_BOUNDARY_THRESHOLD_FACTOR: f32 = 0.16;
+
+/// Maximum gap (as multiple of threshold) for word validation
+/// When the gap is small enough (within this multiple of the threshold),
+/// we check if joining the spans creates a valid word before adding a space.
+/// This prevents spurious spaces in words like "ye t" → "yet"
+const WORD_VALIDATION_GAP_MULTIPLE: f32 = 3.0;
 
 /// Calculate font-aware spacing threshold for a given font size
 ///
@@ -88,7 +97,74 @@ pub fn should_add_space_between_spans(
         || negative_gap_with_small_y_diff_suggests_line_wrap;
 
     // Only add space if conditions are met AND spans don't already have spacing
-    spacing_conditions_met && !spans_already_have_spacing
+    if !spacing_conditions_met || spans_already_have_spacing {
+        return false;
+    }
+
+    // Word validation: if the gap is small and joining creates a valid word, don't add space
+    // This prevents spurious spaces like "ye t" when it should be "yet"
+    #[cfg(feature = "correction-engine")]
+    {
+        let word_validation_gap_limit = min_word_boundary_gap * WORD_VALIDATION_GAP_MULTIPLE;
+
+        // Compare base font names (strip subset prefix like "BCDEFE+" before comparing)
+        let prev_base_font = prev_span
+            .font_name
+            .split('+')
+            .next_back()
+            .unwrap_or(&prev_span.font_name);
+        let curr_base_font = curr_span
+            .font_name
+            .split('+')
+            .next_back()
+            .unwrap_or(&curr_span.font_name);
+        let same_font = prev_base_font == curr_base_font;
+
+        // Only apply word validation for small horizontal gaps, same font, not line wraps.
+        // Different fonts indicate different semantic entities (e.g., math variable "D" in italic
+        // vs body text "is" in roman) — the space between them is intentional.
+        if horizontal_gap_indicates_word_boundary
+            && !vertical_gap_indicates_line_wrap
+            && horizontal_gap < word_validation_gap_limit
+            && same_font
+        {
+            // Get the last word fragment from prev_span and first word fragment from curr_span
+            let prev_word_end = prev_span
+                .text
+                .rsplit(|c: char| c.is_whitespace() || c == ',' || c == '.')
+                .next()
+                .unwrap_or(&prev_span.text);
+            let curr_word_start = curr_span
+                .text
+                .split(|c: char| c.is_whitespace() || c == ',' || c == '.')
+                .next()
+                .unwrap_or(&curr_span.text);
+
+            // Never suppress spaces around standalone dashes — they are semantic separators
+            let is_dash_boundary = prev_word_end.ends_with('-')
+                || prev_word_end.ends_with('—')
+                || prev_word_end.ends_with('–')
+                || curr_word_start.starts_with('-')
+                || curr_word_start.starts_with('—')
+                || curr_word_start.starts_with('–');
+
+            // Only check if both fragments are non-empty and the combined length is reasonable
+            if !is_dash_boundary
+                && !prev_word_end.is_empty()
+                && !curr_word_start.is_empty()
+                && prev_word_end.len() + curr_word_start.len() <= 15
+            {
+                let joined = format!("{}{}", prev_word_end, curr_word_start);
+
+                // If joined text is a valid English word, don't add space
+                if SmartCorrector::is_valid_word(&joined) {
+                    return false;
+                }
+            }
+        }
+    }
+
+    true
 }
 
 /// Determine if a space should be added based on string boundaries
@@ -140,6 +216,106 @@ pub fn should_add_space_simple(
 
     // Only add space if conditions are met AND text doesn't already have spacing
     spacing_conditions_met && !text_already_has_spacing
+}
+
+/// Common single-character words that should not be treated as word fragments.
+/// These are valid standalone English words that happen to be one character.
+const COMMON_SINGLE_WORDS: [&str; 4] = ["a", "A", "i", "I"];
+
+/// Common function words (prepositions, articles, conjunctions, pronouns, auxiliaries)
+/// that frequently precede standalone variables/symbols in academic text.
+/// When one of these words precedes a single character, the character is more likely
+/// a standalone variable (e.g., "to m" where m=mass) than a word fragment.
+///
+/// NOTE: This list intentionally excludes archaic/rare words like "ye" that Hunspell
+/// recognizes but are far more likely to be word fragments in modern documents.
+/// Sorted alphabetically for binary search via `.binary_search().is_ok()`.
+const FUNCTION_WORDS: [&str; 36] = [
+    "am", "an", "and", "are", "as", "at", "be", "but", "by", "can", "did", "do", "for", "go",
+    "had", "has", "he", "if", "in", "is", "it", "its", "may", "me", "my", "no", "not", "of", "on",
+    "or", "so", "to", "up", "us", "was", "we",
+];
+
+/// Check if a word part is likely a fragment rather than a standalone word.
+///
+/// A "fragment" is text that is probably part of a larger word that got split
+/// during PDF extraction. This includes:
+/// - Text that isn't a valid English word (e.g., "ye", "tions")
+/// - Single characters that aren't common standalone words (e.g., "t", "D")
+///
+/// Used by word-join logic to decide whether to remove spaces between adjacent text.
+#[cfg(feature = "correction-engine")]
+pub fn is_word_fragment(word: &str) -> bool {
+    use crate::font_analysis::dictionary::SmartCorrector;
+
+    !SmartCorrector::is_valid_word(word)
+        || (word.len() == 1 && !COMMON_SINGLE_WORDS.contains(&word))
+}
+
+/// Check if two adjacent word parts should be joined (space removed between them).
+///
+/// Returns `true` if the space between `word_before` and `word_after` should be
+/// removed because they likely form a single word that was split during PDF extraction.
+///
+/// The function requires:
+/// 1. Both parts are non-empty and the combined length is reasonable (2-15 chars)
+/// 2. The joined result is a valid English word
+/// 3. At least one part is a fragment (not a valid standalone word)
+/// 4. Guard: a single-character `word_before` followed by a valid `word_after` is NOT
+///    joined — the single char is likely a standalone symbol (e.g., math variable "D")
+///    rather than a word fragment
+#[cfg(feature = "correction-engine")]
+pub fn should_join_fragments(word_before: &str, word_after: &str) -> bool {
+    use crate::font_analysis::dictionary::SmartCorrector;
+
+    if word_before.is_empty() || word_after.is_empty() {
+        return false;
+    }
+
+    let combined_len = word_before.len() + word_after.len();
+    if !(2..=15).contains(&combined_len) {
+        return false;
+    }
+
+    let joined = format!("{}{}", word_before, word_after);
+    if !SmartCorrector::is_valid_word(&joined) {
+        return false;
+    }
+
+    let before_is_fragment = is_word_fragment(word_before);
+    let after_is_fragment = is_word_fragment(word_after);
+
+    // Guard: when one part is a single character and the other is a valid standalone
+    // word, the single char is likely a symbol or variable, not a word fragment.
+    //
+    // word_before direction: "D" + "is" → single-char D before valid "is" → don't join
+    //   Uses is_valid_word — any valid word after a single char triggers the guard.
+    //
+    // word_after direction: "to" + "m" → single-char m after function word "to" → don't join
+    //   Uses FUNCTION_WORDS — only common function words trigger the guard.
+    //   This avoids blocking legitimate joins like "ye" + "t" → "yet" where "ye" is
+    //   a valid-but-archaic Hunspell word that's actually a PDF fragment.
+    let word_before_lower = word_before.to_lowercase();
+    let has_single_char_next_to_valid_word = (word_before.len() == 1
+        && !COMMON_SINGLE_WORDS.contains(&word_before)
+        && SmartCorrector::is_valid_word(word_after))
+        || (word_after.len() == 1
+            && !COMMON_SINGLE_WORDS.contains(&word_after)
+            && FUNCTION_WORDS
+                .binary_search(&word_before_lower.as_str())
+                .is_ok());
+
+    // Guard: don't join uppercase abbreviations/symbols with single uppercase letters.
+    // In academic text, adjacent uppercase tokens like "OP" + "T" are separate symbols
+    // (e.g., operator tree notation), not a split word like "ye" + "t" → "yet".
+    let is_uppercase_symbol_pair = word_after.len() == 1
+        && word_after.chars().all(|c| c.is_uppercase())
+        && word_before.len() >= 2
+        && word_before.chars().all(|c| c.is_uppercase());
+
+    (before_is_fragment || after_is_fragment)
+        && !has_single_char_next_to_valid_word
+        && !is_uppercase_symbol_pair
 }
 
 /// Get the current font-aware spacing parameters for debugging/logging

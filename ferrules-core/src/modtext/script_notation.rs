@@ -1419,6 +1419,10 @@ fn apply_clustering_formatting(spans: &[CharSpan]) -> String {
     for (i, span) in spans.iter().enumerate() {
         let text_trimmed = span.text.trim();
         if text_trimmed.is_empty() {
+            // Still add whitespace spans to preserve word boundaries
+            if !span.text.is_empty() {
+                result.push_str(&span.text);
+            }
             continue;
         }
 
@@ -1469,6 +1473,27 @@ fn apply_clustering_formatting(spans: &[CharSpan]) -> String {
                 debug_print!("⬆️ CLUSTER SUP START: '{}'", text_trimmed);
             } else {
                 debug_print!("⬆️ CLUSTER PRIME: Skipping <sup> for prime character");
+            }
+        } else if actual_is_sub && in_superscript {
+            // Direct superscript → subscript transition
+            close_tags_until(&mut result, &mut tag_stack, "</sup>");
+            in_superscript = false;
+            result.push_str("<sub>");
+            tag_stack.push("</sub>");
+            in_subscript = true;
+            debug_print!("🔄 CLUSTER SUP→SUB: '{}'", text_trimmed);
+        } else if actual_is_sup && in_subscript {
+            // Direct subscript → superscript transition
+            close_tags_until(&mut result, &mut tag_stack, "</sub>");
+            in_subscript = false;
+            let is_prime = text_trimmed == "'";
+            if !is_prime {
+                result.push_str("<sup>");
+                tag_stack.push("</sup>");
+                in_superscript = true;
+                debug_print!("🔄 CLUSTER SUB→SUP: '{}'", text_trimmed);
+            } else {
+                debug_print!("⬆️ CLUSTER PRIME: Skipping <sup> for prime after subscript");
             }
         } else if !actual_is_sub && !actual_is_sup {
             // Return to normal text
@@ -1657,129 +1682,123 @@ pub(crate) fn apply_text_formatting(spans: &[CharSpan]) -> String {
     // Detect mathematical fractions (vertically stacked expressions without visible fraction bar)
     // and create modified spans with "/" inserted between numerator and denominator
     //
-    // First try single-span fraction detection (e.g., "1+2" over "3+4")
-    // If no single-span fractions found, try multi-span detection (e.g., "a" "+" "b" over "c" "+" "d")
+    // Run both single-span and multi-span detection. A block can contain both types
+    // (e.g., "1+2" over "3+4" as single spans alongside "a"+"+"+"b" over "c"+"+"+"d" as multi-span).
     let fractions = detect_fractions(spans);
-    let multi_span_fractions = if fractions.is_empty() {
+    let multi_span_fractions = {
+        // Exclude spans already claimed by single-span fractions
+        let claimed: std::collections::HashSet<usize> = fractions
+            .iter()
+            .flat_map(|f| [f.numerator_idx, f.denominator_idx])
+            .collect();
         detect_multi_span_fractions(spans)
-    } else {
-        Vec::new()
+            .into_iter()
+            .filter(|mf| {
+                !mf.numerator_indices.iter().any(|i| claimed.contains(i))
+                    && !mf.denominator_indices.iter().any(|i| claimed.contains(i))
+            })
+            .collect::<Vec<_>>()
     };
 
-    let spans_to_use: Vec<CharSpan> = if !fractions.is_empty() {
-        // Create a set of denominator indices (these will be skipped in output)
-        let denominator_indices: std::collections::HashSet<usize> =
+    let spans_to_use: Vec<CharSpan> = if !fractions.is_empty() || !multi_span_fractions.is_empty() {
+        // Build index sets for all claimed spans
+        let single_denom_indices: std::collections::HashSet<usize> =
             fractions.iter().map(|f| f.denominator_idx).collect();
+        let all_multi_num: std::collections::HashSet<usize> = multi_span_fractions
+            .iter()
+            .flat_map(|f| f.numerator_indices.iter().copied())
+            .collect();
+        let all_multi_denom: std::collections::HashSet<usize> = multi_span_fractions
+            .iter()
+            .flat_map(|f| f.denominator_indices.iter().copied())
+            .collect();
 
-        // Create modified spans where numerator text gets "/(denominator)" appended
         let mut modified_spans: Vec<CharSpan> = Vec::with_capacity(spans.len());
+        let mut processed_multi: std::collections::HashSet<usize> =
+            std::collections::HashSet::new();
+
         for (i, span) in spans.iter().enumerate() {
-            // Check if this span is a numerator
+            // Handle single-span fraction numerator
             if let Some(frac) = fractions.iter().find(|f| f.numerator_idx == i) {
-                // Append "/" and denominator text to this span
                 let denom_span = &spans[frac.denominator_idx];
                 let denom_text = denom_span.text.trim();
                 let mut new_span = span.clone();
                 new_span.text = format!("{}/{denom_text}", span.text.trim());
-                // Adjust bbox to span both numerator and denominator to prevent sub/sup detection
-                // Center the Y position between numerator and denominator
                 new_span.bbox.y0 = span.bbox.y0.min(denom_span.bbox.y0);
                 new_span.bbox.y1 = span.bbox.y1.max(denom_span.bbox.y1);
-                // Also expand X to cover both spans
                 new_span.bbox.x0 = span.bbox.x0.min(denom_span.bbox.x0);
                 new_span.bbox.x1 = span.bbox.x1.max(denom_span.bbox.x1);
-                // Use a larger font size to prevent small-font subscript detection
                 new_span.font_size = new_span.font_size.max(denom_span.font_size);
-                // Mark as fraction to skip subscript/superscript detection
                 new_span.span_type = SpanType::Fraction;
                 modified_spans.push(new_span);
-            } else if !denominator_indices.contains(&i) {
-                // Not a denominator, include as-is
-                modified_spans.push(span.clone());
+                continue;
             }
-            // Skip denominators entirely (they're included in numerator text now)
-        }
-        modified_spans
-    } else if !multi_span_fractions.is_empty() {
-        // Handle multi-span fractions (e.g., "a+b" over "c+d" where each char is a separate span)
-        let mut all_num_indices: std::collections::HashSet<usize> =
-            std::collections::HashSet::new();
-        let mut all_denom_indices: std::collections::HashSet<usize> =
-            std::collections::HashSet::new();
-        for frac in &multi_span_fractions {
-            for &idx in &frac.numerator_indices {
-                all_num_indices.insert(idx);
-            }
-            for &idx in &frac.denominator_indices {
-                all_denom_indices.insert(idx);
-            }
-        }
 
-        let mut modified_spans: Vec<CharSpan> = Vec::new();
-        let mut processed_fractions: std::collections::HashSet<usize> =
-            std::collections::HashSet::new();
+            // Skip single-span fraction denominators
+            if single_denom_indices.contains(&i) {
+                continue;
+            }
 
-        for (i, span) in spans.iter().enumerate() {
-            // Check if this span is the first span of a numerator
+            // Handle multi-span fraction (first numerator span triggers creation)
             if let Some((frac_idx, frac)) = multi_span_fractions
                 .iter()
                 .enumerate()
                 .find(|(_, f)| f.numerator_indices.first() == Some(&i))
             {
-                if processed_fractions.contains(&frac_idx) {
-                    continue;
+                if !processed_multi.contains(&frac_idx) {
+                    processed_multi.insert(frac_idx);
+
+                    let num_text: String = frac
+                        .numerator_indices
+                        .iter()
+                        .map(|&idx| spans[idx].text.trim())
+                        .collect::<Vec<_>>()
+                        .join(" ");
+
+                    let denom_text: String = frac
+                        .denominator_indices
+                        .iter()
+                        .map(|&idx| spans[idx].text.trim())
+                        .collect::<Vec<_>>()
+                        .join(" ");
+
+                    let mut combined_bbox = span.bbox.clone();
+                    for &idx in frac
+                        .numerator_indices
+                        .iter()
+                        .chain(frac.denominator_indices.iter())
+                    {
+                        let s = &spans[idx];
+                        combined_bbox.x0 = combined_bbox.x0.min(s.bbox.x0);
+                        combined_bbox.x1 = combined_bbox.x1.max(s.bbox.x1);
+                        combined_bbox.y0 = combined_bbox.y0.min(s.bbox.y0);
+                        combined_bbox.y1 = combined_bbox.y1.max(s.bbox.y1);
+                    }
+
+                    let max_font_size = frac
+                        .numerator_indices
+                        .iter()
+                        .chain(frac.denominator_indices.iter())
+                        .map(|&idx| spans[idx].font_size)
+                        .fold(0.0f32, |a, b| a.max(b));
+
+                    let mut new_span = span.clone();
+                    new_span.text = format!("{num_text} / {denom_text}");
+                    new_span.bbox = combined_bbox;
+                    new_span.font_size = max_font_size;
+                    new_span.span_type = SpanType::Fraction;
+                    modified_spans.push(new_span);
                 }
-                processed_fractions.insert(frac_idx);
-
-                // Collect numerator text
-                let num_text: String = frac
-                    .numerator_indices
-                    .iter()
-                    .map(|&idx| spans[idx].text.trim())
-                    .collect::<Vec<_>>()
-                    .join(" ");
-
-                // Collect denominator text
-                let denom_text: String = frac
-                    .denominator_indices
-                    .iter()
-                    .map(|&idx| spans[idx].text.trim())
-                    .collect::<Vec<_>>()
-                    .join(" ");
-
-                // Compute combined bbox
-                let mut combined_bbox = span.bbox.clone();
-                for &idx in frac
-                    .numerator_indices
-                    .iter()
-                    .chain(frac.denominator_indices.iter())
-                {
-                    let s = &spans[idx];
-                    combined_bbox.x0 = combined_bbox.x0.min(s.bbox.x0);
-                    combined_bbox.x1 = combined_bbox.x1.max(s.bbox.x1);
-                    combined_bbox.y0 = combined_bbox.y0.min(s.bbox.y0);
-                    combined_bbox.y1 = combined_bbox.y1.max(s.bbox.y1);
-                }
-
-                // Find max font size
-                let max_font_size = frac
-                    .numerator_indices
-                    .iter()
-                    .chain(frac.denominator_indices.iter())
-                    .map(|&idx| spans[idx].font_size)
-                    .fold(0.0f32, |a, b| a.max(b));
-
-                let mut new_span = span.clone();
-                new_span.text = format!("{num_text} / {denom_text}");
-                new_span.bbox = combined_bbox;
-                new_span.font_size = max_font_size;
-                new_span.span_type = SpanType::Fraction;
-                modified_spans.push(new_span);
-            } else if !all_num_indices.contains(&i) && !all_denom_indices.contains(&i) {
-                // Not part of any fraction, include as-is
-                modified_spans.push(span.clone());
+                continue;
             }
-            // Skip spans that are part of fractions (handled above)
+
+            // Skip other multi-span fraction spans (non-first numerator and denominator)
+            if all_multi_num.contains(&i) || all_multi_denom.contains(&i) {
+                continue;
+            }
+
+            // Not part of any fraction — include as-is
+            modified_spans.push(span.clone());
         }
         modified_spans
     } else {
@@ -1895,6 +1914,11 @@ pub(crate) fn apply_text_formatting(spans: &[CharSpan]) -> String {
         // Skip superscript/subscript detection for empty spans to prevent empty tags
         // Empty spans should not trigger tag opening/closing logic
         if text_trimmed.is_empty() {
+            // Still add whitespace spans to preserve word boundaries
+            // (e.g., space between "responses," and "ye" should be preserved)
+            if !span.text.is_empty() {
+                result.push_str(&span.text);
+            }
             // Still handle bold font changes for empty spans
             if !font_size_initialized {
                 font_size_initialized = true;
@@ -3032,19 +3056,30 @@ fn detect_subscripts_in_cluster_with_local_analysis(
             let has_smaller_font =
                 current_span.font_size < max_font_size * FONT_SIZE_SCRIPT_THRESHOLD;
             let prev_span_baseline = if has_smaller_font && span_idx > 0 {
-                let prev = &spans[span_idx - 1];
-                // Use previous span only if it has larger font (is main text)
-                if prev.font_size >= max_font_size * FONT_SIZE_SCRIPT_THRESHOLD {
-                    debug_print!(
-                        "📍 PREV BASELINE for '{}': using previous span '{}' y0={:.1} (smaller font detected)",
-                        current_span.text.trim(),
-                        prev.text.trim(),
-                        prev.bbox.y0
-                    );
-                    Some(prev.bbox.y0)
-                } else {
-                    None
+                // Scan backwards (up to 5 spans) to find the nearest main-text-sized span.
+                // The immediate predecessor may also be small (e.g., subscript L before
+                // double-subscript T in "t_{L^T}"), so we look past small-font spans
+                // to find the actual main text baseline on the same line.
+                let max_lookback = 5.min(span_idx);
+                let mut found_baseline = None;
+                for offset in 1..=max_lookback {
+                    let candidate = &spans[span_idx - offset];
+                    if candidate.text.trim().is_empty() {
+                        continue;
+                    }
+                    if candidate.font_size >= max_font_size * FONT_SIZE_SCRIPT_THRESHOLD {
+                        debug_print!(
+                            "📍 PREV BASELINE for '{}': using span[-{}] '{}' y0={:.1} (smaller font detected)",
+                            current_span.text.trim(),
+                            offset,
+                            candidate.text.trim(),
+                            candidate.bbox.y0
+                        );
+                        found_baseline = Some(candidate.bbox.y0);
+                        break;
+                    }
                 }
+                found_baseline
             } else {
                 None
             };

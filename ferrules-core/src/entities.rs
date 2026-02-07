@@ -13,6 +13,18 @@ pub type ElementID = usize;
 
 const FERRULES_VERSION: &str = env!("CARGO_PKG_VERSION");
 
+/// Information about how to join two lines in text processing
+/// Used for char_span calculation and fertext construction
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+enum LineJoinInfo {
+    /// Add a space between lines (normal case)
+    AddSpace,
+    /// Join without space (word split across lines, e.g., "ye" + "t" → "yet")
+    NoSpace,
+    /// Remove trailing hyphen and join (e.g., "No-" + "tably" → "Notably")
+    RemoveHyphen,
+}
+
 /// Apply character-level font corrections using glyph name resolution
 ///
 /// This implements the PDF viewer approach: code → glyph → glyph name → Unicode
@@ -313,20 +325,51 @@ impl Element {
     /// Character indices match the fertext which is built by:
     /// 1. `concatenate_spans_with_spacing()` - adds spaces between spans within each line
     ///    based on horizontal/vertical gaps (using `should_add_space_between_spans`)
-    /// 2. `.join(" ")` - joins lines with a space character
+    /// 2. `join_lines_smart()` - joins lines with smart word-break handling
     ///
     /// No hyphen joining is done here - that's handled by the Python worker for TTS.
     /// This keeps char_spans aligned with the original PDF text for accurate highlighting.
     pub fn get_serializable_char_spans(&self) -> Vec<SerializableCharSpan> {
-        let mut result = Vec::new();
+        let mut result: Vec<SerializableCharSpan> = Vec::new();
         let mut char_offset: usize = 0;
 
+        // Track the last word fragment for smart line joining
+        let mut prev_line_text: Option<String> = None;
+
         for (line_idx, line) in self.line_spans.iter().enumerate() {
-            // Add space before this line (except for the first line)
-            // This matches the .join(" ") behavior in fertext construction
+            // Build the current line text for smart joining decision
+            let current_line_text: String = line.iter().map(|s| s.text.as_str()).collect();
+
+            // Determine line joining behavior (space, no space, or hyphen removal)
             if line_idx > 0 && !line.is_empty() {
-                char_offset += 1;
+                let join_info =
+                    Self::get_line_join_info(prev_line_text.as_deref(), Some(&current_line_text));
+                match join_info {
+                    LineJoinInfo::AddSpace => {
+                        char_offset += 1;
+                    }
+                    LineJoinInfo::NoSpace => {
+                        // Don't add space
+                    }
+                    LineJoinInfo::RemoveHyphen => {
+                        // Remove the trailing hyphen from the previous span
+                        // by adjusting char_offset backwards
+                        if char_offset > 0 {
+                            char_offset -= 1;
+                            // Also adjust the last span's char_end
+                            if let Some(last_span) = result.last_mut() {
+                                if last_span.char_end > 0 {
+                                    last_span.char_end -= 1;
+                                }
+                            }
+                        }
+                    }
+                }
             }
+
+            // Track word start for dictionary-based space skipping
+            let mut word_start_in_line: usize = 0;
+            let mut accumulated_text = String::new();
 
             for (span_idx, span) in line.iter().enumerate() {
                 // Check if we need to add space before this span (within the line)
@@ -336,7 +379,32 @@ impl Element {
                     let needs_space =
                         crate::spacing::should_add_space_between_spans(prev_span, span, 5.0);
                     if needs_space {
-                        char_offset += 1;
+                        // Check if skipping space creates a valid word (with at least one invalid part).
+                        // Only apply for same-font spans — different fonts indicate different
+                        // semantic entities (e.g., math variable "D" vs body text "is").
+                        let prev_base_font = prev_span
+                            .font_name
+                            .split('+')
+                            .next_back()
+                            .unwrap_or(&prev_span.font_name);
+                        let curr_base_font = span
+                            .font_name
+                            .split('+')
+                            .next_back()
+                            .unwrap_or(&span.font_name);
+                        let same_font = prev_base_font == curr_base_font;
+
+                        let should_skip = same_font
+                            && Self::should_skip_space_for_word_join(
+                                &accumulated_text,
+                                word_start_in_line,
+                                &span.text,
+                            );
+                        if !should_skip {
+                            char_offset += 1;
+                            accumulated_text.push(' ');
+                            word_start_in_line = accumulated_text.len();
+                        }
                     }
                 }
 
@@ -349,10 +417,137 @@ impl Element {
                     page_id: self.page_id,
                 });
                 char_offset += span_len;
+                accumulated_text.push_str(&span.text);
+
+                // Update word_start if span ends with whitespace or punctuation
+                if let Some(last_boundary) = span
+                    .text
+                    .rfind(|c: char| c.is_whitespace() || c == ',' || c == '.' || c == ';')
+                {
+                    word_start_in_line =
+                        accumulated_text.len() - span.text.len() + last_boundary + 1;
+                }
+            }
+
+            // Update prev_line_text for next iteration
+            if !line.is_empty() {
+                prev_line_text = Some(current_line_text);
             }
         }
 
         result
+    }
+
+    /// Determine how to join two lines
+    /// Matches the logic in join_lines_smart() from merge.rs
+    #[cfg(feature = "correction-engine")]
+    fn get_line_join_info(prev_line: Option<&str>, curr_line: Option<&str>) -> LineJoinInfo {
+        use crate::font_analysis::dictionary::SmartCorrector;
+
+        let Some(prev) = prev_line else {
+            return LineJoinInfo::AddSpace;
+        };
+        let Some(curr) = curr_line else {
+            return LineJoinInfo::AddSpace;
+        };
+
+        if prev.is_empty() || curr.is_empty() {
+            return LineJoinInfo::AddSpace;
+        }
+
+        // Get the last word fragment from prev line
+        let word_before = prev
+            .rfind(|c: char| c.is_whitespace() || c == ',' || c == '.' || c == ';')
+            .map(|i| &prev[i + 1..])
+            .unwrap_or(prev);
+
+        // Get the first word fragment from curr line
+        let word_after = curr
+            .find(|c: char| c.is_whitespace() || c == ',' || c == '.' || c == ';')
+            .map(|i| &curr[..i])
+            .unwrap_or(curr);
+
+        // Case 1: Check for hyphenated line break (e.g., "No-" + "tably" → "Notably")
+        if word_before.ends_with('-')
+            && word_before.len() > 1
+            && word_before
+                .chars()
+                .rev()
+                .nth(1)
+                .map(|c| c.is_alphabetic())
+                .unwrap_or(false)
+            && !word_after.is_empty()
+            && word_after
+                .chars()
+                .next()
+                .map(|c| c.is_alphabetic())
+                .unwrap_or(false)
+        {
+            let word_before_no_hyphen = &word_before[..word_before.len() - 1];
+            let joined = format!("{}{}", word_before_no_hyphen, word_after);
+            if joined.len() <= 20 && SmartCorrector::is_valid_word(&joined) {
+                return LineJoinInfo::RemoveHyphen;
+            }
+        }
+
+        // Case 2: Check for word split without hyphen (e.g., "ye" + "t" → "yet")
+        if !word_before.is_empty()
+            && !word_after.is_empty()
+            && word_before
+                .chars()
+                .last()
+                .map(|c| c.is_alphabetic())
+                .unwrap_or(false)
+            && word_after
+                .chars()
+                .next()
+                .map(|c| c.is_alphabetic())
+                .unwrap_or(false)
+            && crate::spacing::should_join_fragments(word_before, word_after)
+        {
+            return LineJoinInfo::NoSpace;
+        }
+
+        LineJoinInfo::AddSpace
+    }
+
+    #[cfg(not(feature = "correction-engine"))]
+    fn get_line_join_info(_prev_line: Option<&str>, _curr_line: Option<&str>) -> LineJoinInfo {
+        // Without correction engine, always add space (original behavior)
+        LineJoinInfo::AddSpace
+    }
+
+    /// Check if we should skip adding a space because joining creates a valid word.
+    /// Extracts word fragments from context and delegates to `should_join_fragments`.
+    #[cfg(feature = "correction-engine")]
+    fn should_skip_space_for_word_join(
+        accumulated_text: &str,
+        word_start: usize,
+        next_span_text: &str,
+    ) -> bool {
+        // Get the word fragment accumulated so far
+        let word_so_far = if word_start < accumulated_text.len() {
+            &accumulated_text[word_start..]
+        } else {
+            return false;
+        };
+
+        // Get the first word fragment from the next span
+        let next_word_start = next_span_text
+            .split(|c: char| c.is_whitespace() || c == ',' || c == '.' || c == ';')
+            .next()
+            .unwrap_or(next_span_text);
+
+        crate::spacing::should_join_fragments(word_so_far, next_word_start)
+    }
+
+    #[cfg(not(feature = "correction-engine"))]
+    fn should_skip_space_for_word_join(
+        _accumulated_text: &str,
+        _word_start: usize,
+        _next_span_text: &str,
+    ) -> bool {
+        false
     }
 }
 
@@ -539,14 +734,19 @@ impl CharSpan {
             None
         } else {
             let char_bbox = BBox::from_pdfrect(
-                char.loose_bounds().expect("error tight bound"),
+                char.loose_bounds().expect("error getting character bounds"),
                 page_bbox.height(),
             );
 
-            // Break on significant Y-position change (line break) for consistent line-level granularity
-            const LINE_BREAK_Y_THRESHOLD: f32 = 5.0;
+            // Break on significant Y-position change (line break) for consistent line-level granularity.
+            // Use font-size-relative threshold because new_from_char() uses tight_bounds() while
+            // append() uses loose_bounds(), creating a consistent ~0.53*font_size Y-offset between
+            // the span's initial y0 and subsequent chars' y0. A fixed threshold fails for fonts
+            // where this offset exceeds it (e.g., 5.27pt for 9.96pt XCharter-Roman > fixed 5.0pt).
+            // Real line breaks have Y-diff ≈ line_height (≈1.2*font_size), well above this threshold.
+            let line_break_y_threshold = self.font_size * 0.6;
             let y_diff = (char_bbox.y0 - self.bbox.y0).abs();
-            if y_diff > LINE_BREAK_Y_THRESHOLD {
+            if y_diff > line_break_y_threshold {
                 return None;
             }
 
@@ -734,6 +934,13 @@ impl Line {
             }
 
             // CharSpan text is already cleaned in CharSpan::new_from_char() and CharSpan::append()
+            // Add space between spans if spatial analysis indicates word boundary
+            // This ensures Line.text matches fertext construction (which uses spacing)
+            if let Some(prev_span) = self.spans.last() {
+                if crate::spacing::should_add_space_between_spans(prev_span, &span, 5.0) {
+                    self.text.push(' ');
+                }
+            }
             self.text.push_str(&span.text);
             self.spans.push(span);
             Ok(())
@@ -1028,5 +1235,87 @@ mod tests {
             fix_character_encoding_corruption_with_font("concatenat)on", Some("Arial")),
             "concatenat)on"
         );
+    }
+
+    /// Helper to create a CharSpan for testing
+    fn make_test_span(text: &str, x0: f32, x1: f32, y0: f32, font_size: f32) -> CharSpan {
+        CharSpan {
+            text: text.to_string(),
+            bbox: BBox {
+                x0,
+                y0,
+                x1,
+                y1: y0 + font_size,
+            },
+            font_size,
+            font_name: "TestFont".to_string(),
+            rotation: 0.0,
+            font_weight: None,
+            char_start_idx: 0,
+            char_end_idx: 0,
+            original_unicode: None,
+            has_corruption: false,
+            span_type: SpanType::Normal,
+        }
+    }
+
+    #[test]
+    fn test_line_append_adds_space_for_word_boundary() {
+        // Test that Line::append() adds space when spatial gap indicates word boundary
+        // This ensures Line.text matches fertext construction
+        //
+        // Example: "ye t" corruption - spans "ye" and "t" have a gap between them
+        let span1 = make_test_span("ye", 0.0, 10.0, 0.0, 12.0);
+        let mut line = Line::new_from_span(span1);
+
+        // Second span: "t" at x=15-20 (gap of 5 points, which exceeds threshold)
+        // Threshold for 12pt font = 12 * 0.55 * 0.16 ≈ 1.06 points
+        let span2 = make_test_span("t", 15.0, 20.0, 0.0, 12.0);
+        line.append(span2).unwrap();
+
+        // Line.text should have space between "ye" and "t"
+        assert_eq!(line.text, "ye t");
+    }
+
+    #[test]
+    fn test_line_append_no_space_when_close() {
+        // Test that Line::append() does NOT add space when spans are close together
+        let span1 = make_test_span("ye", 0.0, 10.0, 0.0, 12.0);
+        let mut line = Line::new_from_span(span1);
+
+        // Second span: "t" at x=10.5-15 (gap of only 0.5 points, below threshold)
+        // Threshold for 12pt font = 12 * 0.55 * 0.16 ≈ 1.06 points
+        let span2 = make_test_span("t", 10.5, 15.0, 0.0, 12.0);
+        line.append(span2).unwrap();
+
+        // Line.text should NOT have space - spans are close enough
+        assert_eq!(line.text, "yet");
+    }
+
+    #[test]
+    fn test_line_append_space_multi_syllable_word() {
+        // Test: "represen tations" corruption
+        // When PDF extraction splits a word with spatial gap
+        let span1 = make_test_span("represen", 0.0, 50.0, 0.0, 10.0);
+        let mut line = Line::new_from_span(span1);
+
+        // Gap of 5 points (threshold for 10pt ≈ 0.88 points)
+        let span2 = make_test_span("tations", 55.0, 100.0, 0.0, 10.0);
+        line.append(span2).unwrap();
+
+        assert_eq!(line.text, "represen tations");
+    }
+
+    #[test]
+    fn test_line_append_space_short_word() {
+        // Test: "w ith" corruption
+        let span1 = make_test_span("w", 0.0, 8.0, 0.0, 12.0);
+        let mut line = Line::new_from_span(span1);
+
+        // Gap of 4 points (threshold for 12pt ≈ 1.06 points)
+        let span2 = make_test_span("ith", 12.0, 30.0, 0.0, 12.0);
+        line.append(span2).unwrap();
+
+        assert_eq!(line.text, "w ith");
     }
 }

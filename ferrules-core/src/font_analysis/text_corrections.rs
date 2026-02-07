@@ -190,17 +190,20 @@ mod tests {
 
     #[test]
     fn test_control_character_filtering() {
-        assert_eq!(filter_control_characters("test\u{0002}text"), "testtext");
+        // U+0002 (STX) is converted to hyphen for line-break hyphenation handling
+        assert_eq!(filter_control_characters("test\u{0002}text"), "test-text");
         assert_eq!(filter_control_characters("test\ntext"), "test\ntext");
         assert_eq!(filter_control_characters("test\ttext"), "test\ttext");
     }
 
     #[test]
     fn test_assembled_text_correction() {
-        assert_eq!(correct_assembled_text("∈/\u{0002}"), "∉");
+        // U+0002 becomes hyphen for line-break handling
+        assert_eq!(correct_assembled_text("∈/\u{0002}"), "∉-");
         // Dictionary corrector normalizes whitespace (newlines become spaces)
         assert_eq!(correct_assembled_text("6=\ntest"), "≠ test");
-        assert_eq!(correct_assembled_text("sysfitems\u{0002}"), "systems");
+        // U+0002 becomes hyphen which is preserved (hyphen removal happens at modtext level)
+        assert_eq!(correct_assembled_text("sysfitems\u{0002}"), "systems-");
         // Note: Ligature corrections are now handled at the font analysis level via Adobe Glyph List
     }
 }
