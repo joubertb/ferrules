@@ -66,7 +66,7 @@
 //! - Position alone insufficient (PDF rendering quirks cause slight vertical shifts)
 //!
 //! **Algorithm**:
-//! ```rust
+//! ```text
 //! // Normalized vertical offset (0-1, positive = below baseline)
 //! let v = baseline_diff / cluster_base_font_size;
 //!
@@ -212,7 +212,7 @@
 //! - These characters (at Y~426.0) dragged the baseline **down** (higher Y), making subscripts appear above it
 //!
 //! **Solution**: `MIN_BASELINE_SEPARATION` constant (1.0pt)
-//! ```rust
+//! ```text
 //! const MIN_BASELINE_SEPARATION: f32 = 1.0; // Exclude chars too close to current position
 //!
 //! let local_candidates: Vec<f32> = cluster_indices
@@ -261,7 +261,7 @@
 //! - 2 candidates is minimum for mode calculation but insufficient for reliability
 //!
 //! **Solution**: `MIN_RELIABLE_CANDIDATES` constant (3)
-//! ```rust
+//! ```text
 //! const MIN_RELIABLE_CANDIDATES: usize = 3; // Need at least 3 candidates for reliable baseline
 //!
 //! if local_candidates.len() < MIN_RELIABLE_CANDIDATES {

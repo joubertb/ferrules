@@ -14,6 +14,7 @@ use unicode_segmentation::UnicodeSegmentation;
 ///
 /// # Example
 /// ```
+/// use ferrules_core::sentence_detection::detect_sentence_ends;
 /// let text = "Dr. Smith arrived. He was late.";
 /// let ends = detect_sentence_ends(text);
 /// // ends = [17, 30] (positions of '.' at end of each sentence)

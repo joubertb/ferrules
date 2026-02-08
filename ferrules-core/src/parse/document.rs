@@ -260,7 +260,7 @@ impl FerrulesParser {
     ///         "document.pdf".to_string(),
     ///         config,
     ///         Some(|page_id| println!("Parsed page {}", page_id)),
-    ///         None,
+    ///         None::<fn() -> bool>,
     ///     ).await.unwrap();
     /// }
     #[allow(clippy::too_many_arguments)]

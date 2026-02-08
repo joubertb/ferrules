@@ -23,7 +23,7 @@
 //! ```rust,no_run
 //! use ferrules_core::{
 //!     layout::model::{ORTConfig, OrtExecutionProvider},
-//!     FerrulesParser,
+//!     FerrulesParser, FerrulesParseConfig,
 //! };
 //!
 //! async fn process_document() -> anyhow::Result<()> {
@@ -40,14 +40,13 @@
 //!
 //!     // Parse document
 //!     let doc_bytes = std::fs::read("document.pdf")?;
+//!     let config = FerrulesParseConfig::default();
 //!     let parsed_doc = parser.parse_document(
 //!         &doc_bytes,
 //!         "document".into(),
-//!         None,           // No password
-//!         true,          // Flatten
-//!         None,          // Process all pages
-//!         None,          // No debug output
-//!         None,          // No progress callback
+//!         config,
+//!         None::<fn(ferrules_core::entities::PageID)>,  // No page callback
+//!         None::<fn() -> bool>,                         // No cancellation callback
 //!     ).await?;
 //!
 //!     Ok(())

@@ -8,9 +8,7 @@
 //! ## Usage
 //!
 //! ### Text Processing with Tags
-//! ```rust
-//! use ferrules_core::modtext;
-//!
+//! ```text
 //! // Process text spans with subscript/superscript detection and HTML tags
 //! let enhanced = modtext::unified_text_processing(&char_spans, false);
 //! ```
@@ -172,10 +170,8 @@ pub mod script_notation;
 /// When the `modtext` feature is disabled, this returns the original text unchanged.
 ///
 /// # Example
-/// ```rust
-/// use ferrules_core::modtext;
-///
-/// let enhanced = modtext::add_tags(&char_spans);
+/// ```text
+/// let enhanced = modtext::unified_text_processing(&char_spans, false);
 /// ```
 /// Unified text processing pipeline for both formulas and text blocks
 /// Consolidates hyphen removal, font correction, and HTML tag generation
