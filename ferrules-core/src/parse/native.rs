@@ -16,6 +16,43 @@ use tokio::sync::mpsc::{self, Receiver, Sender};
 
 const MAX_CONCURRENT_NATIVE_REQS: usize = 10;
 
+/// Threshold for gap ratio below which a zero-width generated space is considered
+/// a false word boundary from TJ kerning rather than a real space.
+/// False kerning gaps are ~10% of font_size; real word gaps are ~17%+.
+const TJ_KERNING_GAP_THRESHOLD: f32 = 0.15;
+
+/// Determines whether a generated whitespace character should be skipped because
+/// it represents a false word boundary inserted by pdfium's TJ kerning interpretation.
+///
+/// Returns `true` if the space should be skipped (false word boundary).
+///
+/// Three conditions must ALL be true:
+/// 1. The space character has zero width (false kerning spaces from TJ operators)
+/// 2. The next character is visible (non-whitespace) — gap is unreliable otherwise
+/// 3. The gap between previous span end and next char start is non-negative and small
+fn should_skip_generated_space(
+    space_width: f32,
+    next_char_is_whitespace: bool,
+    gap: f32,
+    font_size: f32,
+) -> bool {
+    // Only filter when next character is visible; when next is whitespace
+    // (e.g. newline), the gap measurement is unreliable.
+    if next_char_is_whitespace {
+        return false;
+    }
+
+    // Real word-boundary spaces have width proportional to the font.
+    // False kerning spaces from TJ operators have zero width.
+    if space_width >= f32::EPSILON {
+        return false;
+    }
+
+    // Only skip when gap is non-negative (negative = line wrap) and small
+    // relative to font size (kerning artifact, not a real word gap).
+    gap >= 0.0 && gap < font_size * TJ_KERNING_GAP_THRESHOLD
+}
+
 pub(crate) fn parse_text_spans<'a>(
     chars: impl Iterator<Item = PdfPageTextChar<'a>>,
     page_bbox: &BBox,
@@ -24,6 +61,37 @@ pub(crate) fn parse_text_spans<'a>(
     let mut char_iter = chars.peekable();
 
     while let Some(char) = char_iter.next() {
+        // Skip generated whitespace that represents false word boundaries from TJ kerning.
+        // Pdfium marks ALL spaces as generated, so we distinguish kerning artifacts from
+        // real word boundaries using space width and inter-character gap.
+        if char.is_generated().unwrap_or(false)
+            && char.unicode_char().unwrap_or_default().is_whitespace()
+        {
+            if let (Some(next_char), Some(prev_span)) = (char_iter.peek(), spans.last()) {
+                let space_width = char
+                    .loose_bounds()
+                    .map(|b| b.right().value - b.left().value)
+                    .unwrap_or(0.0);
+                let next_char_is_whitespace =
+                    next_char.unicode_char().unwrap_or_default().is_whitespace();
+                let next_x0 = next_char
+                    .loose_bounds()
+                    .map(|b| b.left().value)
+                    .unwrap_or(prev_span.bbox.x1);
+                let gap = next_x0 - prev_span.bbox.x1;
+
+                if should_skip_generated_space(
+                    space_width,
+                    next_char_is_whitespace,
+                    gap,
+                    prev_span.font_size,
+                ) {
+                    continue;
+                }
+            }
+            // Real word boundaries or edge cases fall through to normal processing
+        }
+
         let mut char_text = char.unicode_char().unwrap_or_default().to_string();
         let char_code = char.unicode_value();
 
@@ -491,5 +559,138 @@ pub fn start_native_parser(mut input_rx: Receiver<(ParseNativeRequest, Span)>) {
             Ok(_) => {}
             Err(e) => debug_print!("error parsing request natively : {e:?}"),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // Font sizes from real PDFs used in integration tests
+    const FONT_10_91: f32 = 10.91; // test5 (mem0.pdf) body text
+    const FONT_8_97: f32 = 8.97; // test2 (cag2025.pdf) body text
+
+    // --- False kerning: should be skipped ---
+
+    #[test]
+    fn test_skip_false_kerning_zero_width_small_gap() {
+        // "Al ice" in test5: zero-width space, gap ratio ~0.10
+        assert!(should_skip_generated_space(
+            0.0,               // zero-width space
+            false,             // next char is visible
+            FONT_10_91 * 0.10, // gap = 10% of font_size
+            FONT_10_91,
+        ));
+    }
+
+    #[test]
+    fn test_skip_false_kerning_exact_zero_gap() {
+        // Characters touching with zero gap
+        assert!(should_skip_generated_space(0.0, false, 0.0, FONT_10_91));
+    }
+
+    #[test]
+    fn test_skip_false_kerning_tiny_gap() {
+        // Very small gap (ratio ~0.01)
+        assert!(should_skip_generated_space(0.0, false, 0.13, FONT_10_91,));
+    }
+
+    #[test]
+    fn test_skip_false_kerning_at_threshold_boundary() {
+        // Gap just below threshold (ratio = 0.149...)
+        let gap = FONT_10_91 * 0.15 - 0.01;
+        assert!(should_skip_generated_space(0.0, false, gap, FONT_10_91));
+    }
+
+    // --- Real word boundaries: should NOT be skipped ---
+
+    #[test]
+    fn test_keep_real_space_nonzero_width() {
+        // Real word-boundary space with width ~50% of font_size
+        assert!(!should_skip_generated_space(
+            5.46,              // space width ≈ 50% of font_size
+            false,             // next char is visible
+            FONT_10_91 * 0.10, // even with small gap
+            FONT_10_91,
+        ));
+    }
+
+    #[test]
+    fn test_keep_real_space_large_gap() {
+        // "fetch passages" in test2: zero-width space but large gap (ratio ~0.17)
+        assert!(!should_skip_generated_space(
+            0.0,
+            false,
+            FONT_8_97 * 0.172, // gap ratio 0.172, above threshold
+            FONT_8_97,
+        ));
+    }
+
+    #[test]
+    fn test_keep_space_at_threshold() {
+        // Gap exactly at threshold should NOT be skipped (strict less-than)
+        let gap = FONT_10_91 * TJ_KERNING_GAP_THRESHOLD;
+        assert!(!should_skip_generated_space(0.0, false, gap, FONT_10_91));
+    }
+
+    #[test]
+    fn test_keep_space_next_is_whitespace() {
+        // Space followed by newline — gap measurement unreliable
+        assert!(!should_skip_generated_space(
+            0.0, true, // next char IS whitespace
+            0.0,  // zero gap (would otherwise be skipped)
+            FONT_10_91,
+        ));
+    }
+
+    #[test]
+    fn test_keep_space_negative_gap() {
+        // Negative gap indicates line wrap / column jump — always keep
+        assert!(!should_skip_generated_space(
+            0.0, false, -154.99, // large negative gap from line wrap
+            FONT_10_91,
+        ));
+    }
+
+    #[test]
+    fn test_keep_space_small_negative_gap() {
+        // Even slightly negative gaps should be kept
+        assert!(!should_skip_generated_space(0.0, false, -0.01, FONT_10_91));
+    }
+
+    // --- Edge cases ---
+
+    #[test]
+    fn test_keep_space_very_small_font() {
+        // Tiny font (1pt) — proportional threshold still applies
+        assert!(!should_skip_generated_space(0.0, false, 0.2, 1.0));
+    }
+
+    #[test]
+    fn test_skip_space_very_small_font_tiny_gap() {
+        // Tiny font with proportionally tiny gap
+        assert!(should_skip_generated_space(0.0, false, 0.1, 1.0));
+    }
+
+    #[test]
+    fn test_keep_space_epsilon_width() {
+        // Space width exactly at epsilon — treated as non-zero (real space)
+        assert!(!should_skip_generated_space(
+            f32::EPSILON,
+            false,
+            0.0,
+            FONT_10_91,
+        ));
+    }
+
+    #[test]
+    fn test_keep_space_just_above_epsilon_width() {
+        // Space width just above epsilon — real space
+        assert!(!should_skip_generated_space(
+            f32::EPSILON * 2.0,
+            false,
+            0.0,
+            FONT_10_91,
+        ));
     }
 }
