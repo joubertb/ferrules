@@ -328,6 +328,16 @@ const LAYOUT_DISTANCE_Y_WEIGHT: f32 = 1.0;
 /// This helps prevent incorrect assignments of text lines that are too far from layout blocks.
 const MAXIMUM_ASSIGNMENT_DISTANCE: f32 = 20.0;
 
+/// Maximum distance (in points) that an unmatched line can start BEFORE the last element's
+/// right edge and still be considered a continuation. A small negative value allows for minor
+/// overlap due to bbox imprecision.
+const UNMATCHED_LINE_X_OVERLAP_TOLERANCE: f32 = -5.0;
+
+/// Maximum distance (in points) that an unmatched line can start PAST the last element's
+/// right edge and still be considered a continuation. Limits how far right a text fragment
+/// can overflow a layout block boundary before being treated as unrelated.
+const UNMATCHED_LINE_MAX_X_OVERSHOOT: f32 = 100.0;
+
 /// Detects if text starts with a figure caption pattern
 /// TODO: WORKAROUND - The ONNX model should classify these as ElementType::Caption
 /// This should be removed once the model is retrained to properly identify captions
@@ -480,22 +490,25 @@ pub(crate) fn merge_lines_layout(
                     merge_or_create_elements(&mut elements, line, line_layout_block, page_id);
                 }
             },
-            // Line is detected but isn't assignable to some layout element
+            // Line is detected but isn't assignable to any layout element.
+            // This happens when text fragments extend past a layout block's
+            // bounding box (e.g., long lines where the tail overflows the
+            // ONNX-detected block boundary). Append to the last element if
+            // the line overlaps vertically AND starts near/past the element's
+            // right edge, indicating a text continuation.
             None => {
-                // TODO:
-                // Check distance between line and the last element
-
-                // let el = Element {
-                //     id: 0,
-                //     layout_block_id: -1,
-                //     text_block: ElementText {
-                //         text: line.text.to_owned(),
-                //     },
-                //     kind: ElementType::Text,
-                //     page_id,
-                //     bbox: line.bbox.clone(),
-                // };
-                // elements.push(el);
+                if let Some(last_el) = elements.last_mut() {
+                    let y_overlaps =
+                        line.bbox.y0 < last_el.bbox.y1 && line.bbox.y1 > last_el.bbox.y0;
+                    // How far past the element's right edge the line starts
+                    let x_past_right = line.bbox.x0 - last_el.bbox.x1;
+                    if y_overlaps
+                        && x_past_right > UNMATCHED_LINE_X_OVERLAP_TOLERANCE
+                        && x_past_right < UNMATCHED_LINE_MAX_X_OVERSHOOT
+                    {
+                        last_el.push_line(line);
+                    }
+                }
             }
         }
     }
