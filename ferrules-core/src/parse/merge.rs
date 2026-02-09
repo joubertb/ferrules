@@ -10,6 +10,14 @@ use crate::{
 use lazy_static::lazy_static;
 use regex::Regex;
 
+/// Maximum length of a joined word (without hyphen) to attempt dictionary lookup.
+/// Words longer than this are unlikely to be simple hyphenated line breaks.
+const MAX_JOINED_WORD_LENGTH: usize = 20;
+
+/// Minimum character length each word part must have to be considered
+/// for compound word detection (Case 2 of hyphen logic).
+const MIN_WORD_PART_LENGTH: usize = 2;
+
 lazy_static! {
     /// Pre-compiled regex for figure caption pattern detection
     static ref FIGURE_CAPTION_REGEX: Regex = Regex::new(r"^(?i)(Figure|Fig\.|Image)\s+[A-Za-z0-9]+[A-Za-z]?\s*[:.]").unwrap();
@@ -26,10 +34,12 @@ fn apply_corrections_to_text(text: String) -> String {
 
 /// Join lines with smart word-break handling
 ///
-/// When joining lines, handles two cases:
-/// 1. Word split across lines without hyphen (e.g., "ye" + "t" → "yet")
-/// 2. Hyphenated line breaks (e.g., "No-" + "tably" → "Notably")
-/// 3. Multi-fragment hyphenated words (e.g., "conver- sa tions" → "conversations")
+/// When joining lines, handles these cases:
+/// 1. Hyphenated line breaks where joined word is valid → remove hyphen (e.g., "No-" + "tably" → "Notably")
+/// 2. Compound words at line breaks (both parts valid words) → keep hyphen, no space (e.g., "English-" + "to" → "English-to")
+/// 3. Broken proper nouns/technical terms → remove hyphen (e.g., "Vi-" + "jil" → "Vijil")
+/// 4. Word split across lines without hyphen (e.g., "ye" + "t" → "yet")
+/// 5. Multi-fragment hyphenated words (e.g., "conver- sa tions" → "conversations")
 #[cfg(feature = "correction-engine")]
 fn join_lines_smart(lines: &[String]) -> String {
     use crate::font_analysis::dictionary::SmartCorrector;
@@ -53,12 +63,12 @@ fn join_lines_smart(lines: &[String]) -> String {
         let word_before = &result[result_word_start..];
 
         let line_word_end = line
-            .find(|c: char| c.is_whitespace() || c == ',' || c == '.' || c == ';')
+            .find(|c: char| c.is_whitespace() || c == ',' || c == '.' || c == ';' || c == '-')
             .unwrap_or(line.len());
         let word_after = &line[..line_word_end];
 
-        // Case 1: Check for hyphenated line break (e.g., "No-" + "tably" → "Notably")
-        let hyphen_join = if word_before.ends_with('-')
+        // Check for hyphenated line break pattern
+        let has_hyphen_candidate = word_before.ends_with('-')
             && word_before.len() > 1
             && word_before
                 .chars()
@@ -71,29 +81,36 @@ fn join_lines_smart(lines: &[String]) -> String {
                 .chars()
                 .next()
                 .map(|c| c.is_alphabetic())
-                .unwrap_or(false)
-        {
-            // Try joining without the hyphen
+                .unwrap_or(false);
+
+        if has_hyphen_candidate {
             let word_before_no_hyphen = &word_before[..word_before.len() - 1];
             let joined = format!("{}{}", word_before_no_hyphen, word_after);
-            if joined.len() <= 20 && SmartCorrector::is_valid_word(&joined) {
-                Some(word_before_no_hyphen.len())
-            } else {
-                None
-            }
-        } else {
-            None
-        };
 
-        if let Some(chars_to_remove) = hyphen_join {
-            // Remove the hyphen from result and join without space
-            let remove_from = result.len() - (word_before.len() - chars_to_remove);
-            result.truncate(remove_from);
-            result.push_str(line);
-            continue;
+            if joined.len() <= MAX_JOINED_WORD_LENGTH && SmartCorrector::is_valid_word(&joined) {
+                // Case 1: Valid joined word → remove hyphen
+                let remove_from = result.len() - (word_before.len() - word_before_no_hyphen.len());
+                result.truncate(remove_from);
+                result.push_str(line);
+                continue;
+            } else if word_before_no_hyphen.len() >= MIN_WORD_PART_LENGTH
+                && word_after.len() >= MIN_WORD_PART_LENGTH
+                && SmartCorrector::is_valid_word(word_before_no_hyphen)
+                && SmartCorrector::is_valid_word(word_after)
+            {
+                // Case 2: Both parts are valid words → compound word, keep hyphen, no space
+                result.push_str(line);
+                continue;
+            } else {
+                // Case 3: Neither valid → broken proper noun/tech term, remove hyphen
+                let remove_from = result.len() - (word_before.len() - word_before_no_hyphen.len());
+                result.truncate(remove_from);
+                result.push_str(line);
+                continue;
+            }
         }
 
-        // Case 2: Check for word split without hyphen (e.g., "ye" + "t" → "yet")
+        // Case 4: Check for word split without hyphen (e.g., "ye" + "t" → "yet")
         let should_join_without_space = !word_before.is_empty()
             && !word_after.is_empty()
             && word_before

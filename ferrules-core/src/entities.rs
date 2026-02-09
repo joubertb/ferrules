@@ -13,6 +13,14 @@ pub type ElementID = usize;
 
 const FERRULES_VERSION: &str = env!("CARGO_PKG_VERSION");
 
+/// Maximum length of a joined word (without hyphen) to attempt dictionary lookup.
+/// Words longer than this are unlikely to be simple hyphenated line breaks.
+const MAX_JOINED_WORD_LENGTH: usize = 20;
+
+/// Minimum character length each word part must have to be considered
+/// for compound word detection (Case 2 of hyphen logic).
+const MIN_WORD_PART_LENGTH: usize = 2;
+
 /// Information about how to join two lines in text processing
 /// Used for char_span calculation and fertext construction
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
@@ -217,18 +225,18 @@ impl ElementText {
         self.text.push_str(txt);
     }
     pub fn append_line(&mut self, txt: &str) {
-        // HYPHEN FIX: Handle end-of-line hyphenation when combining lines
-
-        // If current text ends with hyphen and next line starts with letter, remove hyphen
+        // Handle end-of-line hyphenation when combining lines.
+        // If text ends with hyphen and next line starts with letter, join without space
+        // to preserve compound words like "English-to-German". Actual hyphen removal
+        // (for words like "evalua-tion" → "evaluation") is handled by the modtext pipeline.
         if self.text.ends_with('-')
             && !txt.is_empty()
             && txt.chars().next().unwrap().is_alphabetic()
         {
-            // Remove the trailing hyphen and join directly (no space)
-            self.text.pop(); // Remove the '-'
+            // Join directly without space, keeping the hyphen
             self.text.push_str(txt);
             debug_print!(
-                "🔗 CROSS-LINE HYPHEN REMOVED: text ending with '-' + '{}' → joined without hyphen",
+                "🔗 CROSS-LINE HYPHEN JOIN: text ending with '-' + '{}' → joined without space",
                 &txt[..txt.len().min(20)]
             );
         } else {
@@ -455,11 +463,11 @@ impl Element {
 
         // Get the first word fragment from curr line
         let word_after = curr
-            .find(|c: char| c.is_whitespace() || c == ',' || c == '.' || c == ';')
+            .find(|c: char| c.is_whitespace() || c == ',' || c == '.' || c == ';' || c == '-')
             .map(|i| &curr[..i])
             .unwrap_or(curr);
 
-        // Case 1: Check for hyphenated line break (e.g., "No-" + "tably" → "Notably")
+        // Check for hyphenated line break
         if word_before.ends_with('-')
             && word_before.len() > 1
             && word_before
@@ -477,12 +485,24 @@ impl Element {
         {
             let word_before_no_hyphen = &word_before[..word_before.len() - 1];
             let joined = format!("{}{}", word_before_no_hyphen, word_after);
-            if joined.len() <= 20 && SmartCorrector::is_valid_word(&joined) {
+
+            if joined.len() <= MAX_JOINED_WORD_LENGTH && SmartCorrector::is_valid_word(&joined) {
+                // Case 1: Valid joined word → remove hyphen
+                return LineJoinInfo::RemoveHyphen;
+            } else if word_before_no_hyphen.len() >= MIN_WORD_PART_LENGTH
+                && word_after.len() >= MIN_WORD_PART_LENGTH
+                && SmartCorrector::is_valid_word(word_before_no_hyphen)
+                && SmartCorrector::is_valid_word(word_after)
+            {
+                // Case 2: Both parts valid → compound word, join without space (keep hyphen)
+                return LineJoinInfo::NoSpace;
+            } else {
+                // Case 3: Broken proper noun/technical term → remove hyphen
                 return LineJoinInfo::RemoveHyphen;
             }
         }
 
-        // Case 2: Check for word split without hyphen (e.g., "ye" + "t" → "yet")
+        // Case 4: Check for word split without hyphen (e.g., "ye" + "t" → "yet")
         if !word_before.is_empty()
             && !word_after.is_empty()
             && word_before

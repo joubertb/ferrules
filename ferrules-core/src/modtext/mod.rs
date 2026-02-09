@@ -20,19 +20,26 @@
 use crate::debug_print;
 use crate::entities::SpanType;
 
+/// Maximum length of a joined word (without hyphen) to attempt dictionary lookup.
+/// Words longer than this are unlikely to be simple hyphenated line breaks.
+const MAX_JOINED_WORD_LENGTH: usize = 20;
+
+/// Minimum character length each word part must have to be considered
+/// for compound word detection (Case 2 of hyphen logic).
+const MIN_WORD_PART_LENGTH: usize = 2;
+
 /// Remove end-of-line hyphens from span text
 ///
 /// This function handles hyphenated words that span across line breaks by:
 /// 1. Detecting spans that end with "-" (hyphen)
 /// 2. Checking if the next span starts with a letter
-/// 3. Removing the hyphen to properly rejoin the word
+/// 3. Using dictionary checks to decide whether to remove or preserve the hyphen
+/// 4. Always merging the spans (to avoid spurious spaces from spacing logic)
 ///
-/// Example: "Vi-" + "jil" → "Vijil"
-/// Remove line-ending hyphens at the span level
-///
-/// This function identifies spans that end with "word-" and the next span starts with "word"
-/// and combines them into a single "wordword" span, which is the proper way to handle
-/// line-ending hyphenation artifacts from PDF text extraction.
+/// Decision logic (with correction-engine):
+/// - If the joined word is a valid dictionary word → remove hyphen (e.g., "No-tably" → "Notably")
+/// - Else if BOTH parts are independently valid words → keep hyphen (compound word at line break)
+/// - Else → remove hyphen (broken proper noun/technical term, e.g., "Vi-jil" → "Vijil")
 fn remove_line_ending_hyphens(spans: &mut Vec<crate::entities::CharSpan>) {
     debug_print!("🔍 HYPHEN REMOVAL: Processing {} spans", spans.len());
 
@@ -53,7 +60,6 @@ fn remove_line_ending_hyphens(spans: &mut Vec<crate::entities::CharSpan>) {
 
         // Check if current span ends with line-ending hyphen pattern
         // Only process regular hyphens (U+002D), not em-dashes (U+2014) or en-dashes (U+2013)
-        // Note: U+0002 control characters are converted to hyphens in native.rs for consistent handling
         if current_span.text.len() > 1
             && current_span.text.ends_with('-')  // Regular hyphen only
             && !current_span.text.ends_with('—') // Not em-dash
@@ -75,52 +81,105 @@ fn remove_line_ending_hyphens(spans: &mut Vec<crate::entities::CharSpan>) {
                     .map(|c| c.is_alphabetic())
                     .unwrap_or(false)
             {
-                // Skip hyphen removal for likely compound words
-                // Common compound word patterns that should be preserved
-                // Extract just the last word before the hyphen (not the entire span)
                 let text_without_hyphen = current_span.text.trim_end_matches('-');
                 let word_before = text_without_hyphen
                     .rsplit(|c: char| c.is_whitespace() || c == '(' || c == ')')
                     .next()
                     .unwrap_or(text_without_hyphen);
-                // Extract just the first word from next span (stop at punctuation or space)
+                // Extract the first word from next span, splitting on whitespace, punctuation,
+                // AND hyphens. We split on hyphens because we're checking the word immediately
+                // after the line-break hyphen (e.g., for "to-German", we want just "to").
                 let word_after = next_span
                     .text
                     .split(|c: char| {
-                        c.is_whitespace() || c == '.' || c == ',' || c == ')' || c == '('
+                        c.is_whitespace()
+                            || c == '.'
+                            || c == ','
+                            || c == ')'
+                            || c == '('
+                            || c == '-'
                     })
                     .next()
                     .unwrap_or(&next_span.text);
 
-                // Check for common compound word patterns
+                // Check for common compound word patterns (numeric, etc.)
                 let likely_compound = is_likely_compound_word(word_before, word_after);
 
                 if likely_compound {
+                    // Compound word: merge spans but KEEP the hyphen
+                    let combined_text = format!("{}{}", current_span.text, next_span.text);
                     debug_print!(
-                        "🔍 COMPOUND WORD: Preserving hyphen in '{}-{}' (likely compound word)",
+                        "🔍 COMPOUND WORD: Merging with hyphen '{}-{}' → '{}'",
                         word_before,
-                        word_after
+                        word_after,
+                        combined_text
                     );
-                    i += 1;
+                    spans[i].text = combined_text;
+                    spans.remove(i + 1);
                     continue;
                 }
 
-                // Combine: remove hyphen and join with next span
-                // Use the full text without hyphen, not just the word_before
-                let combined_text = format!("{}{}", text_without_hyphen, next_span.text);
+                // Dictionary-based decision: should we remove or keep the hyphen?
+                // Default behavior (without correction-engine): remove hyphen
+                let mut keep_hyphen = false;
 
-                debug_print!(
-                    "🔗 HYPHEN REMOVAL: '{}' + '{}' → '{}'",
-                    current_span.text,
-                    next_span.text,
-                    combined_text
-                );
+                #[cfg(feature = "correction-engine")]
+                {
+                    use crate::font_analysis::dictionary::SmartCorrector;
+                    let joined_word = format!("{}{}", word_before, word_after);
 
-                // Update current span with combined text
-                spans[i].text = combined_text;
+                    if joined_word.len() <= MAX_JOINED_WORD_LENGTH
+                        && SmartCorrector::is_valid_word(&joined_word)
+                    {
+                        // Joined word is valid → remove hyphen (clear hyphenation)
+                        keep_hyphen = false;
+                        debug_print!("🔍 DICTIONARY: '{}' is valid, removing hyphen", joined_word);
+                    } else if word_before.len() >= MIN_WORD_PART_LENGTH
+                        && word_after.len() >= MIN_WORD_PART_LENGTH
+                        && SmartCorrector::is_valid_word(word_before)
+                        && SmartCorrector::is_valid_word(word_after)
+                    {
+                        // Both parts are independently valid words → compound word
+                        keep_hyphen = true;
+                        debug_print!(
+                            "🔍 DICTIONARY: Both '{}' and '{}' are valid words, keeping hyphen (compound word)",
+                            word_before,
+                            word_after
+                        );
+                    } else {
+                        // Neither the joined form nor both parts are valid
+                        // Assume it's a broken proper noun/technical term → remove hyphen
+                        keep_hyphen = false;
+                        debug_print!(
+                            "🔍 DICTIONARY: '{}' not valid and parts not both valid, removing hyphen",
+                            joined_word
+                        );
+                    }
+                }
 
-                // Remove the next span since it's now combined
-                spans.remove(i + 1);
+                if keep_hyphen {
+                    // Compound word: merge spans but keep the hyphen
+                    let combined_text = format!("{}{}", current_span.text, next_span.text);
+                    debug_print!(
+                        "🔗 HYPHEN KEPT: '{}' + '{}' → '{}'",
+                        current_span.text,
+                        next_span.text,
+                        combined_text
+                    );
+                    spans[i].text = combined_text;
+                    spans.remove(i + 1);
+                } else {
+                    // Remove hyphen and join
+                    let combined_text = format!("{}{}", text_without_hyphen, next_span.text);
+                    debug_print!(
+                        "🔗 HYPHEN REMOVAL: '{}' + '{}' → '{}'",
+                        current_span.text,
+                        next_span.text,
+                        combined_text
+                    );
+                    spans[i].text = combined_text;
+                    spans.remove(i + 1);
+                }
 
                 // Don't increment i since we removed a span
                 continue;

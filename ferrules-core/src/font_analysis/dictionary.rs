@@ -162,17 +162,21 @@ impl SmartCorrector {
     }
 
     /// Check if a word is in the dictionary
+    ///
+    /// Checks both lowercase and original case to handle proper nouns
+    /// (e.g., "English" is in the dictionary as a proper noun, not as "english").
     pub fn is_valid_word(word: &str) -> bool {
         #[cfg(feature = "correction-engine")]
         {
             // Strip HTML tags before validation
             let clean_word = Self::strip_html_tags(word);
+            let lowercase = clean_word.to_lowercase();
 
-            // Check custom Spellbook dictionary
+            // Check custom Spellbook dictionary (lowercase then original case)
             let is_valid_in_custom = CUSTOM_SPELL_CHECKER.with(|checker| -> bool {
                 let checker = checker.borrow();
                 if let Some(ref dict) = *checker {
-                    dict.check(&clean_word.to_lowercase())
+                    dict.check(&lowercase) || dict.check(&clean_word)
                 } else {
                     false
                 }
@@ -182,11 +186,11 @@ impl SmartCorrector {
                 return true;
             }
 
-            // Check thread-local main Hunspell dictionary
+            // Check thread-local main Hunspell dictionary (lowercase then original case)
             let is_valid_in_main = SPELL_CHECKER.with(|checker| -> bool {
                 let checker = checker.borrow();
                 if let Some(ref dict) = *checker {
-                    dict.check(&clean_word.to_lowercase())
+                    dict.check(&lowercase) || dict.check(&clean_word)
                 } else {
                     false
                 }
