@@ -129,9 +129,35 @@ fn join_lines_smart(lines: &[String]) -> String {
             // Join without space - word was split across lines
             result.push_str(line);
         } else {
-            // Normal join with space
-            result.push(' ');
-            result.push_str(line);
+            // Check for decimal number fragments split across lines.
+            // PDFs with subscript-positioned decimal points produce separate line groups
+            // for the digit, period, and following digit (e.g., "= 0" / "." / "1").
+            // Detect these short fragments and join without space.
+            let is_decimal_fragment = {
+                let trimmed = line.trim();
+                let result_bytes = result.as_bytes();
+                let result_len = result_bytes.len();
+                // Case 1: result ends with digit, next line is just "." → decimal point
+                (trimmed == "."
+                    && result_len > 0
+                    && result_bytes[result_len - 1].is_ascii_digit())
+                    ||
+                // Case 2: result ends with digit+".", next line is a short digit fragment
+                (trimmed.starts_with(|c: char| c.is_ascii_digit())
+                    && trimmed.len() <= 3
+                    && result_len >= 2
+                    && result_bytes[result_len - 1] == b'.'
+                    && result_bytes[result_len - 2].is_ascii_digit())
+            };
+
+            if is_decimal_fragment {
+                // Join without space - decimal number fragment
+                result.push_str(line);
+            } else {
+                // Normal join with space
+                result.push(' ');
+                result.push_str(line);
+            }
         }
     }
 

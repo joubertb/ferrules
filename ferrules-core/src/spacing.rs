@@ -101,6 +101,31 @@ pub fn should_add_space_between_spans(
         return false;
     }
 
+    // Don't insert space inside decimal numbers (digit.digit).
+    // PDFs often typeset math expressions with extra spacing around the decimal point,
+    // causing the gap to exceed the word-boundary threshold. Detect and suppress.
+    //
+    // Case 1: prev="0." curr="1" — prev ends with digit-dot, curr starts with digit
+    // Case 2: prev="." curr="1" — standalone period, curr starts with digit
+    // Case 3: prev="= 0" curr="." — prev ends with digit, curr is standalone period
+    if curr_span.text.starts_with(|c: char| c.is_ascii_digit()) {
+        let prev_bytes = prev_span.text.as_bytes();
+        let prev_len = prev_bytes.len();
+        if prev_len >= 2
+            && prev_bytes[prev_len - 1] == b'.'
+            && prev_bytes[prev_len - 2].is_ascii_digit()
+        {
+            return false;
+        }
+        if prev_span.text == "." {
+            return false;
+        }
+    }
+    // Case 3: curr is a standalone "." and prev ends with a digit
+    if curr_span.text == "." && prev_span.text.ends_with(|c: char| c.is_ascii_digit()) {
+        return false;
+    }
+
     // Word validation: if the gap is small and joining creates a valid word, don't add space
     // This prevents spurious spaces like "ye t" when it should be "yet"
     #[cfg(feature = "correction-engine")]
@@ -214,8 +239,29 @@ pub fn should_add_space_simple(
         || vertical_gap_indicates_line_wrap
         || negative_gap_with_small_y_diff_suggests_line_wrap;
 
-    // Only add space if conditions are met AND text doesn't already have spacing
-    spacing_conditions_met && !text_already_has_spacing
+    if !spacing_conditions_met || text_already_has_spacing {
+        return false;
+    }
+
+    // Don't insert space inside decimal numbers (digit.digit)
+    if curr_text.starts_with(|c: char| c.is_ascii_digit()) {
+        let prev_bytes = prev_text.as_bytes();
+        let prev_len = prev_bytes.len();
+        if prev_len >= 2
+            && prev_bytes[prev_len - 1] == b'.'
+            && prev_bytes[prev_len - 2].is_ascii_digit()
+        {
+            return false;
+        }
+        if prev_text == "." {
+            return false;
+        }
+    }
+    if curr_text == "." && prev_text.ends_with(|c: char| c.is_ascii_digit()) {
+        return false;
+    }
+
+    true
 }
 
 /// Common single-character words that should not be treated as word fragments.
@@ -394,6 +440,31 @@ mod tests {
             -15.0,
             2.0,
             12.0,
+            5.0
+        ));
+    }
+
+    #[test]
+    fn test_no_space_in_decimal_number_simple() {
+        // Case 1: "0." followed by "1" — no space (decimal number)
+        assert!(!should_add_space_simple("0.", "1", 1.8, 0.0, 10.0, 5.0));
+        assert!(!should_add_space_simple("28.", "4", 1.2, 0.0, 10.0, 5.0));
+        // Case 2: standalone "." followed by digit — no space
+        assert!(!should_add_space_simple(".", "1", 1.8, 0.0, 10.0, 5.0));
+        // Case 3: digit followed by standalone "." — no space
+        assert!(!should_add_space_simple("= 0", ".", 0.9, 0.0, 1.0, 5.0));
+        assert!(!should_add_space_simple("0", ".", 0.9, 0.0, 1.0, 5.0));
+    }
+
+    #[test]
+    fn test_space_after_sentence_period_simple() {
+        // "sentence." followed by "Next" SHOULD get a space (sentence boundary, not decimal)
+        assert!(should_add_space_simple(
+            "sentence.",
+            "Next",
+            3.0,
+            0.0,
+            10.0,
             5.0
         ));
     }
