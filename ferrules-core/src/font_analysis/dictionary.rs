@@ -628,12 +628,26 @@ impl SmartCorrector {
 
             // If the stripped word is different from the original, we have HTML tags
             if clean_word_for_checking != word && !clean_word_for_checking.is_empty() {
-                // Process only the text inside HTML tags
-                match self.correct_word_sync(&clean_word_for_checking) {
+                // Strip non-alphabetic edge characters (e.g. parentheses, punctuation) before
+                // correction, just like the non-HTML branch. This prevents edge punctuation like
+                // "(RAG)" from being sent to Hunspell, which would "correct" it to e.g. "RAGGA".
+                let inner_clean =
+                    clean_word_for_checking.trim_matches(|c: char| !c.is_alphabetic());
+                let inner_prefix = &clean_word_for_checking[..clean_word_for_checking.len()
+                    - clean_word_for_checking
+                        .trim_start_matches(|c: char| !c.is_alphabetic())
+                        .len()];
+                let inner_suffix =
+                    &clean_word_for_checking[inner_prefix.len() + inner_clean.len()..];
+
+                // Process only the alphabetic core inside HTML tags
+                match self.correct_word_sync(inner_clean) {
                     Some(corrected) => {
-                        // Replace the text inside HTML tags with corrected version
+                        // Reconstruct with original edge punctuation and HTML tags
+                        let corrected_inner =
+                            format!("{}{}{}", inner_prefix, corrected.as_ref(), inner_suffix);
                         let corrected_html =
-                            word.replace(&clean_word_for_checking, corrected.as_ref());
+                            word.replace(&clean_word_for_checking, &corrected_inner);
                         corrected_words.push(corrected_html);
                     }
                     None => corrected_words.push(word.to_string()),

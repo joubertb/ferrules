@@ -276,10 +276,10 @@ const COMMON_SINGLE_WORDS: [&str; 4] = ["a", "A", "i", "I"];
 /// NOTE: This list intentionally excludes archaic/rare words like "ye" that Hunspell
 /// recognizes but are far more likely to be word fragments in modern documents.
 /// Sorted alphabetically for binary search via `.binary_search().is_ok()`.
-const FUNCTION_WORDS: [&str; 36] = [
+const FUNCTION_WORDS: [&str; 37] = [
     "am", "an", "and", "are", "as", "at", "be", "but", "by", "can", "did", "do", "for", "go",
     "had", "has", "he", "if", "in", "is", "it", "its", "may", "me", "my", "no", "not", "of", "on",
-    "or", "so", "to", "up", "us", "was", "we",
+    "or", "so", "to", "up", "us", "was", "we", "while",
 ];
 
 /// Check if a word part is likely a fragment rather than a standalone word.
