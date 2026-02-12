@@ -603,7 +603,8 @@ fn is_prime_symbol(text: &str) -> bool {
 
 /// Check if script detection should be skipped for this span
 fn should_skip_script_detection(span: &CharSpan) -> bool {
-    span.text.trim().is_empty() || span.span_type == SpanType::Fraction
+    let text = span.text.trim();
+    text.is_empty() || span.span_type == SpanType::Fraction || text == "√" // radical sign is a math operator, not a subscript
 }
 
 /// Confidence calculation results for script detection
@@ -1259,6 +1260,7 @@ fn close_tags_until(result: &mut String, tag_stack: &mut Vec<&'static str>, targ
             "</b>" => "<b>",
             "</sub>" => "<sub>",
             "</sup>" => "<sup>",
+            "</foot>" => "<foot>",
             _ => continue,
         };
         result.push_str(opening_tag);
@@ -1271,7 +1273,7 @@ lazy_static! {
     /// Pre-compiled regex for removing spaces before closing tags
     static ref SCRIPT_TAG_SPACING_REGEX: regex::Regex = regex::Regex::new(r"\s+</").unwrap();
     /// Pre-compiled regex for removing spaces after opening tags
-    static ref SCRIPT_OPENING_TAG_SPACING_REGEX: regex::Regex = regex::Regex::new(r"(<su[bp]>|<b>)\s+").unwrap();
+    static ref SCRIPT_OPENING_TAG_SPACING_REGEX: regex::Regex = regex::Regex::new(r"(<su[bp]>|<b>|<foot>)\s+").unwrap();
     /// Pre-compiled regex for fixing adjacent script patterns
     static ref ADJACENT_SCRIPT_PATTERN_REGEX: regex::Regex = regex::Regex::new(r"<sup>([SH])(KV)</sup>").unwrap();
 }
@@ -1415,6 +1417,9 @@ fn apply_clustering_formatting(spans: &[CharSpan]) -> String {
     let mut current_bold = false;
     let mut in_subscript = false;
     let mut in_superscript = false;
+    // Track which closing tag is on the stack for the current superscript
+    // (either "</sup>" or "</foot>" for footnote references)
+    let mut sup_close_tag: &'static str = "</sup>";
 
     for (i, span) in spans.iter().enumerate() {
         let text_trimmed = span.text.trim();
@@ -1427,11 +1432,11 @@ fn apply_clustering_formatting(spans: &[CharSpan]) -> String {
         }
 
         // Find the clustering result for this span
-        let (_, is_sub, is_sup) = cluster_results
+        let (_, is_sub, is_sup, is_footnote) = cluster_results
             .iter()
-            .find(|(idx, _, _)| *idx == i)
+            .find(|(idx, _, _, _)| *idx == i)
             .copied()
-            .unwrap_or((i, false, false));
+            .unwrap_or((i, false, false, false));
 
         // Handle bold changes
         let is_bold_now = is_bold_text(span);
@@ -1447,9 +1452,13 @@ fn apply_clustering_formatting(spans: &[CharSpan]) -> String {
 
         // Handle script changes based on clustering results
         // Apply mathematical context override: convert superscripts to subscripts in math notation
+        // (but never override footnote references — they must stay as footnotes)
         let mut actual_is_sub = is_sub;
         let mut actual_is_sup = is_sup;
-        if is_sup && should_convert_superscript_to_subscript_in_math_context(span, i, spans) {
+        if is_sup
+            && !is_footnote
+            && should_convert_superscript_to_subscript_in_math_context(span, i, spans)
+        {
             actual_is_sup = false;
             actual_is_sub = true;
             debug_print!(
@@ -1457,6 +1466,13 @@ fn apply_clustering_formatting(spans: &[CharSpan]) -> String {
                 text_trimmed
             );
         }
+
+        // Choose tag based on whether this is a footnote reference
+        let (sup_open, sup_close): (&'static str, &'static str) = if is_footnote {
+            ("<foot>", "</foot>")
+        } else {
+            ("<sup>", "</sup>")
+        };
 
         if actual_is_sub && !in_subscript && !in_superscript {
             result.push_str("<sub>");
@@ -1467,16 +1483,21 @@ fn apply_clustering_formatting(spans: &[CharSpan]) -> String {
             // Skip <sup> tag for prime characters (apostrophes in superscript position)
             let is_prime = text_trimmed == "'";
             if !is_prime {
-                result.push_str("<sup>");
-                tag_stack.push("</sup>");
+                result.push_str(sup_open);
+                tag_stack.push(sup_close);
+                sup_close_tag = sup_close;
                 in_superscript = true;
-                debug_print!("⬆️ CLUSTER SUP START: '{}'", text_trimmed);
+                debug_print!(
+                    "⬆️ CLUSTER SUP START: '{}' (tag={})",
+                    text_trimmed,
+                    sup_open
+                );
             } else {
                 debug_print!("⬆️ CLUSTER PRIME: Skipping <sup> for prime character");
             }
         } else if actual_is_sub && in_superscript {
             // Direct superscript → subscript transition
-            close_tags_until(&mut result, &mut tag_stack, "</sup>");
+            close_tags_until(&mut result, &mut tag_stack, sup_close_tag);
             in_superscript = false;
             result.push_str("<sub>");
             tag_stack.push("</sub>");
@@ -1488,10 +1509,11 @@ fn apply_clustering_formatting(spans: &[CharSpan]) -> String {
             in_subscript = false;
             let is_prime = text_trimmed == "'";
             if !is_prime {
-                result.push_str("<sup>");
-                tag_stack.push("</sup>");
+                result.push_str(sup_open);
+                tag_stack.push(sup_close);
+                sup_close_tag = sup_close;
                 in_superscript = true;
-                debug_print!("🔄 CLUSTER SUB→SUP: '{}'", text_trimmed);
+                debug_print!("🔄 CLUSTER SUB→SUP: '{}' (tag={})", text_trimmed, sup_open);
             } else {
                 debug_print!("⬆️ CLUSTER PRIME: Skipping <sup> for prime after subscript");
             }
@@ -1503,7 +1525,7 @@ fn apply_clustering_formatting(spans: &[CharSpan]) -> String {
                 debug_print!("🔄 CLUSTER SUB END: '{}'", text_trimmed);
             }
             if in_superscript {
-                close_tags_until(&mut result, &mut tag_stack, "</sup>");
+                close_tags_until(&mut result, &mut tag_stack, sup_close_tag);
                 in_superscript = false;
                 debug_print!("🔄 CLUSTER SUP END: '{}'", text_trimmed);
             }
@@ -1889,6 +1911,9 @@ pub(crate) fn apply_text_formatting(spans: &[CharSpan]) -> String {
     let mut current_bold = false;
     let mut in_subscript = false;
     let mut in_superscript = false;
+    // Track which closing tag is on the stack for the current superscript
+    // (either "</sup>" or "</foot>" for footnote references)
+    let mut sup_close_tag: &'static str = "</sup>";
     let mut base_font_size: f32 = 0.0;
     let mut previous_y_position: Option<f32> = None; // Track previous character position for sequential comparison
     let mut font_size_initialized = false;
@@ -2148,8 +2173,13 @@ pub(crate) fn apply_text_formatting(spans: &[CharSpan]) -> String {
                     );
                 }
 
+                // Check for footnote reference pattern (using PDF positional + font data)
+                let is_footnote = is_footnote_reference_in_context(spans, i, base_font_size);
+
                 // MATHEMATICAL CONTEXT OVERRIDE: Convert superscripts to subscripts in mathematical notation
+                // (but never override footnote references — they must stay as footnotes)
                 if should_be_superscript
+                    && !is_footnote
                     && should_convert_superscript_to_subscript_in_math_context(span, i, spans)
                 {
                     should_be_superscript = false;
@@ -2170,6 +2200,13 @@ pub(crate) fn apply_text_formatting(spans: &[CharSpan]) -> String {
                 // Prime characters don't need <sup> tags as they're already visually raised
                 let is_prime_char = span.text.trim() == "'";
 
+                // Choose tag based on whether this is a footnote reference
+                let (sup_open, sup_close): (&'static str, &'static str) = if is_footnote {
+                    ("<foot>", "</foot>")
+                } else {
+                    ("<sup>", "</sup>")
+                };
+
                 if should_be_superscript
                     && sequential_diff < 0.0
                     && !in_superscript
@@ -2177,12 +2214,13 @@ pub(crate) fn apply_text_formatting(spans: &[CharSpan]) -> String {
                     && !is_prime_char
                 {
                     // Superscript has priority for upward movement (negative sequential_diff)
-                    result.push_str("<sup>");
-                    tag_stack.push("</sup>");
+                    result.push_str(sup_open);
+                    tag_stack.push(sup_close);
+                    sup_close_tag = sup_close;
                     in_superscript = true;
                     debug_print!(
-                        "⬆️ SUPERSCRIPT START: Real superscript detected (sequential_diff={:.2})",
-                        sequential_diff
+                        "⬆️ SUPERSCRIPT START: Real superscript detected (sequential_diff={:.2}, tag={})",
+                        sequential_diff, sup_open
                     );
                 } else if should_be_subscript
                     && sequential_diff > 0.0
@@ -2213,10 +2251,14 @@ pub(crate) fn apply_text_formatting(spans: &[CharSpan]) -> String {
                     && !is_prime_char
                 {
                     // Superscript only if not an optical alignment case and not a prime
-                    result.push_str("<sup>");
-                    tag_stack.push("</sup>");
+                    result.push_str(sup_open);
+                    tag_stack.push(sup_close);
+                    sup_close_tag = sup_close;
                     in_superscript = true;
-                    debug_print!("⬆️ SUPERSCRIPT START: Real superscript detected");
+                    debug_print!(
+                        "⬆️ SUPERSCRIPT START: Real superscript detected (tag={})",
+                        sup_open
+                    );
                 } else if !should_be_subscript && !should_be_superscript {
                     // Character should be normal - close any open script tags
                     // Close tags in LIFO order to maintain proper nesting
@@ -2225,7 +2267,7 @@ pub(crate) fn apply_text_formatting(spans: &[CharSpan]) -> String {
                         in_subscript = false;
                     }
                     if in_superscript {
-                        close_tags_until(&mut result, &mut tag_stack, "</sup>");
+                        close_tags_until(&mut result, &mut tag_stack, sup_close_tag);
                         in_superscript = false;
                     }
                 } else if should_be_superscript && in_superscript {
@@ -2282,7 +2324,7 @@ pub(crate) fn apply_text_formatting(spans: &[CharSpan]) -> String {
                         );
                     }
                     if in_superscript {
-                        close_tags_until(&mut result, &mut tag_stack, "</sup>");
+                        close_tags_until(&mut result, &mut tag_stack, sup_close_tag);
                         in_superscript = false;
                         debug_print!(
                             "🔄 BASELINE RETURN: Applied superscript close using LIFO order for '{text_trimmed}'"
@@ -2694,13 +2736,28 @@ fn calculate_baseline_difference(current_span: &CharSpan, baseline: f32) -> f32 
 fn detect_using_sequential_comparison(
     spans: &[CharSpan],
     cluster_indices: &[usize],
-) -> Vec<(usize, bool, bool)> {
+) -> Vec<(usize, bool, bool, bool)> {
     debug_print!(
         "🔄 Using sequential fallback for small cluster ({} spans)",
         cluster_indices.len()
     );
 
+    // Calculate max font size for footnote detection
+    let max_font_size = cluster_indices
+        .iter()
+        .map(|&idx| spans[idx].font_size)
+        .fold(0.0f32, |a, b| a.max(b));
+
     cluster_indices.iter().map(|&idx| {
+        // Check for footnote reference pattern first
+        if is_footnote_reference_in_context(spans, idx, max_font_size) {
+            debug_print!(
+                "📝 SEQUENTIAL FOOTNOTE: '{}' detected as footnote reference",
+                spans[idx].text.trim()
+            );
+            return (idx, false, true, true); // Force superscript, mark as footnote
+        }
+
         if idx > 0 {
 
             let prev = &spans[idx - 1];
@@ -2721,11 +2778,11 @@ fn detect_using_sequential_comparison(
             debug_print!("🔄 Sequential[{}]: '{}' diff={:.1} → sub={}, sup={}",
                         idx, curr.text.trim(), diff, is_sub, is_sup);
 
-            (idx, is_sub, is_sup)
+            (idx, is_sub, is_sup, false)
         } else {
             debug_print!("🔄 Sequential[{}]: '{}' (first span, no reference)",
                         idx, spans[idx].text.trim());
-            (idx, false, false)  // First char - no reference
+            (idx, false, false, false)  // First char - no reference
         }
     }).collect()
 }
@@ -2751,26 +2808,62 @@ fn is_footnote_reference_in_context(
     }
 
     // Check if preceded by punctuation or normal text (typical footnote context)
+    // Scan backwards up to 3 spans to accumulate context (spans can be single characters)
     if span_idx > 0 {
-        let prev_span = &spans[span_idx - 1];
-        let prev_text = prev_span.text.trim();
+        // First check if the immediate previous non-whitespace span is a single
+        // lowercase letter (math variable). Math variables like t, x, c, n followed
+        // by small digits are subscript indices, not footnote references.
+        let max_lookback = 3.min(span_idx);
+        for offset in 1..=max_lookback {
+            let prev = &spans[span_idx - offset];
+            let prev_trimmed = prev.text.trim();
+            if prev_trimmed.is_empty() {
+                continue;
+            }
+            // If immediate predecessor is a single lowercase letter → math variable subscript
+            if prev_trimmed.len() == 1 && prev_trimmed.chars().next().unwrap().is_ascii_lowercase()
+            {
+                debug_print!(
+                    "🧮 MATH VARIABLE: '{}' after single letter '{}' → not a footnote",
+                    text,
+                    prev_trimmed
+                );
+                return false;
+            }
+            break; // Only check the first non-whitespace span
+        }
 
-        // Footnotes typically come after punctuation or multi-character words
+        let mut context = String::new();
+        for offset in 1..=max_lookback {
+            let prev = &spans[span_idx - offset];
+            let prev_trimmed = prev.text.trim();
+            if prev_trimmed.is_empty() {
+                continue;
+            }
+            // Only accumulate adjacent spans with main-text font size
+            if prev.font_size < base_font_size * 0.85 {
+                break; // Hit another sub/superscript — stop looking back
+            }
+            context = format!("{}{}", prev_trimmed, context);
+            if context.len() > 1 {
+                break; // We have enough context
+            }
+        }
+
+        let ctx = context.trim();
+
+        // Footnotes typically come after punctuation or multi-character words/identifiers
         // Exclude single mathematical variables (like 't', 'c', 'n') which should have subscripts
-        let has_footnote_context = prev_text.ends_with(',')
-            || prev_text.ends_with('.')
-            || prev_text.ends_with(')')
-            || prev_text.ends_with(']')
-            || (prev_text.len() > 1
-                && prev_text
-                    .chars()
-                    .all(|c| c.is_ascii_alphabetic() || c.is_whitespace()));
+        // Check the LAST character of context (accumulated from possibly multiple spans)
+        let last_char = ctx.chars().last();
+        let has_footnote_context = matches!(last_char, Some(',' | '.' | ')' | ']'))
+            || (ctx.len() > 1 && last_char.is_some_and(|c| c.is_ascii_alphanumeric()));
 
         if has_footnote_context {
             debug_print!(
                 "📝 FOOTNOTE CONTEXT: '{}' after '{}' with font_ratio={:.3} → likely footnote",
                 text,
-                prev_text,
+                ctx,
                 font_ratio
             );
             return true;
@@ -2898,7 +2991,7 @@ fn detect_subscripts_in_cluster_with_local_analysis(
     spans: &[CharSpan],
     cluster_indices: &[usize],
     previous_baseline: Option<f32>,
-) -> Vec<(usize, bool, bool)> {
+) -> Vec<(usize, bool, bool, bool)> {
     // Small cluster fallback - proven more reliable for < 3 spans
     if cluster_indices.len() < MIN_CLUSTER_SIZE_FOR_BASELINE {
         return detect_using_sequential_comparison(spans, cluster_indices);
@@ -3032,13 +3125,13 @@ fn detect_subscripts_in_cluster_with_local_analysis(
                 "📝 FOOTNOTE OVERRIDE: '{}' detected as footnote reference → forcing superscript",
                 current_span.text.trim()
             );
-            results.push((span_idx, false, true)); // Force superscript
+            results.push((span_idx, false, true, true)); // Force superscript, mark as footnote
             continue;
         }
 
         // Check for matrix notation pattern before baseline analysis
         if is_matrix_notation_index(spans, span_idx) {
-            results.push((span_idx, true, false)); // Force subscript for matrix indices
+            results.push((span_idx, true, false, false)); // Force subscript for matrix indices
             continue;
         }
 
@@ -3203,7 +3296,7 @@ fn detect_subscripts_in_cluster_with_local_analysis(
 
         // Check for matrix notation pattern before baseline analysis (clustering mode)
         if is_matrix_notation_index(spans, span_idx) {
-            results.push((span_idx, true, false)); // Force subscript for matrix indices
+            results.push((span_idx, true, false, false)); // Force subscript for matrix indices
             continue;
         }
 
@@ -3234,7 +3327,7 @@ fn detect_subscripts_in_cluster_with_local_analysis(
             is_subscript, is_superscript
         );
 
-        results.push((span_idx, is_subscript, is_superscript));
+        results.push((span_idx, is_subscript, is_superscript, false));
     }
 
     results
@@ -3242,7 +3335,7 @@ fn detect_subscripts_in_cluster_with_local_analysis(
 
 /// Enhanced subscript detection using multiple baseline clustering
 /// This implements the research-backed approach for handling formulas with multiple baselines
-pub(crate) fn detect_subscripts_clustered(spans: &[CharSpan]) -> Vec<(usize, bool, bool)> {
+pub(crate) fn detect_subscripts_clustered(spans: &[CharSpan]) -> Vec<(usize, bool, bool, bool)> {
     if spans.is_empty() {
         return Vec::new();
     }
@@ -3329,7 +3422,7 @@ pub(crate) fn detect_subscripts_clustered(spans: &[CharSpan]) -> Vec<(usize, boo
     }
 
     // Sort results by original span index
-    all_results.sort_by_key(|&(idx, _, _)| idx);
+    all_results.sort_by_key(|&(idx, _, _, _)| idx);
 
     debug_print!(
         "✅ CLUSTERED DETECTION: Completed with {} results",
@@ -3360,6 +3453,7 @@ mod tests {
             char_end_idx: text.len(),
             original_unicode: None,
             has_corruption: false,
+            has_math_font: false,
             span_type: SpanType::Normal,
         }
     }
@@ -3467,6 +3561,33 @@ mod tests {
         let clusters = cluster_baselines(&spans, 5.0);
         assert_eq!(clusters.len(), 1, "Normal text should cluster together");
         assert_eq!(clusters[0].len(), 3, "All spans should be in one cluster");
+    }
+
+    #[test]
+    fn test_should_skip_script_detection_for_radical_sign() {
+        // √ is a math operator, not a subscript — even when positioned below the baseline
+        // (e.g., in fraction denominators like 1/√dk). Without this skip, ferrules wraps
+        // it in <sub>√</sub> and the LLM produces "sub square root of" instead of
+        // "square root of".
+        let sqrt_span = create_test_span("√", 100.0, 250.0, 7.0);
+        assert!(
+            should_skip_script_detection(&sqrt_span),
+            "√ should be skipped for script detection"
+        );
+
+        // Regular text should NOT be skipped
+        let regular_span = create_test_span("k", 100.0, 250.0, 7.0);
+        assert!(
+            !should_skip_script_detection(&regular_span),
+            "regular text should not be skipped"
+        );
+
+        // Empty text should be skipped (existing behavior)
+        let empty_span = create_test_span("", 100.0, 250.0, 7.0);
+        assert!(
+            should_skip_script_detection(&empty_span),
+            "empty text should be skipped"
+        );
     }
 }
 

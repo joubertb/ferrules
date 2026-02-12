@@ -665,6 +665,14 @@ impl SmartCorrector {
                     [..word.len() - word.trim_start_matches(|c: char| !c.is_alphabetic()).len()];
                 let suffix = &word[prefix.len() + clean_word.len()..];
 
+                // After edge trimming, if the word still contains parentheses, the
+                // punctuation is in the middle (e.g., "models,(described").
+                // This is a text extraction boundary artifact, not font corruption.
+                if clean_word.contains('(') || clean_word.contains(')') {
+                    corrected_words.push(word.to_string());
+                    continue;
+                }
+
                 match self.correct_word_sync(clean_word) {
                     Some(corrected) => {
                         let full_corrected = format!("{}{}{}", prefix, corrected.as_ref(), suffix);
