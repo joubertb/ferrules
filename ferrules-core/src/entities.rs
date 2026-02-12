@@ -843,13 +843,45 @@ impl CharSpan {
                 page_bbox.height(),
             );
 
+            // Compute effective font size. macOS Quartz PDFs report font_size=1.0 with
+            // actual size encoded in the text matrix. Estimate from character dimensions
+            // using AVERAGE_CHAR_WIDTH_FACTOR (0.55) from spacing.rs.
+            let effective_font_size = if self.font_size <= 1.0 {
+                let span_char_count = self.text.chars().count() as f32;
+                let avg_char_width = if span_char_count > 0.0 {
+                    self.bbox.width() / span_char_count
+                } else {
+                    char_bbox.width()
+                };
+                if avg_char_width > 2.0 {
+                    avg_char_width / 0.55
+                } else {
+                    self.font_size
+                }
+            } else {
+                self.font_size
+            };
+
+            // Detect word boundaries via X-gap when font_size is unreliable (e.g., macOS
+            // Quartz PDFs with font_size=1.0). Uses WORD_BOUNDARY_THRESHOLD_FACTOR (0.16)
+            // from spacing.rs. Normal PDFs handle word boundaries in Line::append().
+            if self.font_size <= 1.0 && effective_font_size > self.font_size {
+                let x_gap = char_bbox.x0 - self.bbox.x1;
+                if x_gap > 0.0 {
+                    let word_gap_threshold = effective_font_size * 0.16;
+                    if x_gap > word_gap_threshold {
+                        return None;
+                    }
+                }
+            }
+
             // Break on significant Y-position change (line break) for consistent line-level granularity.
             // Use font-size-relative threshold because new_from_char() uses tight_bounds() while
             // append() uses loose_bounds(), creating a consistent ~0.53*font_size Y-offset between
             // the span's initial y0 and subsequent chars' y0. A fixed threshold fails for fonts
             // where this offset exceeds it (e.g., 5.27pt for 9.96pt XCharter-Roman > fixed 5.0pt).
             // Real line breaks have Y-diff ≈ line_height (≈1.2*font_size), well above this threshold.
-            let line_break_y_threshold = self.font_size * 0.6;
+            let line_break_y_threshold = effective_font_size * 0.6;
             let y_diff = (char_bbox.y0 - self.bbox.y0).abs();
             if y_diff > line_break_y_threshold {
                 return None;

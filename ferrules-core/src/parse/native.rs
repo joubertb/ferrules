@@ -92,6 +92,18 @@ pub(crate) fn parse_text_spans<'a>(
             // Real word boundaries or edge cases fall through to normal processing
         }
 
+        // Skip synthetic whitespace from macOS Quartz-rendered PDFs.
+        // These space characters have empty font_name (no font identity). Normal PDFs also
+        // have empty font_name for whitespace, but their font_size is reliable so spacing
+        // logic handles them correctly. Only skip when font_size is unreliable (≤ 1.0),
+        // indicating a macOS Quartz PDF where spacing must be inferred from X-position gaps.
+        if char.unicode_char().unwrap_or_default().is_whitespace()
+            && char.font_name().is_empty()
+            && spans.last().map(|s| s.font_size <= 1.0).unwrap_or(false)
+        {
+            continue;
+        }
+
         let mut char_text = char.unicode_char().unwrap_or_default().to_string();
         let char_code = char.unicode_value();
 
