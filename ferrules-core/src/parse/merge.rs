@@ -884,6 +884,7 @@ pub(crate) fn merge_elements_into_blocks(
                         // Always set fertext to preserve original text for char_span alignment
                         // char_spans are indexed to the original text, so fertext must always exist
                         fertext: Some(original_text.clone()),
+                        has_math: curr_el.has_math,
                         char_spans: curr_el.get_serializable_char_spans(),
                         sentence_ends: Vec::new(), // Will be computed after merging
                     }),
@@ -927,6 +928,9 @@ pub(crate) fn merge_elements_into_blocks(
                                 merged.push_str(next_original_text);
                                 text_content.fertext = Some(merged);
                             }
+
+                            // Propagate has_math from merged element
+                            text_content.has_math |= next_el.has_math;
 
                             // Collect char_spans from next element with adjusted offsets
                             let offset = fertext_len + 1; // +1 for newline
@@ -1083,6 +1087,7 @@ pub(crate) fn merge_elements_into_blocks(
                                     text: processed_text.clone(),
                                     // Always set fertext for char_span alignment
                                     fertext: Some(original_text),
+                                    has_math: curr_el.has_math,
                                     char_spans,
                                     sentence_ends,
                                 }),
@@ -1153,6 +1158,7 @@ pub(crate) fn merge_elements_into_blocks(
                                             text: processed_text.clone(),
                                             // Always set fertext for char_span alignment
                                             fertext: Some(original_text),
+                                            has_math: curr_el.has_math,
                                             char_spans: Vec::new(),
                                             sentence_ends,
                                         }),
@@ -1728,6 +1734,7 @@ pub(crate) fn merge_elements_into_blocks(
                         text: processed_text.clone(),
                         // Always set fertext for char_span alignment
                         fertext: Some(original_text),
+                        has_math: curr_el.has_math,
                         char_spans: Vec::new(),
                         sentence_ends: Vec::new(),
                     }),
@@ -1773,6 +1780,7 @@ pub(crate) fn merge_elements_into_blocks(
                         text: processed_text.clone(),
                         // Always set fertext for char_span alignment
                         fertext: Some(original_text),
+                        has_math: curr_el.has_math,
                         char_spans: Vec::new(),
                         sentence_ends: Vec::new(),
                     }),
@@ -1918,6 +1926,7 @@ pub(crate) fn merge_elements_into_blocks(
                             block.kind = BlockType::Footer(TextBlock {
                                 text: text_block.text.clone(),
                                 fertext: text_block.fertext.clone(),
+                                has_math: text_block.has_math,
                                 char_spans: text_block.char_spans.clone(),
                                 sentence_ends: text_block.sentence_ends.clone(),
                             });
@@ -1948,6 +1957,7 @@ mod tests {
             },
             page_id,
             bbox,
+            has_math: false,
             line_spans: Vec::new(),
         }
     }
@@ -1962,6 +1972,7 @@ mod tests {
             },
             page_id,
             bbox,
+            has_math: false,
             line_spans: Vec::new(),
         }
     }
@@ -1976,6 +1987,7 @@ mod tests {
             },
             page_id,
             bbox,
+            has_math: false,
             line_spans: Vec::new(),
         }
     }
@@ -1990,6 +2002,7 @@ mod tests {
             },
             page_id,
             bbox,
+            has_math: false,
             line_spans: Vec::new(),
         }
     }
@@ -2001,6 +2014,7 @@ mod tests {
             text_block: ElementText::default(),
             page_id,
             bbox,
+            has_math: false,
             line_spans: Vec::new(),
         }
     }

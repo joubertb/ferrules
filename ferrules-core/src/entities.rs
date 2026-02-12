@@ -6,7 +6,10 @@ use std::{path::PathBuf, time::Duration};
 
 use pdfium_render::prelude::{PdfFontWeight, PdfPageTextChar, PdfRect};
 
-use crate::{blocks::Block, debug_print, debug_println, layout::model::LayoutBBox};
+use crate::{
+    blocks::Block, debug_print, debug_println,
+    font_analysis::universal_corrector::UniversalFontCorrector, layout::model::LayoutBBox,
+};
 
 pub type PageID = usize;
 pub type ElementID = usize;
@@ -31,6 +34,53 @@ enum LineJoinInfo {
     NoSpace,
     /// Remove trailing hyphen and join (e.g., "No-" + "tably" → "Notably")
     RemoveHyphen,
+}
+
+/// Map TeX CMMI/CMSY font encoding control characters to Unicode Greek letters.
+///
+/// TeX math fonts (CMMI, CMSY, CMEX) encode Greek letters in positions 0x00-0x21,
+/// which overlap with ASCII control characters. Pdfium passes these raw codes through,
+/// producing invisible characters. This maps them to the correct Greek Unicode.
+///
+/// Reference: TeX font encoding (OML — Ordinary Math Letters) for CMMI fonts.
+fn tex_math_encoding(char_code: u32) -> Option<char> {
+    match char_code {
+        0x00 => Some('Γ'), // Gamma
+        0x01 => Some('Δ'), // Delta
+        0x02 => Some('Θ'), // Theta
+        0x03 => Some('Λ'), // Lambda
+        0x04 => Some('Ξ'), // Xi
+        0x05 => Some('Π'), // Pi
+        0x06 => Some('Σ'), // Sigma
+        0x07 => Some('Υ'), // Upsilon
+        0x08 => Some('Φ'), // Phi
+        0x09 => Some('Ψ'), // Psi
+        0x0A => Some('Ω'), // Omega
+        0x0B => Some('α'), // alpha
+        0x0C => Some('β'), // beta
+        0x0D => Some('γ'), // gamma
+        0x0E => Some('δ'), // delta
+        0x0F => Some('ε'), // epsilon
+        0x10 => Some('ζ'), // zeta
+        0x11 => Some('η'), // eta
+        0x12 => Some('θ'), // theta
+        0x13 => Some('ι'), // iota
+        0x14 => Some('κ'), // kappa
+        0x15 => Some('λ'), // lambda
+        0x16 => Some('μ'), // mu
+        0x17 => Some('ν'), // nu
+        0x18 => Some('ξ'), // xi
+        0x19 => Some('π'), // pi
+        0x1A => Some('ρ'), // rho
+        0x1B => Some('σ'), // sigma
+        0x1C => Some('τ'), // tau
+        0x1D => Some('υ'), // upsilon
+        0x1E => Some('φ'), // phi
+        0x1F => Some('χ'), // chi
+        0x20 => Some('ψ'), // psi
+        0x21 => Some('ω'), // omega (only for CMMI; in CMSY this is '!')
+        _ => None,
+    }
 }
 
 /// Apply character-level font corrections using glyph name resolution
@@ -271,6 +321,9 @@ pub struct Element {
     pub kind: ElementType,
     pub page_id: usize,
     pub bbox: BBox,
+    /// Whether this element contains mathematical content (detected via fonts/Unicode)
+    #[serde(skip)]
+    pub(crate) has_math: bool,
     /// Stores the CharSpans from each line that was pushed to this element
     /// Used for formula processing with proper subscript/superscript detection
     /// Note: Skipped during serialization as this is only needed during processing
@@ -303,6 +356,7 @@ impl Element {
             page_id,
             text_block: Default::default(),
             bbox: layout_block.bbox.to_owned(),
+            has_math: false,
             line_spans: Vec::new(),
         }
     }
@@ -312,6 +366,11 @@ impl Element {
             self.text_block.push_first(&line.text);
         } else {
             self.text_block.append_line(&line.text);
+        }
+
+        // Propagate has_math from any span in the line (OR logic)
+        if !self.has_math {
+            self.has_math = line.spans.iter().any(|span| span.has_math_font);
         }
 
         // Store the CharSpans for potential subscript/superscript processing
@@ -649,6 +708,8 @@ pub struct CharSpan {
     // Font diagnostic information
     pub original_unicode: Option<char>,
     pub has_corruption: bool,
+    /// Whether this span contains characters from a mathematical font or mathematical Unicode
+    pub has_math_font: bool,
     /// Type of span for selective processing
     pub span_type: SpanType,
 }
@@ -663,6 +724,22 @@ impl CharSpan {
         // Apply character-level font corrections (glyph name resolution)
         let (glyph_corrected_text, has_corruption) =
             apply_character_corrections(&original_text, unicode_value, &font_name);
+
+        // Fix control characters from TeX math fonts (CMMI/CMSY encoding)
+        // TeX CMMI fonts encode Greek letters as control characters (0x00-0x21).
+        // Pdfium passes these through as raw codes, producing invisible chars like \u{000F} for ε.
+        let glyph_corrected_text = if glyph_corrected_text.len() == 1
+            && glyph_corrected_text.as_bytes()[0] < 0x22
+            && UniversalFontCorrector::is_mathematical_font(&font_name)
+        {
+            if let Some(greek) = tex_math_encoding(unicode_value) {
+                greek.to_string()
+            } else {
+                glyph_corrected_text
+            }
+        } else {
+            glyph_corrected_text
+        };
 
         // Apply control character corrections (handles \u0012, \u0013, \u0000, \u0001, \u0002)
         #[cfg(feature = "correction-engine")]
@@ -714,6 +791,21 @@ impl CharSpan {
         // No special case text corrections - use only glyph-based universal approach
         let corrected_final_text = final_text;
 
+        // Detect mathematical content via font name or Unicode character.
+        // Exclude footnote markers (∗ † ‡) and whitespace even when rendered in math fonts
+        // like CMSY, as they commonly appear in non-math contexts (author affiliations).
+        let is_non_math_char = original_unicode
+            .map(|c| c.is_whitespace() || matches!(c, '\u{2217}' | '\u{2020}' | '\u{2021}'))
+            .unwrap_or(false);
+        let has_math_font = if is_non_math_char {
+            false
+        } else {
+            UniversalFontCorrector::is_mathematical_font(&font_name)
+                || original_unicode
+                    .map(UniversalFontCorrector::is_mathematical_unicode)
+                    .unwrap_or(false)
+        };
+
         Self {
             bbox: BBox::from_pdfrect(
                 char.tight_bounds()
@@ -729,6 +821,7 @@ impl CharSpan {
             char_end_idx: char.index(),
             original_unicode,
             has_corruption,
+            has_math_font,
             span_type: SpanType::Normal,
         }
     }
@@ -815,6 +908,24 @@ impl CharSpan {
             // Update corruption flag if any character in span has corruption
             if char_has_corruption {
                 self.has_corruption = true;
+            }
+
+            // Propagate math font flag (OR logic: any math char makes the span math)
+            // Exclude footnote markers (∗ † ‡) and whitespace even when rendered in math
+            // fonts like CMSY, as they commonly appear in non-math contexts.
+            if !self.has_math_font {
+                let char_unicode = char.unicode_char();
+                let is_non_math_char = char_unicode
+                    .map(|c| c.is_whitespace() || matches!(c, '\u{2217}' | '\u{2020}' | '\u{2021}'))
+                    .unwrap_or(false);
+                if !is_non_math_char
+                    && (UniversalFontCorrector::is_mathematical_font(&font_name)
+                        || char_unicode
+                            .map(UniversalFontCorrector::is_mathematical_unicode)
+                            .unwrap_or(false))
+                {
+                    self.has_math_font = true;
+                }
             }
 
             Some(())
@@ -1267,6 +1378,7 @@ mod tests {
             char_end_idx: 0,
             original_unicode: None,
             has_corruption: false,
+            has_math_font: false,
             span_type: SpanType::Normal,
         }
     }
@@ -1329,5 +1441,90 @@ mod tests {
         line.append(span2).unwrap();
 
         assert_eq!(line.text, "w ith");
+    }
+
+    // --- CharSpan has_math_font tests ---
+
+    #[test]
+    fn test_charspan_math_font_detected() {
+        let mut span = make_test_span("x", 0.0, 5.0, 0.0, 12.0);
+        span.font_name = "CMMI10".to_string();
+        // Manually set since make_test_span uses "TestFont"
+        span.has_math_font = UniversalFontCorrector::is_mathematical_font(&span.font_name);
+        assert!(span.has_math_font);
+    }
+
+    #[test]
+    fn test_charspan_regular_font() {
+        let span = make_test_span("hello", 0.0, 30.0, 0.0, 12.0);
+        assert!(!span.has_math_font);
+    }
+
+    #[test]
+    fn test_charspan_math_unicode_detected() {
+        // A span with a regular font but mathematical Unicode char
+        let mut span = make_test_span("𝑥", 0.0, 5.0, 0.0, 12.0);
+        span.original_unicode = Some('𝑥');
+        span.has_math_font = UniversalFontCorrector::is_mathematical_font(&span.font_name)
+            || span
+                .original_unicode
+                .map(|c| UniversalFontCorrector::is_mathematical_unicode(c))
+                .unwrap_or(false);
+        assert!(span.has_math_font);
+    }
+
+    #[test]
+    fn test_charspan_append_propagates_math() {
+        // First span is non-math, second is math → result should be math
+        let mut span1 = make_test_span("a", 0.0, 5.0, 0.0, 12.0);
+        assert!(!span1.has_math_font);
+
+        let mut span2 = make_test_span("x", 6.0, 11.0, 0.0, 12.0);
+        span2.has_math_font = true;
+
+        // Simulate OR-propagation (as happens in CharSpan::append for font detection)
+        span1.has_math_font |= span2.has_math_font;
+        assert!(span1.has_math_font);
+    }
+
+    #[test]
+    fn test_charspan_append_both_nonmath() {
+        let span1 = make_test_span("a", 0.0, 5.0, 0.0, 12.0);
+        let span2 = make_test_span("b", 6.0, 11.0, 0.0, 12.0);
+        assert!(!span1.has_math_font);
+        assert!(!span2.has_math_font);
+    }
+
+    // --- tex_math_encoding tests ---
+
+    #[test]
+    fn test_tex_math_encoding_epsilon() {
+        // TeX CMMI code 0x0F = ε (the specific character that triggered this fix)
+        assert_eq!(tex_math_encoding(0x0F), Some('ε'));
+    }
+
+    #[test]
+    fn test_tex_math_encoding_greek_uppercase() {
+        assert_eq!(tex_math_encoding(0x00), Some('Γ'));
+        assert_eq!(tex_math_encoding(0x01), Some('Δ'));
+        assert_eq!(tex_math_encoding(0x02), Some('Θ'));
+        assert_eq!(tex_math_encoding(0x0A), Some('Ω'));
+    }
+
+    #[test]
+    fn test_tex_math_encoding_greek_lowercase() {
+        assert_eq!(tex_math_encoding(0x0B), Some('α'));
+        assert_eq!(tex_math_encoding(0x0C), Some('β'));
+        assert_eq!(tex_math_encoding(0x19), Some('π'));
+        assert_eq!(tex_math_encoding(0x1B), Some('σ'));
+        assert_eq!(tex_math_encoding(0x21), Some('ω'));
+    }
+
+    #[test]
+    fn test_tex_math_encoding_out_of_range() {
+        // Values above the TeX math encoding range should return None
+        assert_eq!(tex_math_encoding(0x22), None);
+        assert_eq!(tex_math_encoding(0x41), None); // 'A' in ASCII
+        assert_eq!(tex_math_encoding(0xFF), None);
     }
 }

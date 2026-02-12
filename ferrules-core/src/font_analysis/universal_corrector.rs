@@ -1368,7 +1368,7 @@ impl UniversalFontCorrector {
     /// Mathematical fonts include Computer Modern fonts (CMMI, CMSY, CMEX) and
     /// other fonts with "Math" in their names like CambriaMath.
     /// Optimized with static pattern matching for O(1) lookups.
-    fn is_mathematical_font(font_name: &str) -> bool {
+    pub(crate) fn is_mathematical_font(font_name: &str) -> bool {
         use std::collections::HashSet;
         use std::sync::OnceLock;
 
@@ -1395,6 +1395,52 @@ impl UniversalFontCorrector {
 
         // Check if font name contains any mathematical patterns
         patterns.iter().any(|pattern| font_name.contains(pattern))
+    }
+
+    /// Check if a character is a mathematical Unicode symbol.
+    ///
+    /// Detects characters in the Mathematical Alphanumeric Symbols block (U+1D400-U+1D7FF)
+    /// and a curated subset of Unicode math operators that strongly indicate mathematical
+    /// content. Excludes common characters that appear in non-math contexts:
+    /// - `+`, `=`, `|`, `~` (common in URLs, text, code)
+    /// - `×` (hardware specs like "V100 32G × 8 GPUs")
+    /// - `∗` U+2217 (commonly used as footnote markers)
+    /// - `<`, `>` (HTML tags)
+    /// - Greek letters (can appear in non-math contexts; math fonts catch these)
+    pub(crate) fn is_mathematical_unicode(c: char) -> bool {
+        let cp = c as u32;
+        // Mathematical Alphanumeric Symbols block: U+1D400 - U+1D7FF
+        // These are almost always mathematical (italic, bold, script letters)
+        if (0x1D400..=0x1D7FF).contains(&cp) {
+            return true;
+        }
+        // Curated set of distinctive mathematical operators/symbols
+        // that rarely appear in non-mathematical text
+        matches!(cp,
+            0x00AC |           // ¬ NOT
+            0x00B1 |           // ± PLUS-MINUS
+            0x00F7 |           // ÷ DIVISION
+            // Mathematical Operators block (curated, not the full U+2200-22FF range)
+            0x2200..=0x2211 |  // ∀ ∁ ∂ ∃ ∄ ∅ ∆ ∇ ∈ ∉ ∊ ∋ ∌ ∍ ∎ ∏ ∐ ∑
+            0x221A..=0x221E |  // √ ∛ ∜ ∝ ∞
+            0x2227..=0x222B |  // ∧ ∨ ∩ ∪ ∫
+            0x2234..=0x2237 |  // ∴ ∵ ∶ ∷
+            0x223C |           // ∼ TILDE OPERATOR (not ASCII ~)
+            0x2248 |           // ≈ ALMOST EQUAL TO
+            0x2260..=0x2261 |  // ≠ ≡
+            0x2264..=0x2265 |  // ≤ ≥
+            0x226A..=0x226B |  // ≪ ≫
+            0x2282..=0x2287 |  // ⊂ ⊃ ⊄ ⊅ ⊆ ⊇
+            0x2295..=0x2299 |  // ⊕ ⊖ ⊗ ⊘ ⊙
+            0x22A5 |           // ⊥ PERPENDICULAR
+            0x22C0..=0x22C3 |  // ⋀ ⋁ ⋂ ⋃
+            0x22C5 |           // ⋅ DOT OPERATOR
+            0x22EE..=0x22F1 |  // ⋮ ⋯ ⋰ ⋱
+            // Supplemental Mathematical Operators
+            0x27C0..=0x27EF |  // Miscellaneous Mathematical Symbols-A
+            0x2980..=0x29FF |  // Miscellaneous Mathematical Symbols-B
+            0x2A00..=0x2AFF    // Supplemental Mathematical Operators
+        )
     }
 
     /// Add standard encoding mappings for WinAnsiEncoding, MacRomanEncoding, etc.
@@ -2327,3 +2373,122 @@ impl Default for UniversalFontCorrector {
 // **Integration Points**: This universal font corrector now integrates seamlessly into
 // the unified pipeline through `apply_text_corrections_to_spans()`, ensuring consistent
 // font correction behavior across all document content types.
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    // --- is_mathematical_font tests ---
+
+    #[test]
+    fn test_is_mathematical_font_cmmi() {
+        assert!(UniversalFontCorrector::is_mathematical_font("CMMI10"));
+    }
+
+    #[test]
+    fn test_is_mathematical_font_cmsy() {
+        assert!(UniversalFontCorrector::is_mathematical_font("CMSY9"));
+    }
+
+    #[test]
+    fn test_is_mathematical_font_cambria() {
+        assert!(UniversalFontCorrector::is_mathematical_font("CambriaMath"));
+    }
+
+    #[test]
+    fn test_is_mathematical_font_stix() {
+        assert!(UniversalFontCorrector::is_mathematical_font(
+            "STIXMath-Regular"
+        ));
+    }
+
+    #[test]
+    fn test_is_mathematical_font_arial() {
+        assert!(!UniversalFontCorrector::is_mathematical_font("Arial"));
+    }
+
+    #[test]
+    fn test_is_mathematical_font_times() {
+        assert!(!UniversalFontCorrector::is_mathematical_font("Times-Roman"));
+    }
+
+    #[test]
+    fn test_is_mathematical_font_subset() {
+        // Subset prefix (e.g., "ABCDEF+CMMI10") should still match via contains()
+        assert!(UniversalFontCorrector::is_mathematical_font(
+            "ABCDEF+CMMI10"
+        ));
+    }
+
+    // --- is_mathematical_unicode tests ---
+
+    #[test]
+    fn test_is_mathematical_unicode_italic() {
+        // U+1D465 = 𝑥 (Mathematical Italic Small X)
+        assert!(UniversalFontCorrector::is_mathematical_unicode('𝑥'));
+    }
+
+    #[test]
+    fn test_is_mathematical_unicode_alpha() {
+        // U+1D6FC = 𝛼 (Mathematical Italic Small Alpha)
+        assert!(UniversalFontCorrector::is_mathematical_unicode('𝛼'));
+    }
+
+    #[test]
+    fn test_is_mathematical_unicode_sum() {
+        // ∑ is in Mathematical Operators block (Sm category)
+        assert!(UniversalFontCorrector::is_mathematical_unicode('∑'));
+    }
+
+    #[test]
+    fn test_is_mathematical_unicode_element_of() {
+        // ∈ is in Mathematical Operators block
+        assert!(UniversalFontCorrector::is_mathematical_unicode('∈'));
+    }
+
+    #[test]
+    fn test_is_mathematical_unicode_ascii() {
+        assert!(!UniversalFontCorrector::is_mathematical_unicode('a'));
+        assert!(!UniversalFontCorrector::is_mathematical_unicode('1'));
+    }
+
+    #[test]
+    fn test_is_mathematical_unicode_html_excluded() {
+        // < and > should be excluded to avoid HTML tag false positives
+        assert!(!UniversalFontCorrector::is_mathematical_unicode('<'));
+        assert!(!UniversalFontCorrector::is_mathematical_unicode('>'));
+    }
+
+    #[test]
+    fn test_is_mathematical_unicode_greek_excluded() {
+        // Greek letters excluded (can appear in non-math contexts;
+        // font-based detection catches math fonts instead)
+        assert!(!UniversalFontCorrector::is_mathematical_unicode('α'));
+        assert!(!UniversalFontCorrector::is_mathematical_unicode('β'));
+        // Note: Σ (U+03A3 Greek Capital Letter Sigma) excluded,
+        // but ∑ (U+2211 N-Ary Summation) is still detected
+        assert!(!UniversalFontCorrector::is_mathematical_unicode('Σ'));
+    }
+
+    #[test]
+    fn test_is_mathematical_unicode_distinctive_operators() {
+        // Distinctive math operators that rarely appear in regular text
+        assert!(UniversalFontCorrector::is_mathematical_unicode('÷'));
+        assert!(UniversalFontCorrector::is_mathematical_unicode('±'));
+        assert!(UniversalFontCorrector::is_mathematical_unicode('≠'));
+        assert!(UniversalFontCorrector::is_mathematical_unicode('≤'));
+        assert!(UniversalFontCorrector::is_mathematical_unicode('⊕'));
+        assert!(UniversalFontCorrector::is_mathematical_unicode('⊂'));
+    }
+
+    #[test]
+    fn test_is_mathematical_unicode_common_excluded() {
+        // Common characters excluded to avoid false positives
+        assert!(!UniversalFontCorrector::is_mathematical_unicode('+')); // too common
+        assert!(!UniversalFontCorrector::is_mathematical_unicode('=')); // URLs, text
+        assert!(!UniversalFontCorrector::is_mathematical_unicode('|')); // common in code
+        assert!(!UniversalFontCorrector::is_mathematical_unicode('~')); // common
+        assert!(!UniversalFontCorrector::is_mathematical_unicode('×')); // hardware specs
+        assert!(!UniversalFontCorrector::is_mathematical_unicode('∗')); // footnote markers
+    }
+}

@@ -61,11 +61,19 @@ impl List {
     }
 }
 
+/// Helper for `skip_serializing_if` on bool fields (serde lacks a built-in for this)
+fn is_false(b: &bool) -> bool {
+    !*b
+}
+
 #[derive(Debug, Default, Deserialize, Serialize)]
 pub struct TextBlock {
     pub(crate) text: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) fertext: Option<String>,
+    /// Whether this block contains mathematical text (detected via fonts/Unicode in ferrules)
+    #[serde(skip_serializing_if = "is_false", default)]
+    pub(crate) has_math: bool,
     /// Character spans with bounding boxes for sentence highlighting
     #[serde(skip_serializing_if = "Vec::is_empty", default)]
     pub(crate) char_spans: Vec<SerializableCharSpan>,
@@ -162,6 +170,9 @@ impl Block {
 
                     // Apply word-level corrections to assembled text (not fertext)
                     correction::apply_word_corrections(&mut text.text);
+
+                    // Propagate has_math from merged element
+                    text.has_math |= element.has_math;
 
                     // Collect char_spans from element with adjusted offsets
                     // Use fertext length since char_spans index into original text
@@ -262,5 +273,56 @@ impl Block {
             BlockType::Figure(_) => "FIGURE",
             BlockType::Table => "TABLE",
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn test_textblock_has_math_serializes() {
+        let block = TextBlock {
+            text: "Loss = sum".to_string(),
+            fertext: None,
+            has_math: true,
+            char_spans: Vec::new(),
+            sentence_ends: Vec::new(),
+        };
+        let json = serde_json::to_string(&block).unwrap();
+        assert!(
+            json.contains("\"has_math\":true"),
+            "has_math:true should appear in JSON: {json}"
+        );
+    }
+
+    #[test]
+    fn test_textblock_no_math_skips_field() {
+        let block = TextBlock {
+            text: "Hello world".to_string(),
+            fertext: None,
+            has_math: false,
+            char_spans: Vec::new(),
+            sentence_ends: Vec::new(),
+        };
+        let json = serde_json::to_string(&block).unwrap();
+        assert!(
+            !json.contains("has_math"),
+            "has_math:false should be absent from JSON: {json}"
+        );
+    }
+
+    #[test]
+    fn test_textblock_has_math_deserializes() {
+        let json = r#"{"text":"Loss = sum","has_math":true}"#;
+        let block: TextBlock = serde_json::from_str(json).unwrap();
+        assert!(block.has_math);
+    }
+
+    #[test]
+    fn test_textblock_missing_has_math_defaults_false() {
+        let json = r#"{"text":"Hello world"}"#;
+        let block: TextBlock = serde_json::from_str(json).unwrap();
+        assert!(!block.has_math);
     }
 }

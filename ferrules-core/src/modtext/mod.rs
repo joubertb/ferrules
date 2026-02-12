@@ -121,7 +121,11 @@ fn remove_line_ending_hyphens(spans: &mut Vec<crate::entities::CharSpan>) {
 
                 // Dictionary-based decision: should we remove or keep the hyphen?
                 // Default behavior (without correction-engine): remove hyphen
-                let mut keep_hyphen = false;
+                #[cfg(not(feature = "correction-engine"))]
+                let keep_hyphen = false;
+
+                #[cfg(feature = "correction-engine")]
+                let keep_hyphen;
 
                 #[cfg(feature = "correction-engine")]
                 {
@@ -423,6 +427,7 @@ fn process_spans_with_line_breaks(
                         char_end_idx: span.char_end_idx,
                         original_unicode: None,
                         has_corruption: false,
+                        has_math_font: false,
                         span_type: SpanType::Normal,
                     };
                     all_spans.push(separator_span);
