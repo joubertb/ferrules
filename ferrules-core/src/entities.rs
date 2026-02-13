@@ -870,7 +870,26 @@ impl CharSpan {
                 if x_gap > 0.0 {
                     let word_gap_threshold = effective_font_size * 0.16;
                     if x_gap > word_gap_threshold {
-                        return None;
+                        // Don't break between adjacent digits — PDFs may typeset numbers
+                        // like "100" with the leading "1" as a separate smaller glyph,
+                        // creating a gap that exceeds the base threshold but is still
+                        // within the digit adjacency tolerance (3x threshold).
+                        let original_text = char.unicode_char().unwrap_or_default().to_string();
+                        let prev_ends_digit = self.text.ends_with(|c: char| c.is_ascii_digit());
+                        let curr_is_digit = original_text
+                            .chars()
+                            .next()
+                            .is_some_and(|c| c.is_ascii_digit());
+                        if prev_ends_digit && curr_is_digit {
+                            let digit_gap_limit = word_gap_threshold * 3.0;
+                            if x_gap <= digit_gap_limit {
+                                // Allow digit to append — don't break the span
+                            } else {
+                                return None;
+                            }
+                        } else {
+                            return None;
+                        }
                     }
                 }
             }

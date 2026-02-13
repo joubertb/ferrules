@@ -28,6 +28,13 @@ const WORD_BOUNDARY_THRESHOLD_FACTOR: f32 = 0.16;
 /// This prevents spurious spaces in words like "ye t" → "yet"
 const WORD_VALIDATION_GAP_MULTIPLE: f32 = 3.0;
 
+/// Maximum gap (as multiple of base threshold) for digit-digit adjacency.
+/// When both spans are digits on the same line, we require a larger gap before
+/// inserting a space. This prevents "100" from becoming "1 00" when the PDF
+/// typesets digits with slightly wider kerning.
+/// 3.0x threshold ≈ 2.6pt for 10pt font, vs real word spaces at ~2.5pt+
+const DIGIT_ADJACENCY_GAP_MULTIPLE: f32 = 3.0;
+
 /// Calculate font-aware spacing threshold for a given font size
 ///
 /// This function determines the minimum horizontal gap needed between character spans
@@ -124,6 +131,39 @@ pub fn should_add_space_between_spans(
     // Case 3: curr is a standalone "." and prev ends with a digit
     if curr_span.text == "." && prev_span.text.ends_with(|c: char| c.is_ascii_digit()) {
         return false;
+    }
+
+    // Don't insert space between adjacent digits on the same line.
+    // PDFs sometimes typeset numbers with wider kerning (e.g., "100" becomes spans "1" + "00").
+    // Require a larger gap (DIGIT_ADJACENCY_GAP_MULTIPLE × threshold) before splitting digits.
+    // Use the larger font size when spans differ — PDFs may render the leading digit smaller
+    // (e.g., "1" at 4pt + "00%" at 10pt for "100%"), and using the small font's threshold
+    // would incorrectly allow a space.
+    if horizontal_gap_indicates_word_boundary
+        && !vertical_gap_indicates_line_wrap
+        && !negative_gap_with_small_y_diff_suggests_line_wrap
+    {
+        let prev_ends_digit = prev_span.text.ends_with(|c: char| c.is_ascii_digit());
+        let curr_starts_digit = curr_span.text.starts_with(|c: char| c.is_ascii_digit());
+        if prev_ends_digit && curr_starts_digit {
+            // Use the larger font size when spans have different sizes.
+            let mut max_font_size = prev_span.font_size.max(curr_span.font_size);
+            // For macOS Quartz PDFs where all font_sizes are 1.0, derive effective
+            // font size from the larger span's bbox height instead.
+            if max_font_size <= 1.0 {
+                let prev_height = (prev_span.bbox.y1 - prev_span.bbox.y0).abs();
+                let curr_height = (curr_span.bbox.y1 - curr_span.bbox.y0).abs();
+                let max_height = prev_height.max(curr_height);
+                if max_height > 2.0 {
+                    max_font_size = max_height;
+                }
+            }
+            let digit_threshold = calculate_spacing_threshold(max_font_size);
+            let digit_gap_limit = digit_threshold * DIGIT_ADJACENCY_GAP_MULTIPLE;
+            if horizontal_gap < digit_gap_limit {
+                return false;
+            }
+        }
     }
 
     // Word validation: if the gap is small and joining creates a valid word, don't add space
@@ -259,6 +299,21 @@ pub fn should_add_space_simple(
     }
     if curr_text == "." && prev_text.ends_with(|c: char| c.is_ascii_digit()) {
         return false;
+    }
+
+    // Don't insert space between adjacent digits on the same line.
+    if horizontal_gap_indicates_word_boundary
+        && !vertical_gap_indicates_line_wrap
+        && !negative_gap_with_small_y_diff_suggests_line_wrap
+    {
+        let prev_ends_digit = prev_text.ends_with(|c: char| c.is_ascii_digit());
+        let curr_starts_digit = curr_text.starts_with(|c: char| c.is_ascii_digit());
+        if prev_ends_digit && curr_starts_digit {
+            let digit_gap_limit = min_word_boundary_gap * DIGIT_ADJACENCY_GAP_MULTIPLE;
+            if horizontal_gap < digit_gap_limit {
+                return false;
+            }
+        }
     }
 
     true
@@ -467,6 +522,20 @@ mod tests {
             10.0,
             5.0
         ));
+    }
+
+    #[test]
+    fn test_no_space_between_adjacent_digits_simple() {
+        // "1" followed by "00" with small gap — no space (same number, e.g., "100")
+        // threshold for 10pt = 10 * 0.55 * 0.16 = 0.88, digit limit = 0.88 * 3.0 = 2.64
+        assert!(!should_add_space_simple("1", "00", 1.0, 0.0, 10.0, 5.0));
+        assert!(!should_add_space_simple("1", "00", 2.0, 0.0, 10.0, 5.0));
+        // Gap exceeding digit limit SHOULD get a space
+        assert!(should_add_space_simple("1", "00", 3.0, 0.0, 10.0, 5.0));
+        // Digit followed by non-digit should still get a space
+        assert!(should_add_space_simple("1", "percent", 1.0, 0.0, 10.0, 5.0));
+        // Non-digit followed by digit should still get a space
+        assert!(should_add_space_simple("Chapter", "1", 1.0, 0.0, 10.0, 5.0));
     }
 
     #[test]
