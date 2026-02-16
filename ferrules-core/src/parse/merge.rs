@@ -1018,6 +1018,7 @@ pub(crate) fn merge_elements_into_blocks(
                         items: vec![crate::blocks::ListItem {
                             text: first_item_text,
                             fertext: Some(first_item_original),
+                            has_math: curr_el.has_math,
                             char_spans: first_item_char_spans,
                         }],
                     }),
@@ -1059,6 +1060,7 @@ pub(crate) fn merge_elements_into_blocks(
                             list.items.push(crate::blocks::ListItem {
                                 text: processed_item_text,
                                 fertext: Some(item_original),
+                                has_math: next_el.has_math,
                                 char_spans: item_char_spans,
                             });
                         }

@@ -87,6 +87,9 @@ pub struct ListItem {
     pub(crate) text: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub(crate) fertext: Option<String>,
+    /// Whether this list item contains mathematical text (detected via fonts/Unicode in ferrules)
+    #[serde(skip_serializing_if = "is_false", default)]
+    pub(crate) has_math: bool,
     /// Character spans with bounding boxes for sentence highlighting
     #[serde(skip_serializing_if = "Vec::is_empty", default)]
     pub(crate) char_spans: Vec<SerializableCharSpan>,
@@ -208,6 +211,7 @@ impl Block {
                     list.items.push(ListItem {
                         text: txt,
                         fertext: Some(original_text),
+                        has_math: element.has_math,
                         char_spans,
                     });
                     Ok(())
@@ -324,5 +328,49 @@ mod tests {
         let json = r#"{"text":"Hello world"}"#;
         let block: TextBlock = serde_json::from_str(json).unwrap();
         assert!(!block.has_math);
+    }
+
+    #[test]
+    fn test_listitem_has_math_serializes() {
+        let item = ListItem {
+            text: "Loss = sum".to_string(),
+            fertext: None,
+            has_math: true,
+            char_spans: Vec::new(),
+        };
+        let json = serde_json::to_string(&item).unwrap();
+        assert!(
+            json.contains("\"has_math\":true"),
+            "has_math:true should appear in JSON: {json}"
+        );
+    }
+
+    #[test]
+    fn test_listitem_has_math_false_not_serialized() {
+        let item = ListItem {
+            text: "Regular list item".to_string(),
+            fertext: None,
+            has_math: false,
+            char_spans: Vec::new(),
+        };
+        let json = serde_json::to_string(&item).unwrap();
+        assert!(
+            !json.contains("has_math"),
+            "has_math:false should be absent from JSON: {json}"
+        );
+    }
+
+    #[test]
+    fn test_listitem_has_math_deserializes() {
+        let json = r#"{"text":"Loss = sum","has_math":true}"#;
+        let item: ListItem = serde_json::from_str(json).unwrap();
+        assert!(item.has_math);
+    }
+
+    #[test]
+    fn test_listitem_missing_has_math_defaults_false() {
+        let json = r#"{"text":"Regular list item"}"#;
+        let item: ListItem = serde_json::from_str(json).unwrap();
+        assert!(!item.has_math);
     }
 }

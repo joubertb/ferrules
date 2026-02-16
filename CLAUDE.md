@@ -63,7 +63,7 @@ A **unified correction engine** dynamically analyzes PDF fonts at runtime — no
 
 ## Mathematical Content Detection (`has_math`)
 
-Ferrules flags text blocks containing math with `has_math: true` in JSON output, enabling the worker's LLM-based text formula translation pipeline.
+Ferrules flags text blocks and list items containing math with `has_math: true` in JSON output, enabling the worker's LLM-based text formula translation pipeline.
 
 ### Detection Pipeline
 
@@ -74,6 +74,8 @@ Ferrules flags text blocks containing math with `has_math: true` in JSON output,
 **Element** (`entities.rs`): `has_math` set if any span in any line has `has_math_font`.
 
 **TextBlock** (`blocks.rs`, `merge.rs`): `has_math` propagates through merges. Serialized only when true (`skip_serializing_if`).
+
+**ListItem** (`blocks.rs`, `merge.rs`): `has_math` propagates from element to each list item. Serialized only when true.
 
 ### TeX CMMI/CMSY Font Encoding
 
