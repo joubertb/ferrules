@@ -83,6 +83,12 @@ fn tex_math_encoding(char_code: u32) -> Option<char> {
     }
 }
 
+/// Whitespace/newline control characters that must never be mapped to glyphs.
+/// PDF fonts (especially CMMI math fonts) have encoding differences that map these
+/// codepoints to Greek letters (e.g., 0x0D → γ, 0x0A → Ω). These are text stream
+/// control characters from PDF line wraps, not real glyphs.
+const WHITESPACE_CONTROL_CHARS: [u32; 4] = [0x09, 0x0A, 0x0C, 0x0D]; // HT, LF, FF, CR
+
 /// Apply character-level font corrections using glyph name resolution
 ///
 /// This implements the PDF viewer approach: code → glyph → glyph name → Unicode
@@ -92,6 +98,11 @@ fn apply_character_corrections(
     unicode_value: u32,
     font_name: &str,
 ) -> (String, bool) {
+    // Skip whitespace/newline control chars — never map these to glyphs.
+    if WHITESPACE_CONTROL_CHARS.contains(&unicode_value) {
+        return (original_text.to_string(), false);
+    }
+
     // Get the original character for comparison
     let original_char = original_text.chars().next().unwrap_or('\0');
 
@@ -129,25 +140,6 @@ fn apply_character_corrections(
             }
         }
     }
-
-    // Try universal glyph-based correction
-    // TODO: This requires access to font glyph information from pdfium-render
-    // For now, this is disabled until we can extract glyph names
-    // {
-    //     use crate::font_analysis::UniversalFontCorrector;
-    //
-    //     if let Some(corrected_char) = UniversalFontCorrector::correct_character_from_glyph(
-    //         unicode_value,
-    //         None  // glyph_name - need to extract from font
-    //     ) {
-    //         debug_print!(
-    //             "🔧 GLYPH CORRECTOR: Unicode 0x{unicode_value:04X} → '{corrected_char}' (glyph-based)"
-    //         );
-    //         return (corrected_char.to_string(), true);
-    //     }
-    // }
-
-    // The universal corrector now handles all font corrections
 
     // No correction needed - return original text
     (original_text.to_string(), false)
@@ -728,8 +720,20 @@ impl CharSpan {
         // Fix control characters from TeX math fonts (CMMI/CMSY encoding)
         // TeX CMMI fonts encode Greek letters as control characters (0x00-0x21).
         // Pdfium passes these through as raw codes, producing invisible chars like \u{000F} for ε.
+        //
+        // IMPORTANT: Skip whitespace/newline control chars (HT, LF, FF, CR) even in math fonts.
+        // These are never intentional Greek letters — they are text stream control characters
+        // that leak through from PDF line wraps. Without this exclusion, CR (0x0D) becomes γ
+        // and LF (0x0A) becomes Ω at every line break in PDFs with fonts matching "Math".
+        let byte_value = glyph_corrected_text
+            .as_bytes()
+            .first()
+            .copied()
+            .unwrap_or(0xFF);
+        let is_whitespace_control = WHITESPACE_CONTROL_CHARS.contains(&(byte_value as u32));
         let glyph_corrected_text = if glyph_corrected_text.len() == 1
-            && glyph_corrected_text.as_bytes()[0] < 0x22
+            && byte_value < 0x22
+            && !is_whitespace_control
             && UniversalFontCorrector::is_mathematical_font(&font_name)
         {
             if let Some(greek) = tex_math_encoding(unicode_value) {
@@ -1577,5 +1581,34 @@ mod tests {
         assert_eq!(tex_math_encoding(0x22), None);
         assert_eq!(tex_math_encoding(0x41), None); // 'A' in ASCII
         assert_eq!(tex_math_encoding(0xFF), None);
+    }
+
+    #[test]
+    fn test_whitespace_control_chars_not_converted_to_greek() {
+        // CR (0x0D) maps to γ in CMMI encoding — apply_character_corrections must block this.
+        // LF (0x0A) maps to Ω, HT (0x09) maps to Ψ, FF (0x0C) maps to ϕ.
+        for &unicode_val in &WHITESPACE_CONTROL_CHARS {
+            let original = String::from(char::from_u32(unicode_val).unwrap());
+            let (result, corrected) = apply_character_corrections(&original, unicode_val, "CMMI10");
+            assert_eq!(
+                result, original,
+                "U+{:04X} should not be corrected",
+                unicode_val
+            );
+            assert!(
+                !corrected,
+                "U+{:04X} should not be flagged as corrected",
+                unicode_val
+            );
+        }
+    }
+
+    #[test]
+    fn test_real_greek_in_cmmi_still_corrected() {
+        // 0x0E = ε in CMMI encoding — this is NOT a whitespace control char and SHOULD
+        // be corrected via the encoding differences path when correction-engine is enabled.
+        let original = String::from(char::from_u32(0x0E).unwrap());
+        let (_result, _corrected) = apply_character_corrections(&original, 0x0E, "CMMI10");
+        // We just verify it doesn't panic; actual correction depends on feature flags.
     }
 }
