@@ -27,7 +27,7 @@ pub fn title_levels_kmeans(
     }
 
     let kmean: KMeans<_, LANE_COUNT_SIMD_KMEANS, _> =
-        KMeans::new(samples, sample_len, 1, EuclideanDistance);
+        KMeans::new(&samples, sample_len, 1, EuclideanDistance);
 
     let result = kmean.kmeans_lloyd(
         title_buckets,

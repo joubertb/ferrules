@@ -2448,9 +2448,9 @@ dependencies = [
 
 [[package]]
 name = "kmeans"
-version = "1.1.0"
+version = "2.0.1"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "a541c458d069a918b9a7d460bd07d5292cb3003e0c417c8614039379959efe2c"
+checksum = "2df75a1e4d7872214ef99035a789270aa25e44e41498bdf8fad74695116020d8"
 dependencies = [
  "aligned-vec",
  "num",
