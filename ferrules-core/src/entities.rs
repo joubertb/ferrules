@@ -1,6 +1,4 @@
 use image::DynamicImage;
-// plsfix disabled - was causing over-aggressive text corrections like "long-context" → "longficontext"
-// use plsfix::fix_text;
 use serde::{Deserialize, Serialize};
 use std::{path::PathBuf, time::Duration};
 

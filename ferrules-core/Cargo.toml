@@ -16,9 +16,7 @@ modtext = []
 tracing-subscriber = "0.3"
 lazy_static = "1.5.0"
 itertools = "0.14.0"
-futures = "0.3.31"
 colored = "3.0.0"
-dirs = "6.0.0"
 anyhow = { workspace = true }
 uuid = { workspace = true }
 tracing = { workspace = true }
@@ -26,7 +24,6 @@ tokio = { workspace = true }
 serde = { workspace = true }
 serde_json = { workspace = true }
 bitflags = "2.4"
-chrono = { version = "0.4.38", features = ["serde"] }
 clap = { version = "4.5.20", features = ["derive"] }
 # pdf reader
 imageproc = "0.25.0"
@@ -38,12 +35,9 @@ pdfium-render = { version = "=0.8.34", default-features = false, features = [
     "pdfium_6666",
 ] }
 lopdf = "0.34.0"
-adobe-cmap-parser = "0.4.1"
-flate2 = "1.0"
 # Inference
 image = "0.25.5"
 ndarray = "0.16.1"
-plsfix = "0.1.7"
 ort = { version = "=2.0.0-rc.10", features = ["fetch-models"] }
 serde_millis = "0.1.1"
 kmeans = "2.0.1"
