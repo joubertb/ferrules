@@ -1,5 +1,5 @@
 ARG UBUNTU_VERSION=22.04
-ARG RUST_VERSION=nightly
+ARG RUST_VERSION=nightly-2025-08-15
 
 # Builder stage
 FROM ubuntu:${UBUNTU_VERSION} AS builder
