@@ -1,9 +1,10 @@
 use std::collections::HashMap;
 
 use crate::{
-    blocks::{Block, BlockType, FormulaBlock, ImageBlock, List, TextBlock, Title, TitleLevel},
     debug_print,
+    blocks::{Block, BlockType, ImageBlock, List, TableBlock, TextBlock, Title, TitleLevel},
     entities::{Element, ElementID, ElementType, Line, PageID},
+    error::FerrulesError,
     layout::model::LayoutBBox,
     sentence_detection::detect_sentence_ends,
 };
@@ -464,7 +465,7 @@ pub(crate) fn merge_lines_layout(
     layout_boxes: &[LayoutBBox],
     lines: &[Line],
     page_id: usize,
-) -> anyhow::Result<Vec<Element>> {
+) -> Result<Vec<Element>, FerrulesError> {
     let line_block_iterator = lines.iter().map(|line| {
         // TODO: the max here is sometimes very far away from the line.
         // ex: megatrends.pdf, header is categorized as text-block but the intersection  happens
@@ -522,7 +523,7 @@ pub(crate) fn merge_lines_layout(
     let mut footers = Vec::new();
     for (line, layout_block) in line_block_iterator {
         match &layout_block.as_ref() {
-            Some(&line_layout_block) => match line_layout_block.label {
+            Some(&line_layout_block) => match line_layout_block.label.as_str() {
                 "Page-header" => {
                     merge_or_create_elements(&mut headers, line, line_layout_block, page_id);
                 }
@@ -533,12 +534,7 @@ pub(crate) fn merge_lines_layout(
                     merge_or_create_elements(&mut elements, line, line_layout_block, page_id);
                 }
             },
-            // Line is detected but isn't assignable to any layout element.
-            // This happens when text fragments extend past a layout block's
-            // bounding box (e.g., long lines where the tail overflows the
-            // ONNX-detected block boundary). Append to the last element if
-            // the line overlaps vertically AND starts near/past the element's
-            // right edge, indicating a text continuation.
+            // Line is detected but isn't assignable to some layout element, for now skip
             None => {
                 if let Some(last_el) = elements.last_mut() {
                     let y_overlaps =
@@ -677,28 +673,8 @@ fn post_process_figure_blocks(blocks: &mut Vec<Block>) {
 pub(crate) fn merge_elements_into_blocks(
     elements: Vec<Element>,
     title_level: HashMap<(PageID, ElementID), TitleLevel>,
-    page_heights: HashMap<PageID, f32>,
-) -> anyhow::Result<Vec<Block>> {
-    // FIXME: This function contains WORKAROUNDS for ONNX model limitations
-    // The layout detection model has three major issues:
-    // 1. It incorrectly classifies figure captions as "Text" instead of "Caption"
-    // 2. It fails to detect complete figure boundaries when figures contain embedded text
-    // 3. It misclassifies footnote references at page bottom as "Text" instead of "Page-footer"
-    //
-    // Proper fix: Retrain the ONNX model to:
-    // - Correctly classify "Figure N:" patterns as Caption type
-    // - Detect complete figure boundaries including ALL embedded text
-    // - Properly associate captions with their corresponding images
-    // - Recognize footnote patterns and bottom positioning as Page-footer elements
-    //
-    // This heuristic-based workaround should be removed once the model is fixed
-    // Track at: https://github.com/[repo]/issues/[TODO: create issue]
+) -> Result<Vec<Block>, FerrulesError> {
 
-    debug_print!(
-        "🔧 merge_elements_into_blocks CALLED with {} elements",
-        elements.len()
-    );
-    debug_print!("🔧 TEST: Debug is working in merge function");
     let mut element_it = elements.into_iter().peekable();
 
     let mut blocks: Vec<Block> = Vec::new();
@@ -720,246 +696,27 @@ pub(crate) fn merge_elements_into_blocks(
 
         match &mut curr_el.kind {
             ElementType::Text => {
-                debug_print!(
-                    "📄 TEXT ELEMENT: {}",
-                    curr_el.text_block.text.chars().take(50).collect::<String>()
-                );
-
-                // WORKAROUND: Enhanced figure detection logic
-                // Check if this is a figure caption, or if we should start collecting figure elements
-                if is_figure_caption(&curr_el.text_block.text) {
-                    debug_print!(
-                        "🖼️ DETECTED figure caption: {}",
-                        &curr_el.text_block.text.chars().take(80).collect::<String>()
-                    );
-
-                    // Look backward for elements that might be part of this figure
-                    let mut figure_elements = Vec::new();
-                    let mut figure_bbox = curr_el.bbox.clone();
-                    let mut figure_image_bbox = None;
-
-                    // Collect recent blocks that might be part of this figure
-                    let mut blocks_to_remove = Vec::new();
-                    for (i, existing_block) in blocks.iter().enumerate().rev() {
-                        match &existing_block.kind {
-                            crate::blocks::BlockType::Image(img_block) => {
-                                // Skip ImageBlocks that already have captions - they were processed by merge logic
-                                if img_block.caption.is_some() {
-                                    debug_print!("🖼️ Skipping Image block that already has caption - processed by merge logic");
-                                    break; // Stop search - don't include caption-complete ImageBlocks in Figure blocks
-                                } else {
-                                    debug_print!("🖼️ Found Image block to include in figure");
-                                    figure_image_bbox = Some(existing_block.bbox.clone());
-                                    figure_bbox.merge(&existing_block.bbox);
-                                    blocks_to_remove.push(i);
-                                    break; // Stop after finding the image
-                                }
-                            }
-                            crate::blocks::BlockType::TextBlock(text) => {
-                                // Check if this text block is in the figure area (using spatial heuristics)
-                                let text_x = existing_block.bbox.x0;
-                                let is_in_figure_area = text_x > 300.0 && text_x < 550.0;
-                                let has_attribution =
-                                    text.text.contains("(from ") || text.text.contains("(source:");
-
-                                if is_in_figure_area || has_attribution {
-                                    debug_print!(
-                                        "🖼️ Including text block in figure: {}",
-                                        text.text.chars().take(50).collect::<String>()
-                                    );
-                                    figure_elements.insert(0, text.text.clone()); // Insert at beginning to maintain order
-                                    figure_bbox.merge(&existing_block.bbox);
-                                    blocks_to_remove.push(i);
-                                } else {
-                                    // Stop when we hit regular text that's not in the figure area
-                                    break;
-                                }
-                            }
-                            _ => break, // Stop at any other block type
-                        }
-                    }
-
-                    // Remove the blocks that we're incorporating into the figure (in reverse order to maintain indices)
-                    for &i in blocks_to_remove.iter().rev() {
-                        blocks.remove(i);
-                    }
-
-                    // Process the figure caption text
-                    let caption_text = if !curr_el.line_spans.is_empty() {
-                        debug_print!(
-                            "🖼️ Processing figure caption with {} line_spans",
-                            curr_el.line_spans.len()
-                        );
-                        let original_text = curr_el
-                            .line_spans
-                            .iter()
-                            .map(|line_spans| concatenate_spans_with_spacing(line_spans))
-                            .collect::<Vec<String>>()
-                            .join(" ");
-                        crate::modtext::process_text_with_spans(&original_text, &curr_el.line_spans)
-                    } else {
-                        apply_corrections_to_text(curr_el.text_block.text.clone())
-                    };
-
-                    // Create a comprehensive Figure block
-                    let figure_block = Block {
-                        id: block_id,
-                        kind: crate::blocks::BlockType::Figure(crate::blocks::FigureBlock {
-                            id: image_id,
-                            embedded_texts: figure_elements,
-                            image_bbox: figure_image_bbox,
-                            caption: Some(caption_text),
-                            image_path: None,
-                        }),
-                        pages_id: vec![curr_el.page_id],
-                        bbox: figure_bbox,
-                    };
-
-                    debug_print!("🖼️ Created Figure block with {} embedded texts", {
-                        if let crate::blocks::BlockType::Figure(ref fig) = figure_block.kind {
-                            fig.embedded_texts.len()
-                        } else {
-                            0
-                        }
-                    });
-
-                    image_id += 1;
-                    block_id += 1;
-                    blocks.push(figure_block);
-                    continue;
-                } else if is_likely_figure_embedded_text(&curr_el) {
-                    // This might be embedded figure text, but we need to look ahead to see if there's a figure caption
-                    // For now, we'll process it as regular text and let the caption detection handle it
-                    debug_print!("🖼️ Potential figure embedded text detected (will be handled by caption detection)");
-                }
-
-                // Apply subscript detection to TEXT elements with line_spans (mathematical content)
-                // Get truly original text by reconstructing from raw CharSpans (before any HTML tag processing)
-                let original_text = if !curr_el.line_spans.is_empty() {
-                    // Reconstruct original text from CharSpans
-                    let lines: Vec<String> = curr_el
-                        .line_spans
-                        .iter()
-                        .map(|line_spans| {
-                            // Space-aware concatenation of spans within a line
-                            concatenate_spans_with_spacing(line_spans)
-                        })
-                        .collect();
-
-                    // Smart line joining that handles word breaks across lines
-                    join_lines_smart(&lines)
-                } else {
-                    // Fallback to current text if no spans available
-                    curr_el.text_block.text.clone()
-                };
-
-                let processed_text = if !curr_el.line_spans.is_empty() {
-                    debug_print!(
-                        "🎯 TEXT WITH SPANS: Processing {} line_spans for subscript detection",
-                        curr_el.line_spans.len()
-                    );
-
-                    // Apply subscript detection using CharSpans but WITHOUT formula wrapper (for TEXT elements)
-                    crate::modtext::process_text_with_spans(&original_text, &curr_el.line_spans)
-                } else {
-                    // No spans available, use basic text correction only
-                    apply_corrections_to_text(original_text.clone())
-                };
-
-                if block_id == 54 {
-                    debug_print!("🎯 BLOCK 54 BEFORE processing: '{}'", original_text);
-                    debug_print!("🎯 BLOCK 54 AFTER processing: '{}'", processed_text);
-                    debug_print!(
-                        "🎯 BLOCK 54 Text changed: {}",
-                        original_text != processed_text
-                    );
-                }
-
-                let corrected_text = processed_text;
-
                 let mut text_block = Block {
                     id: block_id,
                     kind: crate::blocks::BlockType::TextBlock(TextBlock {
-                        text: corrected_text.clone(),
-                        // Always set fertext to preserve original text for char_span alignment
-                        // char_spans are indexed to the original text, so fertext must always exist
-                        fertext: Some(original_text.clone()),
-                        has_math: curr_el.has_math,
-                        char_spans: curr_el.get_serializable_char_spans(),
-                        sentence_ends: Vec::new(), // Will be computed after merging
+                        text: curr_el.text_block.text.clone(),
                     }),
                     pages_id: vec![curr_el.page_id],
                     bbox: curr_el.bbox,
                 };
+                // TODO: This might be a bug here
                 // Check to see if we have another text block that is close
-                loop {
-                    let should_merge = if let Some(next_el) = element_it.peek() {
-                        matches!(next_el.kind, crate::entities::ElementType::Text)
-                            && (text_block.bbox.distance(&next_el.bbox, 1.0, 1.0)
-                                < MAXIMUM_ASSIGNMENT_DISTANCE)
-                    } else {
-                        false
-                    };
-
-                    if should_merge {
+                while let Some(next_el) = element_it.peek() {
+                    if matches!(next_el.kind, crate::entities::ElementType::Text)
+                        && (text_block.bbox.distance(&next_el.bbox, 1.0, 1.0)
+                            < MAXIMUM_ASSIGNMENT_DISTANCE)
+                    {
                         let next_el = element_it.next().unwrap();
-                        if let BlockType::TextBlock(text_content) = &mut text_block.kind {
-                            // Get current text length for char_span offset adjustment
-                            let current_len = text_content.text.chars().count();
-                            text_content.text.push('\n');
-                            text_content.text.push_str(&next_el.text_block.text);
-
-                            // Merge fertext for accurate sentence detection
-                            // next_el.text_block.text is the original text before corrections
-                            let next_original_text = &next_el.text_block.text;
-                            let fertext_len = text_content
-                                .fertext
-                                .as_ref()
-                                .map(|f| f.chars().count())
-                                .unwrap_or(current_len);
-                            if let Some(ref mut fertext) = text_content.fertext {
-                                fertext.push('\n');
-                                fertext.push_str(next_original_text);
-                            } else {
-                                // Current has no fertext - create one from current text + next original
-                                let current_original = text_content.text.clone();
-                                let mut merged = current_original;
-                                merged.push('\n');
-                                merged.push_str(next_original_text);
-                                text_content.fertext = Some(merged);
-                            }
-
-                            // Propagate has_math from merged element
-                            text_content.has_math |= next_el.has_math;
-
-                            // Collect char_spans from next element with adjusted offsets
-                            let offset = fertext_len + 1; // +1 for newline
-                            for span in next_el.get_serializable_char_spans() {
-                                text_content.char_spans.push(
-                                    crate::entities::SerializableCharSpan {
-                                        bbox: span.bbox,
-                                        text: span.text,
-                                        char_start: span.char_start + offset,
-                                        char_end: span.char_end + offset,
-                                        page_id: span.page_id,
-                                    },
-                                );
-                            }
-                        }
-                        text_block.bbox.merge(&next_el.bbox);
+                        text_block.merge(next_el)?;
                     } else {
                         break;
                     }
                 }
-
-                // Compute sentence end positions for the final merged text
-                if let BlockType::TextBlock(text_content) = &mut text_block.kind {
-                    // Use fertext (original text) for sentence detection since char_spans map to it
-                    let text_for_detection =
-                        text_content.fertext.as_ref().unwrap_or(&text_content.text);
-                    text_content.sentence_ends = detect_sentence_ends(text_for_detection);
-                }
-
                 block_id += 1;
                 blocks.push(text_block);
             }
@@ -1851,8 +1608,21 @@ pub(crate) fn merge_elements_into_blocks(
                 block_id += 1;
                 blocks.push(title);
             }
-            _ => {
-                continue;
+            ElementType::Table(table_opt) => {
+                let table_block = Block {
+                    id: block_id,
+                    kind: BlockType::Table(table_opt.clone().unwrap_or_else(|| TableBlock {
+                        id: block_id,
+                        caption: None,
+                        rows: Vec::new(),
+                        has_borders: false,
+                        algorithm: crate::blocks::TableAlgorithm::Unknown,
+                    })),
+                    pages_id: vec![curr_el.page_id],
+                    bbox: curr_el.bbox,
+                };
+                block_id += 1;
+                blocks.push(table_block);
             }
         }
     }
@@ -2284,6 +2054,48 @@ mod tests {
         } else {
             panic!("Expected Image block with footnote as caption");
         }
+        Ok(())
+    }
+
+    #[test]
+    fn test_merge_consecutive_tables() -> anyhow::Result<()> {
+        let table1_bbox = BBox {
+            x0: 0.0,
+            y0: 0.0,
+            x1: 2.0,
+            y1: 2.0,
+        };
+        let table2_bbox = BBox {
+            x0: 0.0,
+            y0: 2.5,
+            x1: 2.0,
+            y1: 4.5,
+        };
+
+        let elements = vec![
+            Element {
+                id: 0,
+                layout_block_id: 0,
+                kind: ElementType::Table(None),
+                text_block: ElementText::default(),
+                page_id: 1,
+                bbox: table1_bbox,
+            },
+            Element {
+                id: 1,
+                layout_block_id: 1,
+                kind: ElementType::Table(None),
+                text_block: ElementText::default(),
+                page_id: 1,
+                bbox: table2_bbox,
+            },
+        ];
+
+        let blocks = merge_elements_into_blocks(elements, HashMap::new())?;
+
+        assert_eq!(blocks.len(), 2);
+        assert!(matches!(blocks[0].kind, BlockType::Table(_)));
+        assert!(matches!(blocks[1].kind, BlockType::Table(_)));
         Ok(())
     }
 }

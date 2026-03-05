@@ -1,5 +1,8 @@
 use std::{collections::HashMap, path::PathBuf, sync::Arc, time::Instant};
 
+use std::path::PathBuf;
+use std::{sync::Arc, time::Instant};
+
 use std::ops::Range;
 
 use anyhow::Context;
@@ -12,14 +15,19 @@ use super::{
     titles::title_levels_kmeans,
 };
 use crate::entities::DocumentMetadata;
+use crate::error::FerrulesError;
 use crate::{
     debug::get_debug_context,
     debug_print,
+    blocks::Block,
     entities::{ElementType, Page, PageID, ParsedDocument, StructuredPage},
     layout::{
         model::{ORTConfig, ORTLayoutParser},
         ParseLayoutQueue,
     },
+    metrics::ParsingMetrics,
+    ocr::{OCRParser, OCRQueue},
+    parse::table::{ParseTableQueue, TableParser, TableTransformer},
 };
 
 /// Configuration options for parsing documents with FerrulesParser
@@ -64,10 +72,12 @@ pub struct PdfMetadataResult {
 async fn parse_task<F, C>(
     parse_native_result: ParseNativePageResult,
     layout_queue: ParseLayoutQueue,
+    table_queue: ParseTableQueue,
+    ocr_queue: OCRQueue,
     debug_dir: Option<PathBuf>,
     callback: Option<F>,
     cancellation_callback: Option<C>,
-) -> anyhow::Result<StructuredPage>
+) -> Result<StructuredPage, FerrulesError>
 where
     F: FnOnce(PageID) + Send + 'static + Clone,
     C: Fn() -> bool + Send + Sync + 'static + Clone,
@@ -86,6 +96,7 @@ where
         debug_dir,
         layout_queue.clone(),
         cancellation_callback.clone(),
+        ocr_queue.clone(),
     )
     .await;
 
@@ -110,6 +121,8 @@ where
 pub struct FerrulesParser {
     layout_queue: ParseLayoutQueue,
     native_queue: ParseNativeQueue,
+    table_queue: ParseTableQueue,
+    ocr_queue: OCRQueue,
 }
 
 impl FerrulesParser {
@@ -125,12 +138,19 @@ impl FerrulesParser {
     /// Panics if the layout model cannot be loaded with the given configuration
     pub fn new(layout_config: ORTConfig) -> Self {
         let layout_model =
-            Arc::new(ORTLayoutParser::new(layout_config).expect("can't load layout model"));
+            Arc::new(ORTLayoutParser::new(layout_config.clone()).expect("can't load layout model"));
         let native_queue = ParseNativeQueue::new();
         let layout_queue = ParseLayoutQueue::new(layout_model);
+        let transformer = TableTransformer::new(&layout_config).ok();
+        let table_parser = Arc::new(TableParser::new(transformer));
+        let table_queue = ParseTableQueue::new(table_parser);
+        let ocr_parser = Arc::new(OCRParser::new());
+        let ocr_queue = OCRQueue::new(ocr_parser);
         Self {
             layout_queue,
             native_queue,
+            table_queue,
+            ocr_queue,
         }
     }
 
@@ -264,14 +284,15 @@ impl FerrulesParser {
     ///     ).await.unwrap();
     /// }
     #[allow(clippy::too_many_arguments)]
-    pub async fn parse_document<F, C>(
+    #[tracing::instrument(skip(self, doc, page_callback), fields(doc_name = %doc_name))]
+    pub async fn parse_document<F>(
         &self,
         doc: &[u8],
         doc_name: String,
         config: FerrulesParseConfig<'_>,
         page_callback: Option<F>,
         cancellation_callback: Option<C>,
-    ) -> anyhow::Result<ParsedDocument>
+    ) -> Result<ParsedDocument, FerrulesError>
     where
         F: FnOnce(PageID) + Send + 'static + Clone,
         C: Fn() -> bool + Send + Sync + 'static + Clone,
@@ -347,13 +368,13 @@ impl FerrulesParser {
         // Convert to doc pages
         let doc_pages_start = Instant::now();
         let doc_pages = parsed_pages
-            .into_iter()
+            .iter()
             .map(|sp| Page {
                 id: sp.id,
                 width: sp.width,
                 height: sp.height,
                 need_ocr: sp.need_ocr,
-                image: sp.image,
+                image: sp.image.clone(),
             })
             .collect();
         tracing::info!(
@@ -375,7 +396,16 @@ impl FerrulesParser {
             post_pages_start.elapsed()
         );
 
+        if let Some(ref debug_dir) = debug_dir {
+            self.save_debug_binary(debug_dir, &doc_name, &parsed_pages, &blocks);
+        }
+
         let duration = start_time.elapsed();
+
+        let parsing_metrics = ParsingMetrics {
+            total_duration_ms: duration.as_secs_f64() * 1000.0,
+            pages: parsed_pages.iter().map(|p| p.metrics.clone()).collect(),
+        };
 
         Ok(ParsedDocument {
             doc_name,
@@ -383,12 +413,58 @@ impl FerrulesParser {
             blocks,
             debug_path: debug_dir,
             metadata: DocumentMetadata::new(duration),
+            metrics: parsing_metrics,
         })
     }
 
+    fn save_debug_binary(
+        &self,
+        debug_dir: &std::path::Path,
+        doc_name: &str,
+        parsed_pages: &[StructuredPage],
+        blocks: &[Block],
+    ) {
+        let mut debug_pages = Vec::new();
+        for sp in parsed_pages {
+            let mut page_blocks = Vec::new();
+            for block in blocks {
+                if block.pages_id.contains(&sp.id) {
+                    page_blocks.push(block.clone());
+                }
+            }
+
+            let mut image_data = Vec::new();
+            let _ = sp.image.write_to(
+                &mut std::io::Cursor::new(&mut image_data),
+                image::ImageFormat::Png,
+            );
+
+            debug_pages.push(crate::debug_info::DebugPage {
+                page_number: sp.id,
+                native_lines: sp.native_lines.clone(),
+                paths: sp.paths.clone(),
+                layout_bboxes: sp.layout.clone(),
+                ocr_lines: sp.ocr_lines.clone(),
+                elements: sp.elements.clone(),
+                blocks: page_blocks,
+                image_data,
+                width: sp.width,
+                height: sp.height,
+            });
+        }
+        let debug_doc = crate::debug_info::DebugDocument {
+            name: doc_name.to_string(),
+            pages: debug_pages,
+        };
+
+        let debug_file = debug_dir.join(format!("{}.ferr", doc_name));
+        let bytes = rkyv::to_bytes::<_, 1024>(&debug_doc).expect("failed to serialize debug doc");
+        std::fs::write(debug_file, bytes).expect("failed to write debug file");
+    }
+
     #[allow(clippy::too_many_arguments)]
-    #[tracing::instrument(skip_all)]
-    async fn parse_doc_pages<F, C>(
+    #[tracing::instrument(skip(self, data, callback), fields(flatten_pdf = flatten_pdf, page_range = ?page_range))]
+    async fn parse_doc_pages<F>(
         &self,
         data: &[u8],
         flatten_pdf: bool,
@@ -397,7 +473,7 @@ impl FerrulesParser {
         debug_dir: Option<PathBuf>,
         callback: Option<F>,
         cancellation_callback: Option<C>,
-    ) -> anyhow::Result<Vec<StructuredPage>>
+    ) -> Result<Vec<StructuredPage>, FerrulesError>
     where
         F: FnOnce(PageID) + Send + 'static + Clone,
         C: Fn() -> bool + Send + Sync + 'static + Clone,
@@ -442,6 +518,8 @@ impl FerrulesParser {
                         parse_task(
                             parse_native_result,
                             self.layout_queue.clone(),
+                            self.table_queue.clone(),
+                            self.ocr_queue.clone(),
                             tmp_dir,
                             callback,
                             cancel_cb_clone,

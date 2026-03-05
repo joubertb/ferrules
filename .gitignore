@@ -9,8 +9,6 @@
 
 # Model files and archives
 model-archive/
-models/
-*.pt
 
 # Test data and output directories
 test_data/*
@@ -21,3 +19,14 @@ test_data/*
 baseline-output/
 new-output/
 todo/
+
+**/.venv/
+*.pt
+test_data/*
+
+models/*
+!models/table-transformer-structure-recognition_fp16.onnx
+!models/table-transformer-structure-recognition-ane-b4.onnx
+!models/table-transformer-structure-recognition_fp16.onnx
+**/.env
+**/examples/

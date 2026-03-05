@@ -1,11 +1,17 @@
-use crate::entities::{BBox, Element, ElementType, PageID, SerializableCharSpan};
 use crate::font_analysis as correction;
 use anyhow::bail;
+use crate::{
+    entities::{BBox, Element, ElementType, PageID},
+    error::FerrulesError,
+};
+use rkyv::{Archive, Deserialize as RkyvDeserialize, Serialize as RkyvSerialize};
 use serde::{Deserialize, Serialize};
 
 pub type TitleLevel = u8;
 
-#[derive(Debug, Default, Deserialize, Serialize)]
+#[derive(
+    Clone, Debug, Default, Deserialize, Serialize, Archive, RkyvDeserialize, RkyvSerialize,
+)]
 pub struct ImageBlock {
     pub id: usize,
     pub caption: Option<String>,
@@ -19,88 +25,73 @@ impl ImageBlock {
     }
 }
 
-#[derive(Debug, Default, Deserialize, Serialize)]
-pub struct FigureBlock {
-    pub id: usize,
-    pub embedded_texts: Vec<String>,
-    pub image_bbox: Option<BBox>,
-    pub caption: Option<String>,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub image_path: Option<String>,
-}
-
-impl FigureBlock {
-    pub(crate) fn path(&self) -> String {
-        format!("fig_{}.png", self.id)
-    }
-}
-
-impl TextBlock {
-    /// Get the text content of the block
-    pub fn text(&self) -> &str {
-        &self.text
-    }
-}
-
-impl Title {
-    /// Get the title text
-    pub fn text(&self) -> &str {
-        &self.text
-    }
-
-    /// Get the title level
-    pub fn level(&self) -> TitleLevel {
-        self.level
-    }
-}
-
-impl List {
-    /// Get the list items
-    pub fn items(&self) -> &[ListItem] {
-        &self.items
-    }
-}
-
-/// Helper for `skip_serializing_if` on bool fields (serde lacks a built-in for this)
-fn is_false(b: &bool) -> bool {
-    !*b
-}
-
-#[derive(Debug, Default, Deserialize, Serialize)]
+#[derive(
+    Clone, Debug, Default, Deserialize, Serialize, Archive, RkyvDeserialize, RkyvSerialize,
+)]
 pub struct TextBlock {
-    pub(crate) text: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub(crate) fertext: Option<String>,
-    /// Whether this block contains mathematical text (detected via fonts/Unicode in ferrules)
-    #[serde(skip_serializing_if = "is_false", default)]
-    pub(crate) has_math: bool,
-    /// Character spans with bounding boxes for sentence highlighting
-    #[serde(skip_serializing_if = "Vec::is_empty", default)]
-    pub(crate) char_spans: Vec<SerializableCharSpan>,
-    /// Sentence end positions (character indices) for precise bbox computation
-    #[serde(skip_serializing_if = "Vec::is_empty", default)]
-    pub(crate) sentence_ends: Vec<usize>,
+    pub text: String,
 }
 
-#[derive(Debug, Default, Deserialize, Serialize)]
-pub struct ListItem {
-    pub(crate) text: String,
-    #[serde(skip_serializing_if = "Option::is_none")]
-    pub(crate) fertext: Option<String>,
-    /// Whether this list item contains mathematical text (detected via fonts/Unicode in ferrules)
-    #[serde(skip_serializing_if = "is_false", default)]
-    pub(crate) has_math: bool,
-    /// Character spans with bounding boxes for sentence highlighting
-    #[serde(skip_serializing_if = "Vec::is_empty", default)]
-    pub(crate) char_spans: Vec<SerializableCharSpan>,
-}
-
-#[derive(Debug, Default, Deserialize, Serialize)]
+#[derive(
+    Clone, Debug, Default, Deserialize, Serialize, Archive, RkyvDeserialize, RkyvSerialize,
+)]
 pub struct List {
-    pub(crate) items: Vec<ListItem>,
+    pub items: Vec<String>,
 }
 
-#[derive(Debug, Default, Deserialize, Serialize)]
+#[derive(
+    Clone, Debug, Default, Deserialize, Serialize, Archive, RkyvDeserialize, RkyvSerialize,
+)]
+pub enum TableAlgorithm {
+    #[default]
+    Unknown,
+    Lattice,
+    Stream,
+    Vision,
+}
+
+#[derive(
+    Clone, Debug, Default, Deserialize, Serialize, Archive, RkyvDeserialize, RkyvSerialize,
+)]
+pub struct TableBlock {
+    pub(crate) id: usize,
+    pub(crate) caption: Option<String>,
+    pub rows: Vec<TableRow>,
+    pub has_borders: bool,
+    pub algorithm: TableAlgorithm,
+}
+
+impl TableBlock {
+    pub(crate) fn path(&self) -> String {
+        format!("table_{}.png", self.id)
+    }
+}
+
+#[derive(
+    Clone, Debug, Default, Deserialize, Serialize, Archive, RkyvDeserialize, RkyvSerialize,
+)]
+pub struct TableRow {
+    pub cells: Vec<TableCell>,
+    pub is_header: bool,
+    pub bbox: BBox,
+}
+
+#[derive(
+    Clone, Debug, Default, Deserialize, Serialize, Archive, RkyvDeserialize, RkyvSerialize,
+)]
+pub struct TableCell {
+    /// IDs of blocks contained within this cell.
+    /// This avoids recursion in serializable structures.
+    pub content_ids: Vec<usize>,
+    pub text: String,
+    pub row_span: u8,
+    pub col_span: u8,
+    pub bbox: BBox,
+}
+
+#[derive(
+    Clone, Debug, Default, Deserialize, Serialize, Archive, RkyvDeserialize, RkyvSerialize,
+)]
 pub struct Title {
     pub level: TitleLevel,
     pub text: String,
@@ -121,7 +112,7 @@ pub struct FormulaBlock {
     pub formula_img: Option<String>,
 }
 
-#[derive(Debug, Deserialize, Serialize)]
+#[derive(Clone, Debug, Deserialize, Serialize, Archive, RkyvDeserialize, RkyvSerialize)]
 #[serde(tag = "block_type")]
 pub enum BlockType {
     Header(TextBlock),
@@ -131,11 +122,16 @@ pub enum BlockType {
     TextBlock(TextBlock),
     Formula(FormulaBlock),
     Image(ImageBlock),
-    Figure(FigureBlock),
-    Table,
+    Table(TableBlock),
 }
 
-#[derive(Debug, Deserialize, Serialize)]
+impl std::fmt::Display for BlockType {
+    fn fmt(&self, f: &mut std::fmt::Formatter) -> std::fmt::Result {
+        write!(f, "{:?}", self)
+    }
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize, Archive, RkyvDeserialize, RkyvSerialize)]
 pub struct Block {
     pub id: usize,
     pub kind: BlockType,
@@ -144,7 +140,7 @@ pub struct Block {
 }
 
 impl Block {
-    pub(crate) fn merge(&mut self, element: Element) -> anyhow::Result<()> {
+    pub(crate) fn merge(&mut self, element: Element) -> Result<(), FerrulesError> {
         match &mut self.kind {
             BlockType::TextBlock(text) => {
                 if let ElementType::Text = &element.kind {
@@ -193,7 +189,11 @@ impl Block {
                     // add page_id
                     Ok(())
                 } else {
-                    bail!("can't merge element in textblock")
+                    Err(FerrulesError::BlockMergeError {
+                        element: Box::new(element),
+                        block_id: self.id,
+                        kind: self.kind.clone(),
+                    })
                 }
             }
             BlockType::ListBlock(list) => {
@@ -216,7 +216,11 @@ impl Block {
                     });
                     Ok(())
                 } else {
-                    bail!("can't merge element in Listblock")
+                    Err(FerrulesError::BlockMergeError {
+                        element: Box::new(element),
+                        block_id: self.id,
+                        kind: self.kind.clone(),
+                    })
                 }
             }
             BlockType::Header(header) => {
@@ -235,7 +239,11 @@ impl Block {
 
                     Ok(())
                 } else {
-                    bail!("can't merge element in Header")
+                    Err(FerrulesError::BlockMergeError {
+                        element: Box::new(element),
+                        block_id: self.id,
+                        kind: self.kind.clone(),
+                    })
                 }
             }
             BlockType::Footer(footer) => {
@@ -254,14 +262,31 @@ impl Block {
 
                     Ok(())
                 } else {
-                    bail!("can't merge element in Footer")
+                    Err(FerrulesError::BlockMergeError {
+                        element: Box::new(element),
+                        block_id: self.id,
+                        kind: self.kind.clone(),
+                    })
                 }
             }
             BlockType::Title(_title) => todo!(),
             BlockType::Formula(_formula) => bail!("can't merge element in Formula"),
             BlockType::Image(_image_block) => todo!(),
-            BlockType::Figure(_figure_block) => todo!(),
-            BlockType::Table => todo!(),
+            BlockType::Table(table) => {
+                if let ElementType::Table(incoming_table_opt) = &element.kind {
+                    self.bbox.merge(&element.bbox);
+                    if let Some(incoming_table) = incoming_table_opt {
+                        table.rows.extend(incoming_table.rows.clone());
+                    }
+                    Ok(())
+                } else {
+                    Err(FerrulesError::BlockMergeError {
+                        element: Box::new(element),
+                        block_id: self.id,
+                        kind: self.kind.clone(),
+                    })
+                }
+            }
         }
     }
 
@@ -274,8 +299,7 @@ impl Block {
             BlockType::ListBlock(_) => "LIST",
             BlockType::Formula(_) => "FORMULA",
             BlockType::Image(_) => "IMAGE",
-            BlockType::Figure(_) => "FIGURE",
-            BlockType::Table => "TABLE",
+            BlockType::Table(_) => "TABLE",
         }
     }
 }

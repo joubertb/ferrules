@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 
-use build_html::{Html, HtmlContainer, HtmlElement, HtmlPage, HtmlTag};
 use lazy_static::lazy_static;
+use build_html::{Html, HtmlChild, HtmlContainer, HtmlElement, HtmlPage, HtmlTag};
 use regex::Regex;
 
 use crate::{
@@ -39,12 +39,13 @@ impl HTMLRenderer {
             .with_html(self.root_element)
             .to_html_string()
     }
-}
 
-impl Renderer for HTMLRenderer {
-    type Ok = ();
-
-    fn render_block(&mut self, block: &Block) -> anyhow::Result<Self::Ok> {
+    fn render_block_to_container(
+        block: &Block,
+        container: &mut HtmlElement,
+        img_src_path: Option<&PathBuf>,
+        list_regex: &Regex,
+    ) -> anyhow::Result<()> {
         match &block.kind {
             BlockType::Title(title) => {
                 let level = title.level.clamp(1, 6);
@@ -59,39 +60,39 @@ impl Renderer for HTMLRenderer {
                 let el = HtmlElement::new(tag)
                     .with_child(title.text.as_str().into())
                     .into();
-                self.root_element.add_child(el);
+                container.add_child(el);
             }
             BlockType::Header(text_block) => {
                 let el = HtmlElement::new(HtmlTag::Header)
                     .with_child(text_block.text.as_str().into())
                     .into();
-                self.root_element.add_child(el);
+                container.add_child(el);
             }
             BlockType::Footer(text_block) => {
                 let el = HtmlElement::new(HtmlTag::Footer)
                     .with_child(text_block.text.as_str().into())
                     .into();
-                self.root_element.add_child(el);
+                container.add_child(el);
             }
             BlockType::ListBlock(list) => {
                 let mut ul = HtmlElement::new(HtmlTag::UnorderedList);
                 for item in &list.items {
-                    let clean_text = LIST_BULLET_REGEX.replace(&item.text, "").into_owned();
+                    let clean_text = list_regex.replace(item, "").into_owned();
                     let li = HtmlElement::new(HtmlTag::ListElement)
                         .with_child(clean_text.as_str().into())
                         .into();
                     ul.add_child(li);
                 }
-                self.root_element.add_child(ul.into());
+                container.add_child(ul.into());
             }
             BlockType::TextBlock(text_block) => {
                 let el = HtmlElement::new(HtmlTag::ParagraphText)
                     .with_child(text_block.text.as_str().into())
                     .into();
-                self.root_element.add_child(el);
+                container.add_child(el);
             }
             BlockType::Image(image_block) => {
-                if let Some(img_src_path) = &self.img_src_path {
+                if let Some(img_src_path) = img_src_path {
                     let mut figure = HtmlElement::new(HtmlTag::Figure);
                     let img_src = img_src_path
                         .join(image_block.path())
@@ -108,46 +109,53 @@ impl Renderer for HTMLRenderer {
                         figure.add_child(figcaption);
                     }
 
-                    self.root_element.add_child(figure.into());
+                    container.add_child(figure.into());
                 }
             }
-            BlockType::Figure(figure_block) => {
-                let mut figure_element = HtmlElement::new(HtmlTag::Figure);
-
-                // Add embedded texts as paragraphs within the figure
-                for embedded_text in &figure_block.embedded_texts {
-                    let p = HtmlElement::new(HtmlTag::ParagraphText)
-                        .with_child(embedded_text.as_str().into())
-                        .into();
-                    figure_element.add_child(p);
+            BlockType::Table(table) => {
+                let mut table_html = String::from("<table>");
+                if let Some(caption) = &table.caption {
+                    table_html.push_str(&format!("<caption>{}</caption>", caption));
                 }
+                for row in &table.rows {
+                    table_html.push_str("<tr>");
+                    for cell in &row.cells {
+                        let tag = if row.is_header { "th" } else { "td" };
+                        table_html.push_str(&format!("<{}", tag));
+                        if cell.col_span > 1 {
+                            table_html.push_str(&format!(" colspan=\"{}\"", cell.col_span));
+                        }
+                        if cell.row_span > 1 {
+                            table_html.push_str(&format!(" rowspan=\"{}\"", cell.row_span));
+                        }
+                        table_html.push_str(">");
 
-                // Add the image if we have an image source path
-                if let Some(img_src_path) = &self.img_src_path {
-                    let img_src = img_src_path
-                        .join(figure_block.path())
-                        .to_str()
-                        .unwrap()
-                        .to_owned();
-                    let img = HtmlElement::new(HtmlTag::Image).with_image(img_src, "");
-                    figure_element.add_child(img.into());
+                        if !cell.text.is_empty() {
+                            table_html.push_str(&cell.text);
+                        }
+
+                        table_html.push_str(&format!("</{}>", tag));
+                    }
+                    table_html.push_str("</tr>");
                 }
-
-                // Add caption if present
-                if let Some(caption) = &figure_block.caption {
-                    let figcaption = HtmlElement::new(HtmlTag::Figcaption)
-                        .with_child(caption.as_str().into())
-                        .into();
-                    figure_element.add_child(figcaption);
-                }
-
-                self.root_element.add_child(figure_element.into());
-            }
-            _ => {
-                debug_print!("not implemented yet")
+                table_html.push_str("</table>");
+                container.add_child(HtmlChild::Raw(table_html));
             }
         }
         Ok(())
+    }
+}
+
+impl Renderer for HTMLRenderer {
+    type Ok = ();
+
+    fn render_block(&mut self, block: &Block) -> anyhow::Result<Self::Ok> {
+        Self::render_block_to_container(
+            block,
+            &mut self.root_element,
+            self.img_src_path.as_ref(),
+            &self.list_regex,
+        )
     }
 }
 

@@ -30,9 +30,10 @@
 //!     // Configure hardware acceleration
 //!     let ort_config = ORTConfig {
 //!         execution_providers: vec![OrtExecutionProvider::CPU],
-//!         intra_threads: 16,
+//!         intra_threads: 4
 //!         inter_threads: 4,
 //!         opt_level: None,
+//!         warmup: false,
 //!     };
 //!
 //!     // Initialize parser
@@ -44,9 +45,8 @@
 //!     let parsed_doc = parser.parse_document(
 //!         &doc_bytes,
 //!         "document".into(),
-//!         config,
-//!         None::<fn(ferrules_core::entities::PageID)>,  // No page callback
-//!         None::<fn() -> bool>,                         // No cancellation callback
+//!         Default::default(),
+//!         None::<fn(usize)>,          // No progress callback
 //!     ).await?;
 //!
 //!     Ok(())
@@ -79,15 +79,22 @@
 //!
 //! Licensed under the GPLv3 license.
 #![feature(portable_simd)]
+#![recursion_limit = "256"]
 
 pub(crate) mod draw;
 
 pub mod blocks;
+
 pub mod debug;
-pub mod entities;
 pub mod font_analysis;
-pub mod layout;
 mod modtext;
+
+pub mod debug_info;
+pub mod entities;
+pub mod error;
+pub mod layout;
+pub mod metrics;
+
 pub mod ocr;
 pub mod render;
 pub mod sentence_detection;

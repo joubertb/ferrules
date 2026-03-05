@@ -1,15 +1,14 @@
 use std::{ops::Range, sync::Arc, time::Instant};
 
-use anyhow::Context;
 use image::DynamicImage;
-use pdfium_render::prelude::{
-    PdfDocumentMetadataTagType, PdfPage, PdfPageTextChar, PdfRenderConfig, Pdfium,
-};
+use pdfium_render::prelude::*;
+
 use tracing::{instrument, Span};
 
 use crate::{
     debug_print,
-    entities::{BBox, CharSpan, Line, PageID},
+    entities::{BBox, CharSpan, Line, PDFPath, PageID, Segment},
+    error::FerrulesError,
     layout::model::ORTLayoutParser,
 };
 use tokio::sync::mpsc::{self, Receiver, Sender};
@@ -302,6 +301,7 @@ pub struct ParseNativeRequest {
     pub sender_tx: Sender<anyhow::Result<ParseNativePageResult>>,
     pub count_only: bool,
     pub debug_context: Option<crate::debug::DebugContext>,
+    pub queue_time: Instant,
 }
 impl ParseNativeRequest {
     pub fn new(
@@ -321,34 +321,14 @@ impl ParseNativeRequest {
             required_raster_width: ORTLayoutParser::REQUIRED_WIDTH,
             required_raster_height: ORTLayoutParser::REQUIRED_HEIGHT,
             sender_tx,
-            count_only: false,
-            debug_context,
-        }
-    }
-
-    pub fn new_count_only(
-        data: &[u8],
-        password: Option<&str>,
-        sender_tx: Sender<anyhow::Result<ParseNativePageResult>>,
-        debug_context: Option<crate::debug::DebugContext>,
-    ) -> Self {
-        ParseNativeRequest {
-            doc_data: Arc::from(data),
-            password: password.map(|p| p.to_string()),
-            flatten: false,            // Not needed for counting
-            page_range: None,          // Count all pages
-            required_raster_width: 0,  // Not needed for counting
-            required_raster_height: 0, // Not needed for counting
-            sender_tx,
-            count_only: true,
-            debug_context,
+            queue_time: Instant::now(),
         }
     }
 }
 
 #[derive(Debug)]
 pub struct ParseNativeMetadata {
-    pub parse_native_duration_ms: u128,
+    pub parse_native_duration_ms: f64,
 }
 
 #[derive(Debug)]
@@ -356,6 +336,7 @@ pub struct ParseNativePageResult {
     // TODO: page_native_rotation
     pub page_id: PageID,
     pub text_lines: Vec<Line>,
+    pub paths: Vec<PDFPath>,
     pub page_bbox: BBox,
     pub page_image: Arc<DynamicImage>,
     pub page_image_scale1: DynamicImage,
@@ -387,12 +368,12 @@ impl ParseNativeQueue {
         }
     }
 
-    pub(crate) async fn push(&self, req: ParseNativeRequest) -> anyhow::Result<()> {
+    pub(crate) async fn push(&self, req: ParseNativeRequest) -> Result<(), FerrulesError> {
         let span = Span::current();
         self.queue
             .send((req, span))
             .await
-            .context("error sending parse native request")
+            .map_err(|_| FerrulesError::ParseNativeError)
     }
 }
 
@@ -405,6 +386,20 @@ pub(crate) fn parse_page_native(
     required_raster_height: u32,
 ) -> anyhow::Result<ParseNativePageResult> {
     let start_time = Instant::now();
+
+    let page_bbox = BBox {
+        x0: 0f32,
+        y0: 0f32,
+        x1: page.width().value,
+        y1: page.height().value,
+    };
+
+    // NOTE: Extract paths BEFORE flatten. `page.flatten()` merges annotations and
+    // form fields into the page content stream, which invalidates pdfium's
+    // internal page‐object list. Calling `page.objects()` after flatten
+    // dereferences stale pointers and segfaults.
+    let paths = extract_page_paths(page, &page_bbox);
+
     if flatten_page {
         page.flatten()?;
     }
@@ -415,12 +410,6 @@ pub(crate) fn parse_page_native(
     };
     let downscale_factor = 1f32 / rescale_factor;
 
-    let page_bbox = BBox {
-        x0: 0f32,
-        y0: 0f32,
-        x1: page.width().value,
-        y1: page.height().value,
-    };
     let page_image = page
         .render_with_config(&PdfRenderConfig::default().scale_page_by_factor(rescale_factor))
         .map(|bitmap| bitmap.as_image())?;
@@ -433,15 +422,12 @@ pub(crate) fn parse_page_native(
 
     let text_lines = parse_text_lines(text_spans);
 
-    let parse_native_duration_ms = start_time.elapsed().as_millis();
-    tracing::debug!(
-        "Parsing page {} using pdfium took {}ms",
-        page_id,
-        parse_native_duration_ms
-    );
+    let parse_native_duration_ms = start_time.elapsed().as_secs_f64() * 1000.0;
+    tracing::debug!("pdfium parsing for page {page_id} took: {parse_native_duration_ms}ms");
     Ok(ParseNativePageResult {
         page_id,
         text_lines,
+        paths,
         page_bbox,
         page_image: Arc::new(page_image),
         page_image_scale1,
@@ -455,11 +441,65 @@ pub(crate) fn parse_page_native(
     })
 }
 
+fn extract_page_paths(page: &PdfPage, page_bbox: &BBox) -> Vec<PDFPath> {
+    let mut paths = Vec::new();
+
+    for object in page.objects().iter() {
+        if let Some(path_obj) = object.as_path_object() {
+            let mut segments = Vec::new();
+            let mut current_point: Option<(f32, f32)> = None;
+
+            for segment in path_obj.segments().iter() {
+                match segment.segment_type() {
+                    PdfPathSegmentType::LineTo => {
+                        let point = segment.point();
+                        let (x, y) = (point.0.value, point.1.value);
+                        // NOTE: PDF coordinates are bottom-up, convert to top-down
+                        let converted_y = page_bbox.height() - y;
+                        let converted_point = (x, converted_y);
+
+                        if let Some(start) = current_point {
+                            segments.push(Segment::Line {
+                                start,
+                                end: converted_point,
+                            });
+                            current_point = Some(converted_point);
+                        } else {
+                            current_point = Some(converted_point);
+                        }
+                    }
+                    PdfPathSegmentType::MoveTo => {
+                        let point = segment.point();
+                        let (x, y) = (point.0.value, point.1.value);
+                        // PDF coordinates are bottom-up, convert to top-down
+                        let converted_y = page_bbox.height() - y;
+                        current_point = Some((x, converted_y));
+                    }
+                    _ => {}
+                }
+            }
+
+            if !segments.is_empty() {
+                paths.push(PDFPath {
+                    segments,
+                    is_stroke: path_obj.is_stroked().unwrap_or(false),
+                    is_fill: path_obj
+                        .fill_mode()
+                        .map(|m| m != PdfPathFillMode::None)
+                        .unwrap_or(false),
+                    stroke_width: path_obj.stroke_width().ok().map(|p| p.value),
+                });
+            }
+        }
+    }
+    paths
+}
+
 fn handle_parse_native_req(
     pdfium: &Pdfium,
     req: ParseNativeRequest,
     parent_span: Span,
-) -> anyhow::Result<()> {
+) -> Result<(), FerrulesError> {
     // Reinter span
     let _guard = parent_span.enter();
     let ParseNativeRequest {
@@ -470,33 +510,11 @@ fn handle_parse_native_req(
         required_raster_width,
         required_raster_height,
         sender_tx,
-        count_only,
-        debug_context,
+        queue_time: _,
     } = req;
-
-    // Set debug context for this thread if provided
-    if let Some(context) = debug_context {
-        crate::debug::set_debug_context(context.doc_name, Some(context.output_flags));
-    }
-
-    // Set document context for font corruption analysis
-    #[cfg(feature = "correction-engine")]
-    crate::font_analysis::set_document_context();
-
-    // Use original PDF data directly - corrections are applied at character level during text extraction
-    let processed_pdf_data = doc_data.to_vec();
-    debug_print!(
-        "🔧 DEBUG: Using original PDF without preprocessing - corrections applied at text level"
-    );
-
-    let mut document = pdfium.load_pdf_from_byte_slice(&processed_pdf_data, password.as_deref())?;
-
-    // Extract PDF title from document metadata before taking mutable borrow for pages
-    let pdf_title = document
-        .metadata()
-        .get(PdfDocumentMetadataTagType::Title)
-        .map(|tag| tag.value().to_string())
-        .filter(|s| !s.trim().is_empty());
+    let mut document = pdfium
+        .load_pdf_from_byte_slice(&doc_data, password.as_deref())
+        .map_err(|_| FerrulesError::ParseNativeError)?;
 
     let mut pages: Vec<_> = document.pages_mut().iter().enumerate().collect();
 
@@ -532,11 +550,7 @@ fn handle_parse_native_req(
 
     let pages = if let Some(range) = page_range {
         if range.end > pages.len() {
-            anyhow::bail!(
-                "Page range end ({}) exceeds document length ({})",
-                range.end,
-                pages.len()
-            )
+            return Err(FerrulesError::ParseNativeError);
         }
         pages.drain(range).collect()
     } else {
@@ -551,7 +565,9 @@ fn handle_parse_native_req(
             required_raster_width,
             required_raster_height,
         );
-        sender_tx.blocking_send(parsing_result)?
+        sender_tx
+            .blocking_send(parsing_result)
+            .map_err(|_| FerrulesError::ParseNativeError)?
     }
     tracing::debug!("Finished processing pages");
 
@@ -567,6 +583,8 @@ pub fn start_native_parser(mut input_rx: Receiver<(ParseNativeRequest, Span)>) {
         Pdfium::bind_to_statically_linked_library().expect("can't load pdfiurm bindings"),
     );
     while let Some((req, parent_span)) = input_rx.blocking_recv() {
+        let queue_duration = req.queue_time.elapsed();
+        tracing::debug!(parent: &parent_span, "Native request dequeued after {:?} in queue", queue_duration);
         match handle_parse_native_req(&pdfium, req, parent_span) {
             Ok(_) => {}
             Err(e) => debug_print!("error parsing request natively : {e:?}"),

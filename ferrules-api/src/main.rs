@@ -51,8 +51,8 @@ const MAX_SIZE_LIMIT: usize = 250 * 1024 * 1024;
 #[command(author, version, about, long_about = None)]
 struct Args {
     /// OpenTelemetry collector endpoint
-    #[arg(long, env = "OTLP_ENDPOINT", default_value = "http://localhost:4317")]
-    otlp_endpoint: String,
+    #[arg(long, env = "OTLP_ENDPOINT")]
+    otlp_endpoint: Option<String>,
 
     /// Sentry DSN
     #[arg(long, env = "SENTRY_DSN")]
@@ -84,7 +84,7 @@ struct Args {
 
     #[arg(
         long,
-        default_value_t = true,
+        default_value_t = false,
         help = "Enable or disable Apple Neural Engine acceleration (only applies when CoreML is enabled)"
     )]
     pub use_ane: bool,
@@ -130,6 +130,17 @@ struct Args {
 
     #[arg(long, short = 'O', help = "Ort graph optimization level")]
     graph_opt_level: Option<usize>,
+
+    /// Enable profiling for layout model
+    #[arg(long, help = "Enable profiling for the layout model (saved as .json)")]
+    profile_layout: bool,
+
+    /// Enable profiling for table transformer model
+    #[arg(
+        long,
+        help = "Enable profiling for the table transformer model (saved as .json)"
+    )]
+    profile_table: bool,
 }
 
 fn parse_ep_args(args: &Args) -> Vec<OrtExecutionProvider> {
@@ -529,6 +540,7 @@ async fn main() {
 
     // Check providers
     let providers = parse_ep_args(&args);
+
     // Initialize Sentry if DSN is provided
     let use_sentry = args.sentry_dsn.is_some();
     let _guard = if let Some(dsn) = args.sentry_dsn {
@@ -547,7 +559,7 @@ async fn main() {
     };
 
     init_tracing(
-        Some(&args.otlp_endpoint),
+        args.otlp_endpoint.as_deref(),
         "ferrules-api".into(),
         false,
         use_sentry,
@@ -562,11 +574,40 @@ async fn main() {
     }
     tracing::info!("📝 Text correction engine initialized successfully");
 
+    // Initialize Prometheus exporter
+    let builder = metrics_exporter_prometheus::PrometheusBuilder::new()
+        .set_buckets_for_metric(
+            metrics_exporter_prometheus::Matcher::Suffix("_ms".to_string()),
+            &[
+                0.0, 1.0, 2.0, 5.0, 10.0, 15.0, 20.0, 25.0, 30.0, 40.0, 50.0, 60.0, 70.0, 80.0,
+                90.0, 100.0, 125.0, 150.0, 175.0, 200.0, 250.0, 300.0, 350.0, 400.0, 450.0, 500.0,
+                600.0, 700.0, 800.0, 900.0, 1000.0, 1250.0, 1500.0, 1750.0, 2000.0, 2500.0, 3000.0,
+                3500.0, 4000.0, 4500.0, 5000.0, 6000.0, 7000.0, 8000.0, 9000.0, 10000.0, 15000.0,
+                20000.0, 30000.0, 45000.0, 60000.0, 90000.0, 120000.0, 180000.0, 240000.0,
+                300000.0,
+            ],
+        )
+        .expect("failed to set buckets");
+    let handle = builder
+        .install_recorder()
+        .expect("failed to install Prometheus recorder");
+
     let ort_config = ORTConfig {
         execution_providers: providers,
         intra_threads: args.intra_threads,
         inter_threads: args.inter_threads,
         opt_level: args.graph_opt_level.map(|v| v.try_into().unwrap()),
+        warmup: true,
+        profile_layout: if args.profile_layout {
+            Some(std::path::PathBuf::from("profile_layout_api"))
+        } else {
+            None
+        },
+        profile_table: if args.profile_table {
+            Some(std::path::PathBuf::from("profile_table_api"))
+        } else {
+            None
+        },
     };
     // Initialize the layout model and queues
     let parser = FerrulesParser::new(ort_config);
@@ -588,6 +629,7 @@ async fn main() {
         .route("/images/:job_id/figures/:filename", get(get_image_handler))
         .route("/markdown/:job_id", get(get_markdown_handler))
         .route("/document/:job_id", get(get_document_handler))
+        .route("/metrics", get(move || std::future::ready(handle.render())))
         .with_state(app_state)
         .layer(OtelAxumLayer::default())
         .layer(DefaultBodyLimit::max(MAX_SIZE_LIMIT));

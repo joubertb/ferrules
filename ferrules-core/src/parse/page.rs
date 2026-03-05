@@ -4,18 +4,21 @@ use std::{
     sync::Arc,
     time::Instant,
 };
+use tokio::task::JoinSet;
 
-use anyhow::Context;
 use image::DynamicImage;
 use tracing::instrument;
 
 use crate::{
     draw::{draw_blocks, draw_layout_bboxes, draw_text_lines},
-    entities::{Element, Line, PageID, StructuredPage},
+    entities::{Element, ElementType, Line, PDFPath, PageID, StructuredPage},
+    error::FerrulesError,
     layout::{
         model::LayoutBBox, Metadata, ParseLayoutQueue, ParseLayoutRequest, ParseLayoutResponse,
     },
-    ocr::parse_image_ocr,
+    metrics::{OCRMetrics, PageMetrics, StepMetrics, TableMetrics},
+    ocr::{OCRMetadata, OCRQueue, ParseOCRRequest},
+    parse::table::ParseTableQueue,
 };
 
 use super::{
@@ -46,7 +49,7 @@ fn build_page_elements(
     page_layout: &[LayoutBBox],
     text_lines: &[Line],
     page_idx: PageID,
-) -> anyhow::Result<Vec<Element>> {
+) -> Result<Vec<Element>, FerrulesError> {
     let mut elements = merge_lines_layout(page_layout, text_lines, page_idx)?;
     let merged_layout_blocks_ids = elements
         .iter()
@@ -62,20 +65,46 @@ fn build_page_elements(
 }
 
 #[instrument(skip_all)]
-fn parse_page_text(
+async fn parse_page_text(
     native_text_lines: Vec<Line>,
     page_layout: &[LayoutBBox],
-    page_image: &DynamicImage,
+    page_image: Arc<DynamicImage>,
+    ocr_queue: OCRQueue,
+    page_id: PageID,
     downscale_factor: f32,
-) -> anyhow::Result<(Vec<Line>, bool)> {
+) -> Result<(Vec<Line>, Option<StepMetrics>, bool), FerrulesError> {
     let text_layout_box: Vec<&LayoutBBox> =
         page_layout.iter().filter(|b| b.is_text_block()).collect();
     let need_ocr = page_needs_ocr(&text_layout_box, &native_text_lines);
 
-    let ocr_result = if need_ocr {
-        parse_image_ocr(page_image, downscale_factor).ok()
+    let (ocr_result, ocr_metrics) = if need_ocr {
+        let (tx, rx) = tokio::sync::oneshot::channel();
+        let req = ParseOCRRequest {
+            page_id,
+            page_image: Arc::clone(&page_image),
+            rescale_factor: downscale_factor,
+            metadata: OCRMetadata {
+                response_tx: tx,
+                queue_time: Instant::now(),
+            },
+        };
+        ocr_queue.push(req).await?;
+        tracing::debug!("OCR request pushed to queue for page {}", page_id);
+
+        let res = rx
+            .await
+            .map_err(|e| {
+                tracing::error!("OCR channel receive error: {:?}", e);
+                FerrulesError::OcrError(format!("OCR channel error: {}", e))
+            })?
+            .map_err(|e| {
+                tracing::error!("OCR execution error: {:?}", e);
+                e
+            })?;
+
+        (Some(res.ocr_lines), Some(res.step_metrics))
     } else {
-        None
+        (None, None)
     };
 
     let lines = if need_ocr && ocr_result.is_some() {
@@ -89,15 +118,20 @@ fn parse_page_text(
     } else {
         native_text_lines
     };
-    Ok((lines, need_ocr))
+    Ok((lines, ocr_metrics, need_ocr))
 }
 
 #[instrument(
     skip_all,
     fields(
         layout_queue_time_ms,
+        layout_idle_time_ms,
         layout_parse_duration_ms,
         parse_native_duration_ms,
+        ocr_idle_time_ms,
+        ocr_parse_duration_ms,
+        table_queue_time_ms,
+        table_parse_duration_ms,
     )
 )]
 pub async fn parse_page_full<C>(
@@ -105,10 +139,9 @@ pub async fn parse_page_full<C>(
     debug_dir: Option<PathBuf>,
     layout_queue: ParseLayoutQueue,
     cancellation_callback: Option<C>,
-) -> anyhow::Result<StructuredPage>
-where
-    C: Fn() -> bool + Send + Sync + 'static + Clone,
-{
+    ocr_queue: OCRQueue,
+) -> Result<StructuredPage, FerrulesError> {
+    let start_time = Instant::now();
     let span = tracing::Span::current();
 
     // Check for cancellation before starting page processing
@@ -126,6 +159,7 @@ where
     let ParseNativePageResult {
         page_id,
         text_lines,
+        paths,
         page_bbox,
         page_image,
         page_image_scale1,
@@ -147,16 +181,24 @@ where
         },
     };
     layout_queue.push(layout_req).await?;
+    tracing::debug!("Layout request pushed to queue");
 
     let ParseLayoutResponse {
-        page_id,
+        _page_id: _, // TODO: remove page_id from ParseLayoutResponse
         layout_bbox: page_layout,
-        layout_parse_duration_ms,
-        layout_queue_time_ms,
+        step_metrics: layout_step_metrics,
     } = layout_rx
         .await
-        .context("error receiving layout on oneshot channel")?
-        .context("error parsing page")?;
+        // TODO: better unwrapping
+        .map_err(|e| {
+            tracing::error!("Layout channel receive error: {:?}", e);
+            FerrulesError::LayoutParsingError
+        })?
+        .map_err(|e| {
+            tracing::error!("Layout model execution error: {:?}", e);
+            FerrulesError::LayoutParsingError
+        })?;
+    tracing::debug!("Layout response received");
 
     // Check for cancellation after layout processing
     if let Some(ref cancel_cb) = cancellation_callback {
@@ -168,8 +210,21 @@ where
         }
     }
 
-    let (text_lines, need_ocr) =
-        parse_page_text(text_lines, &page_layout, &page_image, downscale_factor)?;
+    let native_lines_captured = text_lines.clone();
+    let (text_lines_processed, ocr_step_metrics_inner, need_ocr) = parse_page_text(
+        text_lines,
+        &page_layout,
+        Arc::clone(&page_image),
+        ocr_queue,
+        page_id,
+        downscale_factor,
+    )
+    .await?;
+
+    let ocr_step_metrics = ocr_step_metrics_inner.map(|m| OCRMetrics {
+        step_metrics: m,
+        lines_count: text_lines_processed.len(), // Approximate lines count from OCR result
+    });
 
     // Check for cancellation before element building
     if let Some(ref cancel_cb) = cancellation_callback {
@@ -182,18 +237,72 @@ where
     }
 
     // Merging elements with layout
-    let elements = build_page_elements(&page_layout, &text_lines, page_id)?;
+    let mut elements = build_page_elements(&page_layout, &text_lines_processed, page_id)?;
+    let text_lines_arc = Arc::new(text_lines_processed.clone());
+    let paths_arc = Arc::new(paths);
+
+    // Table parsing
+    let mut set = JoinSet::new();
+    for (idx, element) in elements.iter().enumerate() {
+        if matches!(element.kind, ElementType::Table(_)) {
+            let (tx, rx) = tokio::sync::oneshot::channel();
+            let req = crate::parse::table::ParseTableRequest {
+                page_id,
+                page_image: Arc::clone(&page_image),
+                lines: Arc::clone(&text_lines_arc),
+                paths: Arc::clone(&paths_arc),
+                table_bbox: element.bbox.clone(),
+                downscale_factor,
+                metadata: crate::parse::table::TableMetadata {
+                    response_tx: tx,
+                    queue_time: Instant::now(),
+                },
+            };
+            table_queue.push(req).await?;
+            tracing::debug!("Table request pushed to queue for table {}", idx);
+            set.spawn(async move { (idx, rx.await) });
+        }
+    }
+
+    let mut table_steps = Vec::new();
+    while let Some(res) = set.join_next().await {
+        if let Ok((idx, Ok(Ok(resp)))) = res {
+            if let ElementType::Table(ref mut table_opt) = elements[idx].kind {
+                let algorithm = resp.table_block.algorithm.clone();
+                *table_opt = Some(resp.table_block);
+                table_steps.push(TableMetrics {
+                    step_metrics: resp.step_metrics,
+                    algorithm,
+                });
+            }
+        }
+    }
     if let Some(tmp_dir) = debug_dir {
         debug_page(
             &tmp_dir,
             page_id,
             &page_image_scale1,
-            &text_lines,
+            &text_lines_processed,
             need_ocr,
             &page_layout,
             &elements,
+            &paths_arc,
         )?
     };
+
+    let native_step = StepMetrics::new(parse_native_metadata.parse_native_duration_ms as f64);
+
+    let page_metrics = PageMetrics {
+        page_id,
+        total_duration_ms: start_time.elapsed().as_secs_f64() * 1000.0,
+        native_step,
+        layout_step: layout_step_metrics,
+        table_steps,
+        ocr_step: ocr_step_metrics,
+    };
+
+    page_metrics.record();
+    page_metrics.record_span(&span);
 
     let structured_page = StructuredPage {
         id: page_id,
@@ -201,24 +310,22 @@ where
         height: page_bbox.height(),
         image: page_image_scale1,
         elements,
+        paths: paths_arc.as_ref().clone(),
         need_ocr,
+        native_lines: native_lines_captured,
+        layout: page_layout,
+        ocr_lines: if need_ocr {
+            text_lines_processed.clone()
+        } else {
+            vec![]
+        },
+        metrics: page_metrics,
     };
-
-    span.record("layout_queue_time_ms", format!("{layout_queue_time_ms:?}"));
-    span.record(
-        "layout_parse_duration_ms",
-        format!("{layout_parse_duration_ms:?}"),
-    );
-
-    span.record(
-        "parse_native_duration_ms",
-        format!("{:?}", parse_native_metadata.parse_native_duration_ms),
-    );
-    // TODO: add OCR timings
 
     Ok(structured_page)
 }
 
+#[allow(clippy::too_many_arguments, clippy::result_large_err)]
 fn debug_page(
     tmp_dir: &Path,
     page_idx: PageID,
@@ -227,18 +334,57 @@ fn debug_page(
     need_ocr: bool,
     page_layout: &[LayoutBBox],
     elements: &[Element],
-) -> anyhow::Result<()> {
-    let output_file = tmp_dir.join(format!("page_{page_idx}.png"));
-    let final_output_file = tmp_dir.join(format!("page_blocks_{page_idx}.png"));
-    let out_img = draw_text_lines(text_lines, page_image, need_ocr)?;
-    let out_img = draw_layout_bboxes(page_layout, &out_img.into())?;
+    paths: &[PDFPath],
+) -> Result<(), FerrulesError> {
+    let images_dir = tmp_dir.join("images");
+    let blocks_dir = tmp_dir.join("blocks");
+    let _ = std::fs::create_dir_all(&images_dir);
+    let _ = std::fs::create_dir_all(&blocks_dir);
+
+    let output_file = images_dir.join(format!("page_{}.png", page_idx));
+    let final_output_file = blocks_dir.join(format!("page_blocks_{}.png", page_idx));
+    let out_img = draw_text_lines(text_lines, page_image, need_ocr).map_err(|_| {
+        FerrulesError::DebugPageError {
+            tmp_dir: tmp_dir.to_path_buf(),
+            page_idx,
+        }
+    })?;
+    let out_img = draw_layout_bboxes(page_layout, &out_img.into()).map_err(|_| {
+        FerrulesError::DebugPageError {
+            tmp_dir: tmp_dir.to_path_buf(),
+            page_idx,
+        }
+    })?;
     // Draw the final prediction -
     // TODO: Implement titles hashmap for titles in the page
-    let blocks = merge_elements_into_blocks(elements.to_vec(), HashMap::new(), HashMap::new())?;
-    let final_img = draw_blocks(&blocks, page_image)?;
-    out_img.save(output_file)?;
+    let blocks = merge_elements_into_blocks(elements.to_vec(), HashMap::new())?;
+    let final_img_buffer =
+        draw_blocks(&blocks, page_image).map_err(|_| FerrulesError::DebugPageError {
+            tmp_dir: tmp_dir.to_path_buf(),
+            page_idx,
+        })?;
 
-    final_img
+    // Draw paths on final image for debugging
+    let dynamic_final_img = image::DynamicImage::ImageRgba8(final_img_buffer);
+    let final_img_with_paths =
+        crate::draw::draw_paths(paths, &dynamic_final_img).map_err(|_| {
+            FerrulesError::DebugPageError {
+                tmp_dir: tmp_dir.to_path_buf(),
+                page_idx,
+            }
+        })?;
+
+    out_img
+        .save(output_file)
+        .map_err(|_| FerrulesError::DebugPageError {
+            tmp_dir: tmp_dir.to_path_buf(),
+            page_idx,
+        })?;
+
+    final_img_with_paths
         .save(final_output_file)
-        .context("error saving image")
+        .map_err(|_| FerrulesError::DebugPageError {
+            tmp_dir: tmp_dir.to_path_buf(),
+            page_idx,
+        })
 }
