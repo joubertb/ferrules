@@ -4,16 +4,15 @@ use lazy_static::lazy_static;
 use ndarray::{s, Array4, ArrayBase, Axis, Dim, OwnedRepr};
 use ort::{
     execution_providers::{
-        coreml::CoreMLComputeUnits, CPUExecutionProvider, CUDAExecutionProvider,
-        CoreMLExecutionProvider, TensorRTExecutionProvider,
+        CPUExecutionProvider, CUDAExecutionProvider, CoreMLExecutionProvider,
+        TensorRTExecutionProvider,
     },
-    session::{builder::GraphOptimizationLevel, run_options::RunOptions, Session},
-    value::Tensor,
+    session::{builder::GraphOptimizationLevel, Session},
 };
 use rkyv::{Archive, Deserialize as RkyvDeserialize, Serialize as RkyvSerialize};
 use std::sync::Mutex;
 
-use crate::{debug_print, entities::BBox};
+use crate::entities::BBox;
 
 pub const LAYOUT_MODEL_BYTES: &[u8] = include_bytes!("../../../models/yolov8s-doclaynet.onnx");
 
@@ -133,11 +132,9 @@ impl LayoutBBox {
     }
 }
 
-use tokio::sync::Mutex;
-
 #[derive(Debug)]
 pub struct ORTLayoutParser {
-    session: Mutex<Session>,
+    session: Session,
     output_name: String,
     pub config: ORTConfig,
     buffer_pool: Mutex<Vec<Array4<f32>>>,
@@ -167,22 +164,14 @@ impl ORTLayoutParser {
     ) -> anyhow::Result<ArrayBase<OwnedRepr<f32>, Dim<[usize; 3]>>> {
         let outputs = &self.session.run_async(ort::inputs![input.view()]?)?.await?;
 
-        let mut session = self.session.lock().await;
-        let outputs = session
-            .run_async(ort::inputs![input_tensor], &run_options)?
-            .await?;
-
-        let output_value = outputs
+        let output_tensor = outputs
             .get(&self.output_name)
-            .context("can't get the value of first output")?;
-        let (shape, data) = output_value.try_extract_tensor::<f32>()?;
+            .context("can't get the value of first output")?
+            .try_extract_tensor::<f32>()?;
 
-        // Convert shape from i64 to usize for ndarray
-        let shape_usize: Vec<usize> = shape.iter().map(|&d| d as usize).collect();
-
-        // Reshape from flat data to the expected output shape
-        let output_tensor = ndarray::ArrayView::from_shape(shape_usize.as_slice(), data)?
-            .into_shape_with_order(Self::OUTPUT_SIZE)?
+        let output_tensor = output_tensor
+            .to_shape(Self::OUTPUT_SIZE)
+            .unwrap()
             .to_owned();
 
         Ok(output_tensor)
@@ -300,7 +289,6 @@ impl ORTLayoutParser {
             session,
             output_name,
             config,
-            // TODO: use ticket mutex instead of buffer pool to access resources
             buffer_pool: Mutex::new(Vec::with_capacity(32)),
         };
 
@@ -331,20 +319,14 @@ impl ORTLayoutParser {
     ) -> anyhow::Result<ArrayBase<OwnedRepr<f32>, Dim<[usize; 3]>>> {
         let outputs = &self.session.run(ort::inputs![input.view()]?)?;
 
-        let mut session = self.session.blocking_lock();
-        let outputs = session.run(ort::inputs![input_tensor])?;
-
-        let output_value = outputs
+        let output_tensor = outputs
             .get(&self.output_name)
-            .context("can't get the value of first output")?;
-        let (shape, data) = output_value.try_extract_tensor::<f32>()?;
+            .context("can't get the value of first output")?
+            .try_extract_tensor::<f32>()?;
 
-        // Convert shape from i64 to usize for ndarray
-        let shape_usize: Vec<usize> = shape.iter().map(|&d| d as usize).collect();
-
-        // Reshape from flat data to the expected output shape
-        let output_tensor = ndarray::ArrayView::from_shape(shape_usize.as_slice(), data)?
-            .into_shape_with_order(Self::OUTPUT_SIZE)?
+        let output_tensor = output_tensor
+            .to_shape(Self::OUTPUT_SIZE)
+            .unwrap()
             .to_owned();
 
         Ok(output_tensor)

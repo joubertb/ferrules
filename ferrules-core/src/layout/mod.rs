@@ -61,7 +61,14 @@ impl ParseLayoutQueue {
         self.queue
             .send(LayoutQueueMessage::Request(req, span))
             .await
-            .map_err(|_| FerrulesError::LayoutParsingError) // We keep LayoutParsingError for layout itself, but we can add more context later if needed.
+            .map_err(|_| FerrulesError::LayoutParsingError)
+    }
+
+    pub(crate) async fn flush(&self) -> Result<(), FerrulesError> {
+        self.queue
+            .send(LayoutQueueMessage::Flush)
+            .await
+            .map_err(|_| FerrulesError::LayoutParsingError)
     }
 }
 
@@ -70,14 +77,25 @@ async fn start_layout_parser(
     mut input_rx: Receiver<LayoutQueueMessage>,
 ) {
     let s = Arc::new(Semaphore::new(CONCURRENT_LAYOUT_REQUESTS));
-    while let Some((req, span)) = input_rx.recv().await {
-        let queue_time = req.metadata.queue_time.elapsed().as_secs_f64() * 1000.0;
-        let page_id = req.page_id;
-        tracing::debug!("layout request queue time for page {page_id} took: {queue_time}ms");
-        let _guard = span.enter();
-        tokio::spawn(
-            handle_request(s.clone(), layout_parser.clone(), req, queue_time).in_current_span(),
-        );
+    while let Some(msg) = input_rx.recv().await {
+        match msg {
+            LayoutQueueMessage::Request(req, span) => {
+                let queue_time = req.metadata.queue_time.elapsed().as_secs_f64() * 1000.0;
+                let page_id = req.page_id;
+                tracing::debug!(
+                    "layout request queue time for page {page_id} took: {queue_time}ms"
+                );
+                let _guard = span.enter();
+                tokio::spawn(
+                    handle_request(s.clone(), layout_parser.clone(), req, queue_time)
+                        .in_current_span(),
+                );
+            }
+            LayoutQueueMessage::Flush => {
+                tracing::debug!("Layout queue flushed");
+                break;
+            }
+        }
     }
 }
 

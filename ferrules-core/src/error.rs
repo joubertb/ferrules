@@ -31,4 +31,6 @@ pub enum FerrulesError {
     TableParserError(String),
     #[error("ocr parser error: {0}")]
     OcrError(String),
+    #[error("processing was cancelled")]
+    Cancelled,
 }

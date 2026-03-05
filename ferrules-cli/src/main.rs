@@ -5,7 +5,7 @@ mod error_formatter;
 use error_formatter::format_error;
 
 use ferrules_core::{
-    debug::{init_debug_config, set_debug_context_with_dir, DebugOutput},
+    debug::{init_debug_config, DebugOutput},
     layout::model::{ORTConfig, OrtExecutionProvider},
     utils::{create_dirs, get_doc_length, save_parsed_document},
     FerrulesParseConfig, FerrulesParser,
@@ -163,7 +163,6 @@ struct Args {
         help = "Enable profiling for the table transformer model (saved as .json)"
     )]
     profile_table: bool,
-
 }
 
 fn parse_page_range(range_str: &str) -> anyhow::Result<Range<usize>> {
@@ -192,11 +191,8 @@ fn parse_page_range(range_str: &str) -> anyhow::Result<Range<usize>> {
     }
 }
 
-    file_path: &Path,
-    password: Option<&str>,
-    page_range: Option<Range<usize>>,
-) -> ProgressBar {
-    let length_pages = match get_doc_length(file_path, password, page_range.clone()) {
+fn setup_progress_bar(file_path: &Path, page_range: Option<Range<usize>>) -> ProgressBar {
+    let length_pages = match get_doc_length(file_path, page_range.clone()) {
         Ok(pages) => pages,
         Err(e) => {
             format_error(
@@ -324,7 +320,7 @@ async fn main() {
         },
         None => None,
     };
-    let pb = setup_progress_bar(&args.file_path, None, page_range.clone());
+    let pb = setup_progress_bar(&args.file_path, page_range.clone());
 
     let pbc = pb.clone();
 
@@ -339,29 +335,26 @@ async fn main() {
         .unwrap_or(Uuid::new_v4().to_string());
 
     let save_figs = args.html | args.save_images;
-    let (output_dir_path, debug_path) =
-        match create_dirs(args.output_dir.as_ref(), &doc_name, args.debug, save_figs) {
-            Ok(paths) => paths,
-            Err(e) => {
-                format_error(
-                    "Directory Creation Failed",
-                    "Failed to create output directories.",
-                    vec![
-                        (
-                            "Output Directory",
-                            args.output_dir
-                                .as_ref()
-                                .map_or("current directory".to_string(), |p| {
-                                    p.display().to_string()
-                                }),
-                        ),
-                        ("Document Name", doc_name.clone()),
-                        ("Error", e.to_string()),
-                    ],
-                );
-                std::process::exit(1);
-            }
-        };
+    let output_dir_path = match create_dirs(args.output_dir.as_ref(), &doc_name, save_figs) {
+        Ok(path) => path,
+        Err(e) => {
+            format_error(
+                "Directory Creation Failed",
+                "Failed to create output directories.",
+                vec![
+                    (
+                        "Output Directory",
+                        args.output_dir
+                            .as_ref()
+                            .map_or("current directory".to_string(), |p| p.display().to_string()),
+                    ),
+                    ("Document Name", doc_name.clone()),
+                    ("Error", e.to_string()),
+                ],
+            );
+            std::process::exit(1);
+        }
+    };
     // TODO : refac memap
     let file = match File::open(&args.file_path).await {
         Ok(f) => f,
@@ -547,6 +540,13 @@ async fn main() {
                                 "This might indicate an issue with Apple Vision or stitched image size".to_string(),
                             ),
                         ],
+                    );
+                }
+                ferrules_core::error::FerrulesError::Cancelled => {
+                    format_error(
+                        "Processing Cancelled",
+                        "Document processing was cancelled.",
+                        vec![("File", args.file_path.display().to_string())],
                     );
                 }
             }

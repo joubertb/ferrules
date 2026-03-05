@@ -131,7 +131,7 @@ pub fn correct_block(block: &mut crate::blocks::Block) {
         BlockType::Image(_) => {
             // No text to correct in image blocks
         }
-        BlockType::Table => {
+        BlockType::Table(_) => {
             // Table structure is not directly accessible from Block
             // Table text is handled during merge operations
         }

@@ -1,6 +1,6 @@
 use image::DynamicImage;
 
-use plsfix::fix_text;
+use crate::{debug_print, debug_println};
 use rkyv::{Archive, Deserialize as RkyvDeserialize, Serialize as RkyvSerialize};
 
 use serde::{Deserialize, Serialize};
@@ -9,8 +9,8 @@ use std::{path::PathBuf, time::Duration};
 use pdfium_render::prelude::{PdfFontWeight, PdfPageTextChar, PdfRect};
 
 use crate::{
-    font_analysis::universal_corrector::UniversalFontCorrector, layout::model::LayoutBBox,
     blocks::{Block, TableBlock},
+    font_analysis::universal_corrector::UniversalFontCorrector,
     layout::model::LayoutBBox,
     metrics::{PageMetrics, ParsingMetrics},
 };
@@ -304,6 +304,7 @@ pub enum ElementType {
     FootNote,
     Footer,
     Text,
+    Formula,
     Title,
     Subtitle,
     ListItem,
@@ -683,10 +684,9 @@ pub struct ParsedDocument {
     pub metrics: ParsingMetrics,
 }
 
-
 /// Serializable version of CharSpan for JSON output
 /// Used for PDF sentence highlighting in the UI
-#[derive(Debug, Clone, Deserialize, Serialize)]
+#[derive(Debug, Clone, Deserialize, Serialize, Archive, RkyvDeserialize, RkyvSerialize)]
 pub struct SerializableCharSpan {
     pub bbox: BBox,
     pub text: String,
@@ -700,7 +700,7 @@ pub struct SerializableCharSpan {
 /// Different span types may skip certain processing stages. For example,
 /// fractions should not have subscript/superscript detection applied since
 /// they are already formatted correctly.
-#[derive(Debug, Clone, Copy, PartialEq, Eq, Default)]
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Default, Archive, RkyvDeserialize, RkyvSerialize)]
 pub enum SpanType {
     /// Normal text span - all processing applied
     #[default]
@@ -735,23 +735,19 @@ pub enum SerializableFontWeight {
 }
 
 impl From<PdfFontWeight> for SerializableFontWeight {
-    fn from(_weight: PdfFontWeight) -> Self {
-        // TODO: Map correctly once variants are known.
-        // For now, default to Normal to bypass compilation errors.
-        Self::Normal
-        /*
+    fn from(weight: PdfFontWeight) -> Self {
         match weight {
-            PdfFontWeight::Thin => Self::Thin,
-            PdfFontWeight::ExtraLight => Self::ExtraLight,
-            PdfFontWeight::Light => Self::Light,
-            PdfFontWeight::Normal => Self::Normal,
-            PdfFontWeight::Medium => Self::Medium,
-            PdfFontWeight::SemiBold => Self::SemiBold,
-            PdfFontWeight::Bold => Self::Bold,
-            PdfFontWeight::ExtraBold => Self::ExtraBold,
-            PdfFontWeight::Black => Self::Black,
+            PdfFontWeight::Weight100 => Self::Thin,
+            PdfFontWeight::Weight200 => Self::ExtraLight,
+            PdfFontWeight::Weight300 => Self::Light,
+            PdfFontWeight::Weight400Normal => Self::Normal,
+            PdfFontWeight::Weight500 => Self::Medium,
+            PdfFontWeight::Weight600 => Self::SemiBold,
+            PdfFontWeight::Weight700Bold => Self::Bold,
+            PdfFontWeight::Weight800 => Self::ExtraBold,
+            PdfFontWeight::Weight900 => Self::Black,
+            PdfFontWeight::Custom(_) => Self::Normal,
         }
-        */
     }
 }
 
@@ -884,7 +880,7 @@ impl CharSpan {
                     .expect("Error init span tight bound char"),
                 page_bbox.height(),
             ),
-            text: char.unicode_char().unwrap_or_default().into(),
+            text: corrected_final_text,
             font_name: char.font_name(),
             font_weight: char.font_weight().map(Into::into),
             font_size: char.unscaled_font_size().value,
@@ -898,7 +894,7 @@ impl CharSpan {
         }
     }
     pub fn append(&mut self, char: &PdfPageTextChar, page_bbox: &BBox) -> Option<()> {
-        let char_rotation = char.get_rotation_clockwise_degrees();
+        let char_rotation = char.angle_degrees().unwrap_or(0.0);
         let char_font_weight = char.font_weight().map(SerializableFontWeight::from);
         if char.unscaled_font_size().value != self.font_size
             || char.font_name() != self.font_name

@@ -1,8 +1,10 @@
 use std::collections::HashMap;
 
 use crate::{
+    blocks::{
+        Block, BlockType, FormulaBlock, ImageBlock, List, TableBlock, TextBlock, Title, TitleLevel,
+    },
     debug_print,
-    blocks::{Block, BlockType, ImageBlock, List, TableBlock, TextBlock, Title, TitleLevel},
     entities::{Element, ElementID, ElementType, Line, PageID},
     error::FerrulesError,
     layout::model::LayoutBBox,
@@ -11,12 +13,9 @@ use crate::{
 use lazy_static::lazy_static;
 use regex::Regex;
 
-/// Maximum length of a joined word (without hyphen) to attempt dictionary lookup.
-/// Words longer than this are unlikely to be simple hyphenated line breaks.
+#[cfg(feature = "correction-engine")]
 const MAX_JOINED_WORD_LENGTH: usize = 20;
-
-/// Minimum character length each word part must have to be considered
-/// for compound word detection (Case 2 of hyphen logic).
+#[cfg(feature = "correction-engine")]
 const MIN_WORD_PART_LENGTH: usize = 2;
 
 lazy_static! {
@@ -395,6 +394,7 @@ fn is_figure_caption(text: &str) -> bool {
 /// Detects text blocks that are likely embedded within a figure
 /// TODO: WORKAROUND - The ONNX model should detect complete figure boundaries
 /// including embedded text, not just the formula/image portion
+#[allow(dead_code)]
 fn is_likely_figure_embedded_text(element: &Element) -> bool {
     // Check if text block is spatially between main columns (figure area)
     // Main text columns typically at x ≈ 50-75 or x ≈ 314
@@ -673,8 +673,8 @@ fn post_process_figure_blocks(blocks: &mut Vec<Block>) {
 pub(crate) fn merge_elements_into_blocks(
     elements: Vec<Element>,
     title_level: HashMap<(PageID, ElementID), TitleLevel>,
+    page_heights: HashMap<usize, f32>,
 ) -> Result<Vec<Block>, FerrulesError> {
-
     let mut element_it = elements.into_iter().peekable();
 
     let mut blocks: Vec<Block> = Vec::new();
@@ -696,27 +696,127 @@ pub(crate) fn merge_elements_into_blocks(
 
         match &mut curr_el.kind {
             ElementType::Text => {
+                debug_print!(
+                    "📄 TEXT ELEMENT: {}",
+                    curr_el.text_block.text.chars().take(50).collect::<String>()
+                );
+
+                // Get truly original text by reconstructing from raw CharSpans (before any HTML tag processing)
+                let original_text = if !curr_el.line_spans.is_empty() {
+                    // Reconstruct original text from CharSpans
+                    let lines: Vec<String> = curr_el
+                        .line_spans
+                        .iter()
+                        .map(|line_spans| {
+                            // Space-aware concatenation of spans within a line
+                            concatenate_spans_with_spacing(line_spans)
+                        })
+                        .collect();
+
+                    // Smart line joining that handles word breaks across lines
+                    join_lines_smart(&lines)
+                } else {
+                    // Fallback to current text if no spans available
+                    curr_el.text_block.text.clone()
+                };
+
+                let processed_text = if !curr_el.line_spans.is_empty() {
+                    debug_print!(
+                        "🎯 TEXT WITH SPANS: Processing {} line_spans for subscript detection",
+                        curr_el.line_spans.len()
+                    );
+
+                    // Apply subscript detection using CharSpans but WITHOUT formula wrapper (for TEXT elements)
+                    crate::modtext::process_text_with_spans(&original_text, &curr_el.line_spans)
+                } else {
+                    // No spans available, use basic text correction only
+                    apply_corrections_to_text(original_text.clone())
+                };
+
+                let corrected_text = processed_text;
+
                 let mut text_block = Block {
                     id: block_id,
                     kind: crate::blocks::BlockType::TextBlock(TextBlock {
-                        text: curr_el.text_block.text.clone(),
+                        text: corrected_text.clone(),
+                        // Always set fertext to preserve original text for char_span alignment
+                        // char_spans are indexed to the original text, so fertext must always exist
+                        fertext: Some(original_text.clone()),
+                        has_math: curr_el.has_math,
+                        char_spans: curr_el.get_serializable_char_spans(),
+                        sentence_ends: Vec::new(), // Will be computed after merging
                     }),
                     pages_id: vec![curr_el.page_id],
                     bbox: curr_el.bbox,
                 };
-                // TODO: This might be a bug here
                 // Check to see if we have another text block that is close
-                while let Some(next_el) = element_it.peek() {
-                    if matches!(next_el.kind, crate::entities::ElementType::Text)
-                        && (text_block.bbox.distance(&next_el.bbox, 1.0, 1.0)
-                            < MAXIMUM_ASSIGNMENT_DISTANCE)
-                    {
+                loop {
+                    let should_merge = if let Some(next_el) = element_it.peek() {
+                        matches!(next_el.kind, crate::entities::ElementType::Text)
+                            && (text_block.bbox.distance(&next_el.bbox, 1.0, 1.0)
+                                < MAXIMUM_ASSIGNMENT_DISTANCE)
+                    } else {
+                        false
+                    };
+
+                    if should_merge {
                         let next_el = element_it.next().unwrap();
-                        text_block.merge(next_el)?;
+                        if let BlockType::TextBlock(text_content) = &mut text_block.kind {
+                            // Get current text length for char_span offset adjustment
+                            let current_len = text_content.text.chars().count();
+                            text_content.text.push('\n');
+                            text_content.text.push_str(&next_el.text_block.text);
+
+                            // Merge fertext for accurate sentence detection
+                            let next_original_text = &next_el.text_block.text;
+                            let fertext_len = text_content
+                                .fertext
+                                .as_ref()
+                                .map(|f| f.chars().count())
+                                .unwrap_or(current_len);
+                            if let Some(ref mut fertext) = text_content.fertext {
+                                fertext.push('\n');
+                                fertext.push_str(next_original_text);
+                            } else {
+                                // Current has no fertext - create one from current text + next original
+                                let current_original = text_content.text.clone();
+                                let mut merged = current_original;
+                                merged.push('\n');
+                                merged.push_str(next_original_text);
+                                text_content.fertext = Some(merged);
+                            }
+
+                            // Propagate has_math from merged element
+                            text_content.has_math |= next_el.has_math;
+
+                            // Collect char_spans from next element with adjusted offsets
+                            let offset = fertext_len + 1; // +1 for newline
+                            for span in next_el.get_serializable_char_spans() {
+                                text_content.char_spans.push(
+                                    crate::entities::SerializableCharSpan {
+                                        bbox: span.bbox,
+                                        text: span.text,
+                                        char_start: span.char_start + offset,
+                                        char_end: span.char_end + offset,
+                                        page_id: span.page_id,
+                                    },
+                                );
+                            }
+                        }
+                        text_block.bbox.merge(&next_el.bbox);
                     } else {
                         break;
                     }
                 }
+
+                // Compute sentence end positions for the final merged text
+                if let BlockType::TextBlock(text_content) = &mut text_block.kind {
+                    // Use fertext (original text) for sentence detection since char_spans map to it
+                    let text_for_detection =
+                        text_content.fertext.as_ref().unwrap_or(&text_content.text);
+                    text_content.sentence_ends = detect_sentence_ends(text_for_detection);
+                }
+
                 block_id += 1;
                 blocks.push(text_block);
             }
@@ -2080,6 +2180,8 @@ mod tests {
                 text_block: ElementText::default(),
                 page_id: 1,
                 bbox: table1_bbox,
+                has_math: false,
+                line_spans: Vec::new(),
             },
             Element {
                 id: 1,
@@ -2088,10 +2190,12 @@ mod tests {
                 text_block: ElementText::default(),
                 page_id: 1,
                 bbox: table2_bbox,
+                has_math: false,
+                line_spans: Vec::new(),
             },
         ];
 
-        let blocks = merge_elements_into_blocks(elements, HashMap::new())?;
+        let blocks = merge_elements_into_blocks(elements, HashMap::new(), HashMap::new())?;
 
         assert_eq!(blocks.len(), 2);
         assert!(matches!(blocks[0].kind, BlockType::Table(_)));

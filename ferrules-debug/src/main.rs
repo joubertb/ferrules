@@ -1,10 +1,10 @@
 use clap::Parser;
 use ferrules_core::debug_info::DebugDocument;
 use iced::widget::{
-    Space, Tooltip, button, canvas, checkbox, column, container, horizontal_space, image, row,
-    slider, text,
+    button, canvas, checkbox, column, container, horizontal_space, image, row, slider, text, Space,
+    Tooltip,
 };
-use iced::{Alignment, Color, Element, Event, Length, Task, Theme, Vector, event, window};
+use iced::{event, window, Alignment, Color, Element, Event, Length, Task, Theme, Vector};
 use memmap2::Mmap;
 use rkyv::archived_root;
 use std::path::PathBuf;
@@ -13,7 +13,7 @@ mod inspector;
 mod painter;
 pub mod theme;
 pub mod widgets;
-use inspector::{InspectorItem, InspectorSection, view_inspector};
+use inspector::{view_inspector, InspectorItem, InspectorSection};
 use painter::{CanvasMessage, PagePainter, PainterMode};
 
 #[derive(Parser, Debug)]

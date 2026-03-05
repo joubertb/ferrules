@@ -27,9 +27,6 @@ pub fn title_levels_kmeans(
         return title_level;
     }
 
-    let kmean: KMeans<_, LANE_COUNT_SIMD_KMEANS, _> =
-        KMeans::new(&samples, sample_len, 1, EuclideanDistance);
-
     let (centroids, assignments) = run_kmeans_1d(&samples, title_buckets, 100);
 
     let centroids_sorted: Vec<_> = centroids

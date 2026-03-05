@@ -138,9 +138,13 @@ pub async fn parse_page_full<C>(
     parse_native_result: ParseNativePageResult,
     debug_dir: Option<PathBuf>,
     layout_queue: ParseLayoutQueue,
+    table_queue: ParseTableQueue,
     cancellation_callback: Option<C>,
     ocr_queue: OCRQueue,
-) -> Result<StructuredPage, FerrulesError> {
+) -> Result<StructuredPage, FerrulesError>
+where
+    C: Fn() -> bool + Send + Sync + 'static + Clone,
+{
     let start_time = Instant::now();
     let span = tracing::Span::current();
 
@@ -149,10 +153,7 @@ pub async fn parse_page_full<C>(
         if cancel_cb() {
             // Note: We don't flush here because this is per-page, not per-document
             // The document-level cancellation will handle the queue flushing
-            return Err(anyhow::anyhow!(
-                "Page {} processing was cancelled",
-                parse_native_result.page_id
-            ));
+            return Err(FerrulesError::Cancelled);
         }
     }
 
@@ -203,10 +204,7 @@ pub async fn parse_page_full<C>(
     // Check for cancellation after layout processing
     if let Some(ref cancel_cb) = cancellation_callback {
         if cancel_cb() {
-            return Err(anyhow::anyhow!(
-                "Page {} processing was cancelled after layout",
-                page_id
-            ));
+            return Err(FerrulesError::Cancelled);
         }
     }
 
@@ -229,10 +227,7 @@ pub async fn parse_page_full<C>(
     // Check for cancellation before element building
     if let Some(ref cancel_cb) = cancellation_callback {
         if cancel_cb() {
-            return Err(anyhow::anyhow!(
-                "Page {} processing was cancelled before element building",
-                page_id
-            ));
+            return Err(FerrulesError::Cancelled);
         }
     }
 
@@ -357,7 +352,7 @@ fn debug_page(
     })?;
     // Draw the final prediction -
     // TODO: Implement titles hashmap for titles in the page
-    let blocks = merge_elements_into_blocks(elements.to_vec(), HashMap::new())?;
+    let blocks = merge_elements_into_blocks(elements.to_vec(), HashMap::new(), HashMap::new())?;
     let final_img_buffer =
         draw_blocks(&blocks, page_image).map_err(|_| FerrulesError::DebugPageError {
             tmp_dir: tmp_dir.to_path_buf(),

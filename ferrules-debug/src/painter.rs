@@ -582,7 +582,12 @@ impl<'a> PagePainter<'a> {
                         ArchivedBlockType::Header(h) => h.text.to_string(),
                         ArchivedBlockType::Footer(f) => f.text.to_string(),
                         ArchivedBlockType::Title(t) => t.text.to_string(),
-                        ArchivedBlockType::ListBlock(l) => l.items.join("\n"),
+                        ArchivedBlockType::ListBlock(l) => l
+                            .items
+                            .iter()
+                            .map(|item| item.text.as_str())
+                            .collect::<Vec<_>>()
+                            .join("\n"),
                         _ => String::new(),
                     };
                     let block_kind = match &block.kind {
@@ -593,6 +598,8 @@ impl<'a> PagePainter<'a> {
                         ArchivedBlockType::TextBlock(_) => "Text",
                         ArchivedBlockType::Image(_) => "Image",
                         ArchivedBlockType::Table(_) => "Table",
+                        ArchivedBlockType::Formula(_) => "Formula",
+                        ArchivedBlockType::Figure(_) => "Figure",
                     };
 
                     let mut table_details = None;
@@ -684,6 +691,7 @@ impl<'a> PagePainter<'a> {
                         ArchivedElementType::Caption => "Caption",
                         ArchivedElementType::Image => "Image",
                         ArchivedElementType::Table(_) => "Table",
+                        ArchivedElementType::Formula => "Formula",
                     };
                     hovered_element = Some(InspectorElement {
                         id: element.id as usize,

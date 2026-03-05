@@ -1,13 +1,10 @@
 use std::path::PathBuf;
 
-use lazy_static::lazy_static;
 use build_html::{Html, HtmlChild, HtmlContainer, HtmlElement, HtmlPage, HtmlTag};
+use lazy_static::lazy_static;
 use regex::Regex;
 
-use crate::{
-    blocks::{Block, BlockType},
-    debug_print,
-};
+use crate::blocks::{Block, BlockType};
 
 use super::{Render, Renderer};
 
@@ -77,7 +74,7 @@ impl HTMLRenderer {
             BlockType::ListBlock(list) => {
                 let mut ul = HtmlElement::new(HtmlTag::UnorderedList);
                 for item in &list.items {
-                    let clean_text = list_regex.replace(item, "").into_owned();
+                    let clean_text = list_regex.replace(&item.text, "").into_owned();
                     let li = HtmlElement::new(HtmlTag::ListElement)
                         .with_child(clean_text.as_str().into())
                         .into();
@@ -110,6 +107,33 @@ impl HTMLRenderer {
                     }
 
                     container.add_child(figure.into());
+                }
+            }
+            BlockType::Formula(formula) => {
+                let el = HtmlElement::new(HtmlTag::ParagraphText)
+                    .with_child(formula.text.as_str().into())
+                    .into();
+                container.add_child(el);
+            }
+            BlockType::Figure(figure) => {
+                if let Some(img_src_path) = img_src_path {
+                    let mut figure_el = HtmlElement::new(HtmlTag::Figure);
+                    let img_src = img_src_path
+                        .join(format!("img_{}.png", figure.id))
+                        .to_str()
+                        .unwrap()
+                        .to_owned();
+                    let img = HtmlElement::new(HtmlTag::Image).with_image(img_src, "");
+                    figure_el.add_child(img.into());
+
+                    if let Some(caption) = &figure.caption {
+                        let figcaption = HtmlElement::new(HtmlTag::Figcaption)
+                            .with_child(caption.as_str().into())
+                            .into();
+                        figure_el.add_child(figcaption);
+                    }
+
+                    container.add_child(figure_el.into());
                 }
             }
             BlockType::Table(table) => {
@@ -154,7 +178,7 @@ impl Renderer for HTMLRenderer {
             block,
             &mut self.root_element,
             self.img_src_path.as_ref(),
-            &self.list_regex,
+            &LIST_BULLET_REGEX,
         )
     }
 }

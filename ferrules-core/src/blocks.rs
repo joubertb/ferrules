@@ -1,11 +1,15 @@
 use crate::font_analysis as correction;
-use anyhow::bail;
+
 use crate::{
-    entities::{BBox, Element, ElementType, PageID},
+    entities::{BBox, Element, ElementType, PageID, SerializableCharSpan},
     error::FerrulesError,
 };
 use rkyv::{Archive, Deserialize as RkyvDeserialize, Serialize as RkyvSerialize};
 use serde::{Deserialize, Serialize};
+
+fn is_false(v: &bool) -> bool {
+    !v
+}
 
 pub type TitleLevel = u8;
 
@@ -30,13 +34,38 @@ impl ImageBlock {
 )]
 pub struct TextBlock {
     pub text: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub fertext: Option<String>,
+    /// Whether this block contains math content (detected from font analysis)
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub has_math: bool,
+    /// Character spans with bounding boxes for sentence highlighting
+    #[serde(skip_serializing_if = "Vec::is_empty", default)]
+    pub char_spans: Vec<SerializableCharSpan>,
+    /// Sentence end positions (character indices) for precise bbox computation
+    #[serde(skip_serializing_if = "Vec::is_empty", default)]
+    pub sentence_ends: Vec<usize>,
+}
+
+#[derive(
+    Clone, Debug, Default, Deserialize, Serialize, Archive, RkyvDeserialize, RkyvSerialize,
+)]
+pub struct ListItem {
+    pub text: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub fertext: Option<String>,
+    #[serde(default, skip_serializing_if = "is_false")]
+    pub has_math: bool,
+    /// Character spans with bounding boxes for sentence highlighting
+    #[serde(skip_serializing_if = "Vec::is_empty", default)]
+    pub char_spans: Vec<SerializableCharSpan>,
 }
 
 #[derive(
     Clone, Debug, Default, Deserialize, Serialize, Archive, RkyvDeserialize, RkyvSerialize,
 )]
 pub struct List {
-    pub items: Vec<String>,
+    pub items: Vec<ListItem>,
 }
 
 #[derive(
@@ -105,11 +134,31 @@ pub struct Title {
     pub sentence_ends: Vec<usize>,
 }
 
-#[derive(Debug, Default, Deserialize, Serialize)]
+#[derive(
+    Clone, Debug, Default, Deserialize, Serialize, Archive, RkyvDeserialize, RkyvSerialize,
+)]
 pub struct FormulaBlock {
     pub text: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub formula_img: Option<String>,
+}
+
+#[derive(
+    Clone, Debug, Default, Deserialize, Serialize, Archive, RkyvDeserialize, RkyvSerialize,
+)]
+pub struct FigureBlock {
+    pub id: usize,
+    pub embedded_texts: Vec<String>,
+    pub image_bbox: Option<BBox>,
+    pub caption: Option<String>,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub image_path: Option<String>,
+}
+
+impl FigureBlock {
+    pub(crate) fn path(&self) -> String {
+        format!("img_{}.png", self.id)
+    }
 }
 
 #[derive(Clone, Debug, Deserialize, Serialize, Archive, RkyvDeserialize, RkyvSerialize)]
@@ -122,6 +171,7 @@ pub enum BlockType {
     TextBlock(TextBlock),
     Formula(FormulaBlock),
     Image(ImageBlock),
+    Figure(FigureBlock),
     Table(TableBlock),
 }
 
@@ -270,8 +320,17 @@ impl Block {
                 }
             }
             BlockType::Title(_title) => todo!(),
-            BlockType::Formula(_formula) => bail!("can't merge element in Formula"),
+            BlockType::Formula(_formula) => Err(FerrulesError::BlockMergeError {
+                element: Box::new(element),
+                block_id: self.id,
+                kind: self.kind.clone(),
+            }),
             BlockType::Image(_image_block) => todo!(),
+            BlockType::Figure(_figure_block) => Err(FerrulesError::BlockMergeError {
+                element: Box::new(element),
+                block_id: self.id,
+                kind: self.kind.clone(),
+            }),
             BlockType::Table(table) => {
                 if let ElementType::Table(incoming_table_opt) = &element.kind {
                     self.bbox.merge(&element.bbox);
@@ -299,6 +358,7 @@ impl Block {
             BlockType::ListBlock(_) => "LIST",
             BlockType::Formula(_) => "FORMULA",
             BlockType::Image(_) => "IMAGE",
+            BlockType::Figure(_) => "FIGURE",
             BlockType::Table(_) => "TABLE",
         }
     }

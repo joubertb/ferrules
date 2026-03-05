@@ -300,6 +300,7 @@ pub struct ParseNativeRequest {
     pub required_raster_height: u32,
     pub sender_tx: Sender<anyhow::Result<ParseNativePageResult>>,
     pub count_only: bool,
+    #[allow(dead_code)]
     pub debug_context: Option<crate::debug::DebugContext>,
     pub queue_time: Instant,
 }
@@ -317,10 +318,31 @@ impl ParseNativeRequest {
             password: password.map(|p| p.to_string()),
             flatten,
             page_range,
-            // TODO: should be global?
             required_raster_width: ORTLayoutParser::REQUIRED_WIDTH,
             required_raster_height: ORTLayoutParser::REQUIRED_HEIGHT,
             sender_tx,
+            count_only: false,
+            debug_context,
+            queue_time: Instant::now(),
+        }
+    }
+
+    pub fn new_count_only(
+        data: &[u8],
+        password: Option<&str>,
+        sender_tx: Sender<anyhow::Result<ParseNativePageResult>>,
+        debug_context: Option<crate::debug::DebugContext>,
+    ) -> Self {
+        ParseNativeRequest {
+            doc_data: Arc::from(data),
+            password: password.map(|p| p.to_string()),
+            flatten: false,
+            page_range: None,
+            required_raster_width: ORTLayoutParser::REQUIRED_WIDTH,
+            required_raster_height: ORTLayoutParser::REQUIRED_HEIGHT,
+            sender_tx,
+            count_only: true,
+            debug_context,
             queue_time: Instant::now(),
         }
     }
@@ -510,11 +532,20 @@ fn handle_parse_native_req(
         required_raster_width,
         required_raster_height,
         sender_tx,
+        count_only,
+        debug_context: _,
         queue_time: _,
     } = req;
     let mut document = pdfium
         .load_pdf_from_byte_slice(&doc_data, password.as_deref())
         .map_err(|_| FerrulesError::ParseNativeError)?;
+
+    // Extract PDF title from metadata
+    let pdf_title = document
+        .metadata()
+        .get(pdfium_render::prelude::PdfDocumentMetadataTagType::Title)
+        .map(|tag| tag.value().to_string())
+        .filter(|t| !t.is_empty());
 
     let mut pages: Vec<_> = document.pages_mut().iter().enumerate().collect();
 
@@ -528,6 +559,7 @@ fn handle_parse_native_req(
         let count_result = ParseNativePageResult {
             page_id: 0,
             text_lines: Vec::new(),
+            paths: Vec::new(),
             page_bbox: crate::entities::BBox {
                 x0: 0.0,
                 y0: 0.0,
@@ -538,13 +570,13 @@ fn handle_parse_native_req(
             page_image_scale1: dummy_image,
             downscale_factor: 1.0,
             metadata: ParseNativeMetadata {
-                parse_native_duration_ms: 0,
+                parse_native_duration_ms: 0.0,
             },
             is_count_result: true,
             total_page_count: Some(total_pages),
             pdf_title,
         };
-        sender_tx.blocking_send(Ok(count_result))?;
+        let _ = sender_tx.blocking_send(Ok(count_result));
         return Ok(());
     }
 

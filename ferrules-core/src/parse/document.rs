@@ -1,9 +1,4 @@
-use std::{collections::HashMap, path::PathBuf, sync::Arc, time::Instant};
-
-use std::path::PathBuf;
-use std::{sync::Arc, time::Instant};
-
-use std::ops::Range;
+use std::{collections::HashMap, ops::Range, path::PathBuf, sync::Arc, time::Instant};
 
 use anyhow::Context;
 use tokio::{sync::mpsc, task::JoinSet};
@@ -17,9 +12,9 @@ use super::{
 use crate::entities::DocumentMetadata;
 use crate::error::FerrulesError;
 use crate::{
+    blocks::Block,
     debug::get_debug_context,
     debug_print,
-    blocks::Block,
     entities::{ElementType, Page, PageID, ParsedDocument, StructuredPage},
     layout::{
         model::{ORTConfig, ORTLayoutParser},
@@ -87,7 +82,7 @@ where
     // Check for cancellation before processing this page
     if let Some(ref cancel_cb) = cancellation_callback {
         if cancel_cb() {
-            return Err(anyhow::anyhow!("Page processing was cancelled"));
+            return Err(FerrulesError::Cancelled);
         }
     }
 
@@ -95,6 +90,7 @@ where
         parse_native_result,
         debug_dir,
         layout_queue.clone(),
+        table_queue.clone(),
         cancellation_callback.clone(),
         ocr_queue.clone(),
     )
@@ -103,7 +99,7 @@ where
     // Check for cancellation after processing
     if let Some(ref cancel_cb) = cancellation_callback {
         if cancel_cb() {
-            return Err(anyhow::anyhow!("Page processing was cancelled"));
+            return Err(FerrulesError::Cancelled);
         }
     }
 
@@ -284,8 +280,8 @@ impl FerrulesParser {
     ///     ).await.unwrap();
     /// }
     #[allow(clippy::too_many_arguments)]
-    #[tracing::instrument(skip(self, doc, page_callback), fields(doc_name = %doc_name))]
-    pub async fn parse_document<F>(
+    #[tracing::instrument(skip(self, doc, page_callback, cancellation_callback), fields(doc_name = %doc_name))]
+    pub async fn parse_document<F, C>(
         &self,
         doc: &[u8],
         doc_name: String,
@@ -463,8 +459,8 @@ impl FerrulesParser {
     }
 
     #[allow(clippy::too_many_arguments)]
-    #[tracing::instrument(skip(self, data, callback), fields(flatten_pdf = flatten_pdf, page_range = ?page_range))]
-    async fn parse_doc_pages<F>(
+    #[tracing::instrument(skip(self, data, callback, cancellation_callback), fields(flatten_pdf = flatten_pdf, page_range = ?page_range))]
+    async fn parse_doc_pages<F, C>(
         &self,
         data: &[u8],
         flatten_pdf: bool,
@@ -483,7 +479,7 @@ impl FerrulesParser {
             if cancel_cb() {
                 // Flush layout queue to stop background processing
                 let _ = self.layout_queue.flush().await;
-                return Err(anyhow::anyhow!("Document processing was cancelled"));
+                return Err(FerrulesError::Cancelled);
             }
         }
 
@@ -505,7 +501,7 @@ impl FerrulesParser {
                 if cancel_cb() {
                     // Flush layout queue to stop background processing
                     let _ = self.layout_queue.flush().await;
-                    return Err(anyhow::anyhow!("Document processing was cancelled"));
+                    return Err(FerrulesError::Cancelled);
                 }
             }
 
@@ -539,7 +535,7 @@ impl FerrulesParser {
                 if cancel_cb() {
                     // Flush layout queue to stop background processing
                     let _ = self.layout_queue.flush().await;
-                    return Err(anyhow::anyhow!("Document processing was cancelled"));
+                    return Err(FerrulesError::Cancelled);
                 }
             }
 

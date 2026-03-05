@@ -9,13 +9,17 @@ pub const DIM: &str = "\x1b[2m";
 
 pub fn format_error(error_type: &str, message: &str, details: Vec<(&str, String)>) {
     // Print error header with border
-    eprintln!("\n{RED}{BOLD}╭─────────────────────────────────────────────────────────────────╮{RESET}");
+    eprintln!(
+        "\n{RED}{BOLD}╭─────────────────────────────────────────────────────────────────╮{RESET}"
+    );
     eprintln!("{RED}{BOLD}│ ✖ ERROR: {:<54}│{RESET}", error_type);
-    eprintln!("{RED}{BOLD}╰─────────────────────────────────────────────────────────────────╯{RESET}");
-    
+    eprintln!(
+        "{RED}{BOLD}╰─────────────────────────────────────────────────────────────────╯{RESET}"
+    );
+
     // Print main message
     eprintln!("\n{WHITE}{message}{RESET}");
-    
+
     // Print details if any
     if !details.is_empty() {
         eprintln!("\n{CYAN}{BOLD}Details:{RESET}");
@@ -23,8 +27,10 @@ pub fn format_error(error_type: &str, message: &str, details: Vec<(&str, String)
             eprintln!("  {DIM}•{RESET} {YELLOW}{label}:{RESET} {value}");
         }
     }
-    
+
     // Print footer with suggestion
     eprintln!("\n{DIM}For more information, try running with --debug flag{RESET}");
-    eprintln!("{RED}{BOLD}═══════════════════════════════════════════════════════════════════{RESET}\n");
+    eprintln!(
+        "{RED}{BOLD}═══════════════════════════════════════════════════════════════════{RESET}\n"
+    );
 }

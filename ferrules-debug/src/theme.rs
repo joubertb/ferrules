@@ -1,4 +1,4 @@
-use iced::{Color, Font, font::Weight};
+use iced::{font::Weight, Color, Font};
 
 // --- PALETTE: Catppuccin Mocha ---
 pub const BASE: Color = Color::from_rgb(0.117, 0.117, 0.180); // #1e1e2e
