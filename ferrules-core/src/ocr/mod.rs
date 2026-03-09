@@ -269,8 +269,9 @@ pub async fn parse_image_ocr(
 #[cfg(target_os = "macos")]
 mod ocr_mac {
     use super::*;
-    use objc2::ClassType;
-    use objc2_foundation::{CGRect, NSArray, NSData, NSDictionary};
+    use objc2::AnyThread;
+    use objc2_core_foundation::CGRect;
+    use objc2_foundation::{NSArray, NSData, NSDictionary};
     use objc2_vision::{VNImageRequestHandler, VNRecognizeTextRequest, VNRequest};
     const CONFIDENCE_THRESHOLD: f32 = 0f32;
 
@@ -366,7 +367,7 @@ mod ocr_mac {
             }
         };
 
-        let mut final_results;
+        let final_results;
 
         // Wrap the batch Vision call in catch_unwind to handle panics from objc2-vision
         let batch_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
@@ -386,9 +387,9 @@ mod ocr_mac {
                     // Since we stitched top-to-bottom, we need to flip Y
                     let roi_y = (1.0 - y0 - h).clamp(0.0, 1.0);
                     let h = h.clamp(0.0, 1.0 - roi_y);
-                    request.setRegionOfInterest(objc2_foundation::CGRect {
-                        origin: objc2_foundation::CGPoint { x: 0.0, y: roi_y },
-                        size: objc2_foundation::CGSize {
+                    request.setRegionOfInterest(objc2_core_foundation::CGRect {
+                        origin: objc2_core_foundation::CGPoint { x: 0.0, y: roi_y },
+                        size: objc2_core_foundation::CGSize {
                             width: 1.0,
                             height: h,
                         },
@@ -420,7 +421,7 @@ mod ocr_mac {
                         for recognized_text_region in result.to_vec() {
                             if (*recognized_text_region).confidence() > CONFIDENCE_THRESHOLD {
                                 if let Some(rec_text) =
-                                    recognized_text_region.topCandidates(1).first()
+                                    recognized_text_region.topCandidates(1).firstObject()
                                 {
                                     let bbox = (*recognized_text_region).boundingBox();
                                     let bbox = cgrect_to_bbox(
@@ -503,7 +504,7 @@ mod ocr_mac {
                     for recognized_text_region in result.to_vec() {
                         if (*recognized_text_region).confidence() > CONFIDENCE_THRESHOLD {
                             if let Some(rec_text) =
-                                recognized_text_region.topCandidates(1).first()
+                                recognized_text_region.topCandidates(1).firstObject()
                             {
                                 let bbox = (*recognized_text_region).boundingBox();
                                 let bbox =

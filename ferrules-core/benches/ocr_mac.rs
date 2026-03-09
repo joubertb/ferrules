@@ -8,7 +8,7 @@ mod test {
 
     use image::{DynamicImage, Rgba, RgbaImage};
 
-    use objc2::ClassType;
+    use objc2::AnyThread;
     use objc2_foundation::{NSArray, NSData, NSDictionary};
     use objc2_vision::{
         VNImageRequestHandler, VNRecognizeTextRequest, VNRequest, VNSequenceRequestHandler,

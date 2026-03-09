@@ -65,9 +65,10 @@ modtext = []
 
 [target.'cfg(target_os = "macos")'.dependencies]
 ort = { version = "=2.0.0-rc.9", features = ["coreml", "fetch-models", "half"] }
-objc2 = { version = "^0.5.2" }
-objc2-foundation = { version = "^0.2.2" }
-objc2-vision = { version = "^0.2.2", features = [
+objc2 = { version = "^0.6.4" }
+objc2-core-foundation = { version = "^0.3.2" }
+objc2-foundation = { version = "^0.3.2" }
+objc2-vision = { version = "^0.3.2", features = [
     "VNRequest",
     "VNRequestHandler",
     "VNRecognizeTextRequest",
