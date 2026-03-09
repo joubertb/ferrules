@@ -366,74 +366,107 @@ mod ocr_mac {
             }
         };
 
-        let mut final_results = vec![Vec::new(); inputs.len()];
+        let mut final_results;
 
-        unsafe {
-            let mut requests = Vec::with_capacity(inputs.len());
-            for (i, (_, _)) in inputs.iter().enumerate() {
-                let request = VNRecognizeTextRequest::new();
-                request.setRecognitionLevel(objc2_vision::VNRequestTextRecognitionLevel::Accurate);
-                request.setUsesLanguageCorrection(true);
+        // Wrap the batch Vision call in catch_unwind to handle panics from objc2-vision
+        let batch_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            unsafe {
+                let mut requests = Vec::with_capacity(inputs.len());
+                for (i, (_, _)) in inputs.iter().enumerate() {
+                    let request = VNRecognizeTextRequest::new();
+                    request.setRecognitionLevel(
+                        objc2_vision::VNRequestTextRecognitionLevel::Accurate,
+                    );
+                    request.setUsesLanguageCorrection(true);
 
-                // Set Region Of Interest for this specific image in the strip
-                let y0 = offsets[i] as f64 / total_height as f64;
-                let h = inputs[i].0.height() as f64 / total_height as f64;
-                // Vision ROI is [x, y, w, h] in normalized coords (0,0 is bottom-left)
-                // Since we stitched top-to-bottom, we need to flip Y
-                let roi_y = (1.0 - y0 - h).clamp(0.0, 1.0);
-                let h = h.clamp(0.0, 1.0 - roi_y);
-                request.setRegionOfInterest(objc2_foundation::CGRect {
-                    origin: objc2_foundation::CGPoint { x: 0.0, y: roi_y },
-                    size: objc2_foundation::CGSize {
-                        width: 1.0,
-                        height: h,
-                    },
-                });
+                    // Set Region Of Interest for this specific image in the strip
+                    let y0 = offsets[i] as f64 / total_height as f64;
+                    let h = inputs[i].0.height() as f64 / total_height as f64;
+                    // Vision ROI is [x, y, w, h] in normalized coords (0,0 is bottom-left)
+                    // Since we stitched top-to-bottom, we need to flip Y
+                    let roi_y = (1.0 - y0 - h).clamp(0.0, 1.0);
+                    let h = h.clamp(0.0, 1.0 - roi_y);
+                    request.setRegionOfInterest(objc2_foundation::CGRect {
+                        origin: objc2_foundation::CGPoint { x: 0.0, y: roi_y },
+                        size: objc2_foundation::CGSize {
+                            width: 1.0,
+                            height: h,
+                        },
+                    });
 
-                requests.push(request);
-            }
-
-            let handler = VNImageRequestHandler::initWithData_options(
-                VNImageRequestHandler::alloc(),
-                &NSData::with_bytes(&raw_data),
-                &NSDictionary::new(),
-            );
-
-            let v_requests: Vec<&VNRequest> =
-                requests.iter().map(|r| r.as_ref() as &VNRequest).collect();
-            let ns_requests = NSArray::from_slice(&v_requests);
-            if let Err(e) = handler.performRequests_error(&ns_requests) {
-                let mut errs = Vec::with_capacity(inputs.len());
-                for _ in 0..inputs.len() {
-                    errs.push(Err(anyhow::anyhow!(e.to_string())));
+                    requests.push(request);
                 }
-                return errs;
-            }
 
-            for (i, request) in requests.iter().enumerate() {
-                let rescale_factor = inputs[i].1;
-                let img_width = inputs[i].0.width();
-                let img_height = inputs[i].0.height();
+                let handler = VNImageRequestHandler::initWithData_options(
+                    VNImageRequestHandler::alloc(),
+                    &NSData::with_bytes(&raw_data),
+                    &NSDictionary::new(),
+                );
 
-                if let Some(result) = request.results() {
-                    for recognized_text_region in result.to_vec() {
-                        if (*recognized_text_region).confidence() > CONFIDENCE_THRESHOLD {
-                            if let Some(rec_text) = recognized_text_region.topCandidates(1).first()
-                            {
-                                let bbox = (*recognized_text_region).boundingBox();
-                                // Note: bbox from Vision here is RELATIVE to ROI if we use ROI correctly?
-                                // Actually, Vision bboxes are typically relative to the WHOLE image if ROI is set on request?
-                                let bbox =
-                                    cgrect_to_bbox(&bbox, img_width, img_height, rescale_factor);
-                                final_results[i].push(OCRLines {
-                                    text: rec_text.string().to_string(),
-                                    confidence: rec_text.confidence(),
-                                    bbox,
-                                })
+                let v_requests: Vec<&VNRequest> =
+                    requests.iter().map(|r| r.as_ref() as &VNRequest).collect();
+                let ns_requests = NSArray::from_slice(&v_requests);
+                if let Err(e) = handler.performRequests_error(&ns_requests) {
+                    return Err(anyhow::anyhow!(e.to_string()));
+                }
+
+                let mut results = vec![Vec::new(); inputs.len()];
+                for (i, request) in requests.iter().enumerate() {
+                    let rescale_factor = inputs[i].1;
+                    let img_width = inputs[i].0.width();
+                    let img_height = inputs[i].0.height();
+
+                    if let Some(result) = request.results() {
+                        for recognized_text_region in result.to_vec() {
+                            if (*recognized_text_region).confidence() > CONFIDENCE_THRESHOLD {
+                                if let Some(rec_text) =
+                                    recognized_text_region.topCandidates(1).first()
+                                {
+                                    let bbox = (*recognized_text_region).boundingBox();
+                                    let bbox = cgrect_to_bbox(
+                                        &bbox,
+                                        img_width,
+                                        img_height,
+                                        rescale_factor,
+                                    );
+                                    results[i].push(OCRLines {
+                                        text: rec_text.string().to_string(),
+                                        confidence: rec_text.confidence(),
+                                        bbox,
+                                    })
+                                }
                             }
                         }
                     }
                 }
+                Ok(results)
+            }
+        }));
+
+        match batch_result {
+            Ok(Ok(results)) => {
+                final_results = results;
+            }
+            Ok(Err(e)) => {
+                // Vision returned an error — fall back to individual processing
+                tracing::warn!(
+                    "Batch Vision OCR failed ({}), falling back to individual processing",
+                    e
+                );
+                return inputs
+                    .iter()
+                    .map(|(image, rescale)| parse_single_image_ocr(image, *rescale))
+                    .collect();
+            }
+            Err(_panic) => {
+                // Vision panicked — fall back to individual processing
+                tracing::warn!(
+                    "Batch Vision OCR panicked, falling back to individual processing"
+                );
+                return inputs
+                    .iter()
+                    .map(|(image, rescale)| parse_single_image_ocr(image, *rescale))
+                    .collect();
             }
         }
 
@@ -447,38 +480,61 @@ mod ocr_mac {
         let (img_width, img_height) = (image.width(), image.height());
         let raw_data = img_to_tiff(image)?;
 
-        let mut ocr_result = Vec::new();
-        unsafe {
-            let request = VNRecognizeTextRequest::new();
-            request.setRecognitionLevel(objc2_vision::VNRequestTextRecognitionLevel::Accurate);
-            request.setUsesLanguageCorrection(true);
+        // Wrap Vision API call in catch_unwind because the objc2-vision crate panics
+        // when performRequests_error returns NO without setting the error parameter.
+        // This happens with certain scanned PDF page images.
+        let vision_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+            let mut ocr_result = Vec::new();
+            unsafe {
+                let request = VNRecognizeTextRequest::new();
+                request.setRecognitionLevel(objc2_vision::VNRequestTextRecognitionLevel::Accurate);
+                request.setUsesLanguageCorrection(true);
 
-            let handler = VNImageRequestHandler::initWithData_options(
-                VNImageRequestHandler::alloc(),
-                &NSData::with_bytes(&raw_data),
-                &NSDictionary::new(),
-            );
+                let handler = VNImageRequestHandler::initWithData_options(
+                    VNImageRequestHandler::alloc(),
+                    &NSData::with_bytes(&raw_data),
+                    &NSDictionary::new(),
+                );
 
-            let requests = NSArray::from_slice(&[request.as_ref() as &VNRequest]);
-            handler.performRequests_error(&requests)?;
+                let requests = NSArray::from_slice(&[request.as_ref() as &VNRequest]);
+                handler.performRequests_error(&requests)?;
 
-            if let Some(result) = request.results() {
-                for recognized_text_region in result.to_vec() {
-                    if (*recognized_text_region).confidence() > CONFIDENCE_THRESHOLD {
-                        if let Some(rec_text) = recognized_text_region.topCandidates(1).first() {
-                            let bbox = (*recognized_text_region).boundingBox();
-                            let bbox = cgrect_to_bbox(&bbox, img_width, img_height, rescale_factor);
-                            ocr_result.push(OCRLines {
-                                text: rec_text.string().to_string(),
-                                confidence: rec_text.confidence(),
-                                bbox,
-                            })
+                if let Some(result) = request.results() {
+                    for recognized_text_region in result.to_vec() {
+                        if (*recognized_text_region).confidence() > CONFIDENCE_THRESHOLD {
+                            if let Some(rec_text) =
+                                recognized_text_region.topCandidates(1).first()
+                            {
+                                let bbox = (*recognized_text_region).boundingBox();
+                                let bbox =
+                                    cgrect_to_bbox(&bbox, img_width, img_height, rescale_factor);
+                                ocr_result.push(OCRLines {
+                                    text: rec_text.string().to_string(),
+                                    confidence: rec_text.confidence(),
+                                    bbox,
+                                })
+                            }
                         }
                     }
                 }
             }
+            Ok(ocr_result)
+        }));
+
+        match vision_result {
+            Ok(result) => result,
+            Err(panic_info) => {
+                let msg = if let Some(s) = panic_info.downcast_ref::<String>() {
+                    s.clone()
+                } else if let Some(s) = panic_info.downcast_ref::<&str>() {
+                    s.to_string()
+                } else {
+                    "unknown panic in Vision OCR".to_string()
+                };
+                tracing::warn!("Vision OCR panicked (returning empty results): {}", msg);
+                Ok(vec![])
+            }
         }
-        Ok(ocr_result)
     }
 
     #[cfg(test)]

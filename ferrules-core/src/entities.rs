@@ -368,6 +368,13 @@ impl Element {
             line_spans: Vec::new(),
         }
     }
+    /// Returns true if this element has actual CharSpan data (not just empty line entries).
+    /// OCR lines produce line_spans entries that are empty Vecs, so we need to check
+    /// whether any spans actually exist, not just whether line_spans has entries.
+    pub fn has_char_spans(&self) -> bool {
+        self.line_spans.iter().any(|spans| !spans.is_empty())
+    }
+
     pub fn push_line(&mut self, line: &Line) {
         // Line text is already cleaned in Line::new_from_span() and Line::append()
         if self.text_block.is_empty() {

@@ -702,7 +702,7 @@ pub(crate) fn merge_elements_into_blocks(
                 );
 
                 // Get truly original text by reconstructing from raw CharSpans (before any HTML tag processing)
-                let original_text = if !curr_el.line_spans.is_empty() {
+                let original_text = if curr_el.has_char_spans() {
                     // Reconstruct original text from CharSpans
                     let lines: Vec<String> = curr_el
                         .line_spans
@@ -720,7 +720,7 @@ pub(crate) fn merge_elements_into_blocks(
                     curr_el.text_block.text.clone()
                 };
 
-                let processed_text = if !curr_el.line_spans.is_empty() {
+                let processed_text = if curr_el.has_char_spans() {
                     debug_print!(
                         "🎯 TEXT WITH SPANS: Processing {} line_spans for subscript detection",
                         curr_el.line_spans.len()
@@ -822,7 +822,7 @@ pub(crate) fn merge_elements_into_blocks(
             }
             ElementType::Formula => {
                 // Get raw original text from CharSpans or text_block
-                let original_text = if !curr_el.line_spans.is_empty() {
+                let original_text = if curr_el.has_char_spans() {
                     curr_el
                         .line_spans
                         .iter()
@@ -847,7 +847,7 @@ pub(crate) fn merge_elements_into_blocks(
             }
             ElementType::ListItem => {
                 // Process first list item with HTML tag detection
-                let (first_item_text, first_item_original) = if !curr_el.line_spans.is_empty() {
+                let (first_item_text, first_item_original) = if curr_el.has_char_spans() {
                     debug_print!(
                         "📋 LIST ITEM WITH SPANS: Processing first list item with {} line_spans for HTML tag detection",
                         curr_el.line_spans.len()
@@ -889,7 +889,7 @@ pub(crate) fn merge_elements_into_blocks(
                         let next_el = element_it.next().unwrap();
 
                         // Process additional list item with HTML tag detection before merging
-                        let (processed_item_text, item_original) = if !next_el.line_spans.is_empty()
+                        let (processed_item_text, item_original) = if next_el.has_char_spans()
                         {
                             debug_print!(
                                 "📋 LIST ITEM WITH SPANS: Processing additional list item with {} line_spans for HTML tag detection",
@@ -970,7 +970,7 @@ pub(crate) fn merge_elements_into_blocks(
                                     curr_el.bbox.merge(&next_el.bbox);
 
                                     // FIXED: Apply script detection to Image caption (Caption→Image case)
-                                    let caption_text = if !curr_el.line_spans.is_empty() {
+                                    let caption_text = if curr_el.has_char_spans() {
                                         debug_print!("🖼️ IMAGE CAPTION: Processing caption with {} line_spans", curr_el.line_spans.len());
                                         let original_text = curr_el
                                             .line_spans
@@ -1068,7 +1068,7 @@ pub(crate) fn merge_elements_into_blocks(
                                             let caption_el = element_it.next().unwrap();
 
                                             // Process the caption text with script detection
-                                            let caption_text = if !caption_el.line_spans.is_empty()
+                                            let caption_text = if caption_el.has_char_spans()
                                             {
                                                 debug_print!(
                                                     "🖼️ MERGE COMPLETE: Processing caption with {} line_spans",
@@ -1295,7 +1295,7 @@ pub(crate) fn merge_elements_into_blocks(
                                     figure_bbox.merge(&next_el.bbox);
 
                                     // Process the figure caption with script detection
-                                    let caption_text = if !next_el.line_spans.is_empty() {
+                                    let caption_text = if next_el.has_char_spans() {
                                         debug_print!(
                                             "🖼️ FIGURE CAPTION (misclassified Text): Processing caption with {} line_spans",
                                             next_el.line_spans.len()
@@ -1437,7 +1437,7 @@ pub(crate) fn merge_elements_into_blocks(
                                 figure_bbox.merge(&next_el.bbox);
 
                                 // FIXED: Apply script detection to Image caption (Image→Caption case)
-                                let caption_text = if !next_el.line_spans.is_empty() {
+                                let caption_text = if next_el.has_char_spans() {
                                     debug_print!(
                                         "🖼️ IMAGE CAPTION: Processing caption with {} line_spans",
                                         next_el.line_spans.len()
@@ -1559,7 +1559,7 @@ pub(crate) fn merge_elements_into_blocks(
             }
             ElementType::Header => {
                 // Get truly original text by reconstructing from raw CharSpans (before any HTML tag processing)
-                let original_text = if !curr_el.line_spans.is_empty() {
+                let original_text = if curr_el.has_char_spans() {
                     // Reconstruct original text from CharSpans
                     curr_el
                         .line_spans
@@ -1575,7 +1575,7 @@ pub(crate) fn merge_elements_into_blocks(
                     curr_el.text_block.text.clone()
                 };
 
-                let processed_text = if !curr_el.line_spans.is_empty() {
+                let processed_text = if curr_el.has_char_spans() {
                     debug_print!(
                         "📰 HEADER WITH SPANS: Processing header with {} line_spans for HTML tag detection",
                         curr_el.line_spans.len()
@@ -1614,7 +1614,7 @@ pub(crate) fn merge_elements_into_blocks(
             }
             ElementType::Footer => {
                 // Get truly original text by reconstructing from raw CharSpans (before any HTML tag processing)
-                let original_text = if !curr_el.line_spans.is_empty() {
+                let original_text = if curr_el.has_char_spans() {
                     // Reconstruct original text from CharSpans
                     curr_el
                         .line_spans
@@ -1664,7 +1664,7 @@ pub(crate) fn merge_elements_into_blocks(
                     .unwrap_or(&0u8);
 
                 // Get truly original text by reconstructing from raw CharSpans (before any HTML tag processing)
-                let original_text = if !curr_el.line_spans.is_empty() {
+                let original_text = if curr_el.has_char_spans() {
                     // Reconstruct original text from CharSpans
                     curr_el
                         .line_spans
@@ -1680,7 +1680,7 @@ pub(crate) fn merge_elements_into_blocks(
                     curr_el.text_block.text.clone()
                 };
 
-                let processed_text = if !curr_el.line_spans.is_empty() {
+                let processed_text = if curr_el.has_char_spans() {
                     debug_print!(
                         "📜 TITLE WITH SPANS: Processing title with {} line_spans for HTML tag detection",
                         curr_el.line_spans.len()
