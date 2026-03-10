@@ -28,5 +28,6 @@ models/*
 !models/table-transformer-structure-recognition_fp16.onnx
 !models/table-transformer-structure-recognition-ane-b4.onnx
 !models/table-transformer-structure-recognition_fp16.onnx
+!models/ocr/
 **/.env
 **/examples/
