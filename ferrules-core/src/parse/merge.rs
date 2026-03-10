@@ -18,6 +18,17 @@ const MAX_JOINED_WORD_LENGTH: usize = 20;
 #[cfg(feature = "correction-engine")]
 const MIN_WORD_PART_LENGTH: usize = 2;
 
+/// Elements wider than this fraction of the page are treated as full-width (column breaks)
+const FULL_WIDTH_RATIO: f32 = 0.70;
+/// Elements narrower than this fraction of the page are used as single-column indicators
+/// for gap detection (wider elements may span multiple columns and would mask gutters)
+const SINGLE_COLUMN_MAX_RATIO: f32 = 0.35;
+/// Minimum gap width (as fraction of page width) to treat as a column separator.
+/// Typical magazine gutters are ~10pt on a ~600pt page ≈ 0.015.
+const MIN_COLUMN_GAP_RATIO: f32 = 0.01;
+/// Histogram bin width in points for column gap detection
+const HISTOGRAM_BIN_WIDTH: f32 = 2.0;
+
 lazy_static! {
     /// Pre-compiled regex for figure caption pattern detection
     static ref FIGURE_CAPTION_REGEX: Regex = Regex::new(r"^(?i)(Figure|Fig\.|Image)\s+[A-Za-z0-9]+[A-Za-z]?\s*[:.]").unwrap();
@@ -452,6 +463,214 @@ fn merge_or_create_elements(
         }
     }
 }
+/// Reorder elements so that multi-column pages are read column-by-column (left to right),
+/// top-to-bottom within each column.  Headers, footers and footnotes are kept at the
+/// beginning / end of the element list.  Full-width elements (titles, wide images, etc.)
+/// are interleaved at their correct vertical position between column groups.
+///
+/// Column detection uses a coverage histogram: narrow element edges are projected onto
+/// the X-axis, and zero-coverage runs wider than a threshold define column boundaries.
+pub(crate) fn reorder_elements_by_column(elements: &mut Vec<Element>) {
+    if elements.len() <= 1 {
+        return;
+    }
+
+    // Separate header/footer/footnote elements — they stay at the edges
+    let mut headers: Vec<Element> = Vec::new();
+    let mut footers: Vec<Element> = Vec::new();
+    let mut body: Vec<Element> = Vec::new();
+
+    for elem in elements.drain(..) {
+        match elem.kind {
+            ElementType::Header => headers.push(elem),
+            ElementType::Footer | ElementType::FootNote => footers.push(elem),
+            _ => body.push(elem),
+        }
+    }
+
+    if body.len() <= 1 {
+        reassemble_elements(elements, headers, body, footers);
+        return;
+    }
+
+    // Compute page extent from body elements
+    let page_x0 = body.iter().map(|e| e.bbox.x0).fold(f32::INFINITY, f32::min);
+    let page_x1 = body
+        .iter()
+        .map(|e| e.bbox.x1)
+        .fold(f32::NEG_INFINITY, f32::max);
+    let page_width = page_x1 - page_x0;
+
+    if page_width <= 0.0 {
+        reassemble_elements(elements, headers, body, footers);
+        return;
+    }
+
+    // Partition body into full-width elements and narrow (column) elements
+    let mut full_width: Vec<Element> = Vec::new();
+    let mut narrow: Vec<Element> = Vec::new();
+
+    for elem in body {
+        let ratio = elem.bbox.width() / page_width;
+        if ratio > FULL_WIDTH_RATIO {
+            full_width.push(elem);
+        } else {
+            narrow.push(elem);
+        }
+    }
+
+    if narrow.is_empty() {
+        full_width.sort_by(|a, b| a.bbox.y0.total_cmp(&b.bbox.y0));
+        reassemble_elements(elements, headers, full_width, footers);
+        return;
+    }
+
+    let column_boundaries = detect_column_boundaries(&narrow, page_x0, page_width);
+
+    if column_boundaries.is_empty() {
+        narrow.sort_by(|a, b| a.bbox.y0.total_cmp(&b.bbox.y0));
+        let body = interleave_full_width(narrow, full_width);
+        reassemble_elements(elements, headers, body, footers);
+        return;
+    }
+
+    // Assign each narrow element to a column based on where its center x falls
+    let num_columns = column_boundaries.len() + 1;
+    let mut columns: Vec<Vec<Element>> = (0..num_columns).map(|_| Vec::new()).collect();
+
+    for elem in narrow {
+        let center_x = (elem.bbox.x0 + elem.bbox.x1) / 2.0;
+        let col_idx = column_boundaries
+            .iter()
+            .position(|&b| center_x < b)
+            .unwrap_or(column_boundaries.len());
+        columns[col_idx].push(elem);
+    }
+
+    // Within each column, sort top-to-bottom
+    for col in columns.iter_mut() {
+        col.sort_by(|a, b| a.bbox.y0.total_cmp(&b.bbox.y0));
+    }
+
+    // Flatten columns into sequential reading order (left to right)
+    let column_elements: Vec<Element> = columns.into_iter().flatten().collect();
+    let body = interleave_full_width(column_elements, full_width);
+    reassemble_elements(elements, headers, body, footers);
+}
+
+/// Detect column boundaries by building a coverage histogram along the X-axis
+/// from narrow text elements and finding zero-coverage gaps.
+fn detect_column_boundaries(narrow: &[Element], page_x0: f32, page_width: f32) -> Vec<f32> {
+    let single_col_max_width = page_width * SINGLE_COLUMN_MAX_RATIO;
+    let column_indicators: Vec<&Element> = narrow
+        .iter()
+        .filter(|e| {
+            !matches!(e.kind, ElementType::Image | ElementType::Caption)
+                && e.bbox.width() <= single_col_max_width
+        })
+        .collect();
+
+    let num_bins = ((page_width / HISTOGRAM_BIN_WIDTH).ceil() as usize).max(1);
+    let mut coverage = vec![0u32; num_bins];
+
+    for elem in &column_indicators {
+        let start_bin = ((elem.bbox.x0 - page_x0) / HISTOGRAM_BIN_WIDTH)
+            .floor()
+            .max(0.0) as usize;
+        let end_bin =
+            (((elem.bbox.x1 - page_x0) / HISTOGRAM_BIN_WIDTH).ceil() as usize).min(num_bins);
+        for c in &mut coverage[start_bin..end_bin] {
+            *c += 1;
+        }
+    }
+
+    // Find runs of zero-coverage bins that are wide enough to be column gaps
+    let min_gap_bins = ((page_width * MIN_COLUMN_GAP_RATIO) / HISTOGRAM_BIN_WIDTH).ceil() as usize;
+    let mut boundaries: Vec<f32> = Vec::new();
+    let mut gap_start_bin: Option<usize> = None;
+
+    for (i, &count) in coverage.iter().enumerate() {
+        if count == 0 {
+            if gap_start_bin.is_none() {
+                gap_start_bin = Some(i);
+            }
+        } else if let Some(start) = gap_start_bin {
+            let gap_len = i - start;
+            if gap_len >= min_gap_bins {
+                let gap_x_start = page_x0 + start as f32 * HISTOGRAM_BIN_WIDTH;
+                let gap_x_end = page_x0 + i as f32 * HISTOGRAM_BIN_WIDTH;
+                boundaries.push((gap_x_start + gap_x_end) / 2.0);
+            }
+            gap_start_bin = None;
+        }
+    }
+
+    // Handle trailing gap at end of page
+    if let Some(start) = gap_start_bin {
+        let gap_len = num_bins - start;
+        if gap_len >= min_gap_bins {
+            let gap_x_start = page_x0 + start as f32 * HISTOGRAM_BIN_WIDTH;
+            let gap_x_end = page_x0 + num_bins as f32 * HISTOGRAM_BIN_WIDTH;
+            boundaries.push((gap_x_start + gap_x_end) / 2.0);
+        }
+    }
+
+    boundaries
+}
+
+/// Reassemble elements in header/body/footer order and renumber IDs.
+fn reassemble_elements(
+    elements: &mut Vec<Element>,
+    headers: Vec<Element>,
+    body: Vec<Element>,
+    footers: Vec<Element>,
+) {
+    elements.extend(headers);
+    elements.extend(body);
+    elements.extend(footers);
+    renumber_element_ids(elements);
+}
+
+/// Interleave full-width elements among column elements based on Y position.
+/// Full-width elements are inserted before the first column element whose y0
+/// is greater than the full-width element's y0.
+fn interleave_full_width(
+    column_elements: Vec<Element>,
+    mut full_width: Vec<Element>,
+) -> Vec<Element> {
+    if full_width.is_empty() {
+        return column_elements;
+    }
+
+    full_width.sort_by(|a, b| a.bbox.y0.total_cmp(&b.bbox.y0));
+
+    let mut result: Vec<Element> = Vec::with_capacity(column_elements.len() + full_width.len());
+    let mut fw_iter = full_width.into_iter().peekable();
+
+    for elem in column_elements {
+        // Insert any full-width elements that come before this column element vertically
+        while let Some(fw) = fw_iter.peek() {
+            if fw.bbox.y0 <= elem.bbox.y0 {
+                result.push(fw_iter.next().unwrap());
+            } else {
+                break;
+            }
+        }
+        result.push(elem);
+    }
+
+    // Append remaining full-width elements
+    result.extend(fw_iter);
+    result
+}
+
+/// Renumber element IDs sequentially after reordering.
+fn renumber_element_ids(elements: &mut [Element]) {
+    for (i, elem) in elements.iter_mut().enumerate() {
+        elem.id = i;
+    }
+}
+
 /// Merges lines into blocks based on their layout, maintaining the order of lines.
 ///
 /// This function takes a list of text boxes representing layout bounding boxes that contain text,
@@ -2199,5 +2418,387 @@ mod tests {
         assert!(matches!(blocks[0].kind, BlockType::Table(_)));
         assert!(matches!(blocks[1].kind, BlockType::Table(_)));
         Ok(())
+    }
+
+    // --- reorder_elements_by_column tests ---
+
+    fn make_element(id: usize, kind: ElementType, bbox: BBox) -> Element {
+        Element {
+            id,
+            layout_block_id: 0,
+            kind,
+            text_block: ElementText {
+                text: format!("elem_{}", id),
+            },
+            page_id: 0,
+            bbox,
+            has_math: false,
+            line_spans: Vec::new(),
+        }
+    }
+
+    #[test]
+    fn test_reorder_single_column_preserves_order() {
+        // Single column: all elements span most of the page width
+        let mut elements = vec![
+            make_element(
+                0,
+                ElementType::Text,
+                BBox {
+                    x0: 10.0,
+                    y0: 10.0,
+                    x1: 400.0,
+                    y1: 30.0,
+                },
+            ),
+            make_element(
+                1,
+                ElementType::Text,
+                BBox {
+                    x0: 10.0,
+                    y0: 40.0,
+                    x1: 400.0,
+                    y1: 60.0,
+                },
+            ),
+            make_element(
+                2,
+                ElementType::Text,
+                BBox {
+                    x0: 10.0,
+                    y0: 70.0,
+                    x1: 400.0,
+                    y1: 90.0,
+                },
+            ),
+        ];
+        reorder_elements_by_column(&mut elements);
+        assert_eq!(elements.len(), 3);
+        assert_eq!(elements[0].text_block.text, "elem_0");
+        assert_eq!(elements[1].text_block.text, "elem_1");
+        assert_eq!(elements[2].text_block.text, "elem_2");
+    }
+
+    #[test]
+    fn test_reorder_two_columns_interleaved() {
+        // Two-column layout: col1 (x: 10-200), col2 (x: 220-410)
+        // Input order interleaves columns (as OCR would produce by Y-band scanning)
+        let mut elements = vec![
+            make_element(
+                0,
+                ElementType::Text,
+                BBox {
+                    x0: 10.0,
+                    y0: 10.0,
+                    x1: 200.0,
+                    y1: 30.0,
+                },
+            ), // col1 top
+            make_element(
+                1,
+                ElementType::Text,
+                BBox {
+                    x0: 220.0,
+                    y0: 12.0,
+                    x1: 410.0,
+                    y1: 32.0,
+                },
+            ), // col2 top
+            make_element(
+                2,
+                ElementType::Text,
+                BBox {
+                    x0: 10.0,
+                    y0: 50.0,
+                    x1: 200.0,
+                    y1: 70.0,
+                },
+            ), // col1 bottom
+            make_element(
+                3,
+                ElementType::Text,
+                BBox {
+                    x0: 220.0,
+                    y0: 52.0,
+                    x1: 410.0,
+                    y1: 72.0,
+                },
+            ), // col2 bottom
+        ];
+        reorder_elements_by_column(&mut elements);
+        // Expected: col1-top, col1-bottom, col2-top, col2-bottom
+        assert_eq!(elements[0].text_block.text, "elem_0");
+        assert_eq!(elements[1].text_block.text, "elem_2");
+        assert_eq!(elements[2].text_block.text, "elem_1");
+        assert_eq!(elements[3].text_block.text, "elem_3");
+    }
+
+    #[test]
+    fn test_reorder_three_columns() {
+        // Three-column layout
+        let mut elements = vec![
+            make_element(
+                0,
+                ElementType::Text,
+                BBox {
+                    x0: 10.0,
+                    y0: 10.0,
+                    x1: 130.0,
+                    y1: 30.0,
+                },
+            ), // col1 row1
+            make_element(
+                1,
+                ElementType::Text,
+                BBox {
+                    x0: 150.0,
+                    y0: 10.0,
+                    x1: 270.0,
+                    y1: 30.0,
+                },
+            ), // col2 row1
+            make_element(
+                2,
+                ElementType::Text,
+                BBox {
+                    x0: 290.0,
+                    y0: 10.0,
+                    x1: 410.0,
+                    y1: 30.0,
+                },
+            ), // col3 row1
+            make_element(
+                3,
+                ElementType::Text,
+                BBox {
+                    x0: 10.0,
+                    y0: 50.0,
+                    x1: 130.0,
+                    y1: 70.0,
+                },
+            ), // col1 row2
+            make_element(
+                4,
+                ElementType::Text,
+                BBox {
+                    x0: 150.0,
+                    y0: 50.0,
+                    x1: 270.0,
+                    y1: 70.0,
+                },
+            ), // col2 row2
+            make_element(
+                5,
+                ElementType::Text,
+                BBox {
+                    x0: 290.0,
+                    y0: 50.0,
+                    x1: 410.0,
+                    y1: 70.0,
+                },
+            ), // col3 row2
+        ];
+        reorder_elements_by_column(&mut elements);
+        // Expected: col1-r1, col1-r2, col2-r1, col2-r2, col3-r1, col3-r2
+        assert_eq!(elements[0].text_block.text, "elem_0");
+        assert_eq!(elements[1].text_block.text, "elem_3");
+        assert_eq!(elements[2].text_block.text, "elem_1");
+        assert_eq!(elements[3].text_block.text, "elem_4");
+        assert_eq!(elements[4].text_block.text, "elem_2");
+        assert_eq!(elements[5].text_block.text, "elem_5");
+    }
+
+    #[test]
+    fn test_reorder_full_width_title_plus_columns() {
+        // Full-width title at top, then two columns below
+        let mut elements = vec![
+            make_element(
+                0,
+                ElementType::Title,
+                BBox {
+                    x0: 10.0,
+                    y0: 5.0,
+                    x1: 410.0,
+                    y1: 25.0,
+                },
+            ), // full-width title
+            make_element(
+                1,
+                ElementType::Text,
+                BBox {
+                    x0: 10.0,
+                    y0: 40.0,
+                    x1: 200.0,
+                    y1: 60.0,
+                },
+            ), // col1 top
+            make_element(
+                2,
+                ElementType::Text,
+                BBox {
+                    x0: 220.0,
+                    y0: 42.0,
+                    x1: 410.0,
+                    y1: 62.0,
+                },
+            ), // col2 top
+            make_element(
+                3,
+                ElementType::Text,
+                BBox {
+                    x0: 10.0,
+                    y0: 80.0,
+                    x1: 200.0,
+                    y1: 100.0,
+                },
+            ), // col1 bottom
+            make_element(
+                4,
+                ElementType::Text,
+                BBox {
+                    x0: 220.0,
+                    y0: 82.0,
+                    x1: 410.0,
+                    y1: 102.0,
+                },
+            ), // col2 bottom
+        ];
+        reorder_elements_by_column(&mut elements);
+        // Expected: title, col1-top, col1-bottom, col2-top, col2-bottom
+        assert_eq!(elements[0].text_block.text, "elem_0"); // title (full-width, y=5)
+        assert_eq!(elements[1].text_block.text, "elem_1"); // col1 top
+        assert_eq!(elements[2].text_block.text, "elem_3"); // col1 bottom
+        assert_eq!(elements[3].text_block.text, "elem_2"); // col2 top
+        assert_eq!(elements[4].text_block.text, "elem_4"); // col2 bottom
+    }
+
+    #[test]
+    fn test_reorder_headers_footers_stay_in_position() {
+        let mut elements = vec![
+            make_element(
+                0,
+                ElementType::Header,
+                BBox {
+                    x0: 10.0,
+                    y0: 0.0,
+                    x1: 410.0,
+                    y1: 10.0,
+                },
+            ),
+            make_element(
+                1,
+                ElementType::Text,
+                BBox {
+                    x0: 10.0,
+                    y0: 20.0,
+                    x1: 200.0,
+                    y1: 40.0,
+                },
+            ),
+            make_element(
+                2,
+                ElementType::Text,
+                BBox {
+                    x0: 220.0,
+                    y0: 22.0,
+                    x1: 410.0,
+                    y1: 42.0,
+                },
+            ),
+            make_element(
+                3,
+                ElementType::Footer,
+                BBox {
+                    x0: 10.0,
+                    y0: 900.0,
+                    x1: 410.0,
+                    y1: 920.0,
+                },
+            ),
+            make_element(
+                4,
+                ElementType::FootNote,
+                BBox {
+                    x0: 10.0,
+                    y0: 850.0,
+                    x1: 410.0,
+                    y1: 870.0,
+                },
+            ),
+        ];
+        reorder_elements_by_column(&mut elements);
+        // Header first, then body, then footnote+footer at end
+        assert!(matches!(elements[0].kind, ElementType::Header));
+        assert_eq!(elements[1].text_block.text, "elem_1");
+        assert_eq!(elements[2].text_block.text, "elem_2");
+        assert!(matches!(
+            elements[3].kind,
+            ElementType::Footer | ElementType::FootNote
+        ));
+        assert!(matches!(
+            elements[4].kind,
+            ElementType::Footer | ElementType::FootNote
+        ));
+    }
+
+    #[test]
+    fn test_reorder_empty_and_single_element() {
+        let mut empty: Vec<Element> = Vec::new();
+        reorder_elements_by_column(&mut empty);
+        assert!(empty.is_empty());
+
+        let mut single = vec![make_element(
+            0,
+            ElementType::Text,
+            BBox {
+                x0: 10.0,
+                y0: 10.0,
+                x1: 400.0,
+                y1: 30.0,
+            },
+        )];
+        reorder_elements_by_column(&mut single);
+        assert_eq!(single.len(), 1);
+        assert_eq!(single[0].text_block.text, "elem_0");
+    }
+
+    #[test]
+    fn test_reorder_ids_are_renumbered() {
+        let mut elements = vec![
+            make_element(
+                5,
+                ElementType::Text,
+                BBox {
+                    x0: 10.0,
+                    y0: 10.0,
+                    x1: 200.0,
+                    y1: 30.0,
+                },
+            ),
+            make_element(
+                9,
+                ElementType::Text,
+                BBox {
+                    x0: 220.0,
+                    y0: 12.0,
+                    x1: 410.0,
+                    y1: 32.0,
+                },
+            ),
+            make_element(
+                7,
+                ElementType::Text,
+                BBox {
+                    x0: 10.0,
+                    y0: 50.0,
+                    x1: 200.0,
+                    y1: 70.0,
+                },
+            ),
+        ];
+        reorder_elements_by_column(&mut elements);
+        for (i, elem) in elements.iter().enumerate() {
+            assert_eq!(elem.id, i, "Element at position {} should have id {}", i, i);
+        }
     }
 }

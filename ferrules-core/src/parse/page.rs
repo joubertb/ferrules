@@ -22,7 +22,9 @@ use crate::{
 };
 
 use super::{
-    merge::{merge_elements_into_blocks, merge_lines_layout, merge_remaining},
+    merge::{
+        merge_elements_into_blocks, merge_lines_layout, merge_remaining, reorder_elements_by_column,
+    },
     native::ParseNativePageResult,
 };
 
@@ -51,6 +53,7 @@ fn build_page_elements(
     page_idx: PageID,
 ) -> Result<Vec<Element>, FerrulesError> {
     let mut elements = merge_lines_layout(page_layout, text_lines, page_idx)?;
+    reorder_elements_by_column(&mut elements);
     let merged_layout_blocks_ids = elements
         .iter()
         .map(|e| e.layout_block_id)
