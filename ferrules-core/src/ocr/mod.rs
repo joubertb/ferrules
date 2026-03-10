@@ -10,6 +10,15 @@ use crate::entities::{BBox, Line, PageID};
 use crate::error::FerrulesError;
 use crate::metrics::StepMetrics;
 
+#[cfg(not(target_os = "macos"))]
+mod detection;
+#[cfg(not(target_os = "macos"))]
+mod dictionary;
+#[cfg(not(target_os = "macos"))]
+mod pipeline;
+#[cfg(not(target_os = "macos"))]
+mod recognition;
+
 const CONCURRENT_OCR_REQUESTS: usize = 32;
 const MAX_OCR_BATCH_SIZE: usize = 16;
 const OCR_BATCH_TIMEOUT_MS: u64 = 100;
@@ -223,7 +232,7 @@ impl OCRParser {
     }
 }
 
-#[cfg(target_os = "linux")]
+#[cfg(not(target_os = "macos"))]
 use ocr_linux::{parse_images_ocr_batch, parse_single_image_ocr};
 
 #[cfg(target_os = "macos")]
@@ -375,9 +384,8 @@ mod ocr_mac {
                 let mut requests = Vec::with_capacity(inputs.len());
                 for (i, (_, _)) in inputs.iter().enumerate() {
                     let request = VNRecognizeTextRequest::new();
-                    request.setRecognitionLevel(
-                        objc2_vision::VNRequestTextRecognitionLevel::Accurate,
-                    );
+                    request
+                        .setRecognitionLevel(objc2_vision::VNRequestTextRecognitionLevel::Accurate);
                     request.setUsesLanguageCorrection(true);
 
                     // Set Region Of Interest for this specific image in the strip
@@ -461,9 +469,7 @@ mod ocr_mac {
             }
             Err(_panic) => {
                 // Vision panicked — fall back to individual processing
-                tracing::warn!(
-                    "Batch Vision OCR panicked, falling back to individual processing"
-                );
+                tracing::warn!("Batch Vision OCR panicked, falling back to individual processing");
                 return inputs
                     .iter()
                     .map(|(image, rescale)| parse_single_image_ocr(image, *rescale))
@@ -659,19 +665,83 @@ mod ocr_mac {
 
 #[cfg(not(target_os = "macos"))]
 mod ocr_linux {
+    use image::GenericImageView;
 
+    use super::detection::TextRegion;
     use super::*;
 
+    /// Compute crop dimensions for a text region, returning None if too small.
+    fn crop_dims(region: &TextRegion, img_w: u32, img_h: u32) -> Option<(u32, u32, u32, u32)> {
+        let x0 = (region.bbox.x0 as u32).min(img_w.saturating_sub(1));
+        let y0 = (region.bbox.y0 as u32).min(img_h.saturating_sub(1));
+        let w = ((region.bbox.x1 - region.bbox.x0) as u32)
+            .max(1)
+            .min(img_w - x0);
+        let h = ((region.bbox.y1 - region.bbox.y0) as u32)
+            .max(1)
+            .min(img_h - y0);
+        if w >= 2 && h >= 2 {
+            Some((x0, y0, w, h))
+        } else {
+            None
+        }
+    }
+
     pub(super) fn parse_images_ocr_batch(
-        _inputs: Vec<(Arc<DynamicImage>, f32)>,
+        inputs: Vec<(Arc<DynamicImage>, f32)>,
     ) -> Vec<anyhow::Result<Vec<OCRLines>>> {
-        vec![Err(anyhow::anyhow!("not implemented yet"))]
+        inputs
+            .iter()
+            .map(|(image, rescale_factor)| parse_single_image_ocr(image, *rescale_factor))
+            .collect()
     }
 
     pub(super) fn parse_single_image_ocr(
-        _image: &DynamicImage,
-        _rescale_factor: f32,
+        image: &DynamicImage,
+        rescale_factor: f32,
     ) -> anyhow::Result<Vec<OCRLines>> {
-        anyhow::bail!("not implemented yet")
+        // 1. Detect text regions
+        let regions = pipeline::detect_text_regions(image)?;
+
+        if regions.is_empty() {
+            return Ok(vec![]);
+        }
+
+        let (img_w, img_h) = (image.width(), image.height());
+
+        // 2. Crop detected regions from the original image
+        let (valid_regions, crops): (Vec<_>, Vec<_>) = regions
+            .iter()
+            .filter_map(|r| {
+                crop_dims(r, img_w, img_h).map(|(x0, y0, w, h)| (r, image.crop_imm(x0, y0, w, h)))
+            })
+            .unzip();
+
+        if crops.is_empty() {
+            return Ok(vec![]);
+        }
+
+        // 3. Recognize text in crops (batched)
+        let texts = pipeline::recognize_text(&crops)?;
+
+        // 4. Assemble OCRLines with rescale_factor applied to bboxes
+        let mut results = Vec::with_capacity(valid_regions.len());
+        for (region, (text, confidence)) in valid_regions.iter().zip(texts) {
+            if text.trim().is_empty() {
+                continue;
+            }
+            results.push(OCRLines {
+                text,
+                confidence,
+                bbox: BBox {
+                    x0: region.bbox.x0 * rescale_factor,
+                    y0: region.bbox.y0 * rescale_factor,
+                    x1: region.bbox.x1 * rescale_factor,
+                    y1: region.bbox.y1 * rescale_factor,
+                },
+            });
+        }
+
+        Ok(results)
     }
 }

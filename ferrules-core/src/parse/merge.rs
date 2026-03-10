@@ -889,8 +889,7 @@ pub(crate) fn merge_elements_into_blocks(
                         let next_el = element_it.next().unwrap();
 
                         // Process additional list item with HTML tag detection before merging
-                        let (processed_item_text, item_original) = if next_el.has_char_spans()
-                        {
+                        let (processed_item_text, item_original) = if next_el.has_char_spans() {
                             debug_print!(
                                 "📋 LIST ITEM WITH SPANS: Processing additional list item with {} line_spans for HTML tag detection",
                                 next_el.line_spans.len()
@@ -1068,8 +1067,7 @@ pub(crate) fn merge_elements_into_blocks(
                                             let caption_el = element_it.next().unwrap();
 
                                             // Process the caption text with script detection
-                                            let caption_text = if caption_el.has_char_spans()
-                                            {
+                                            let caption_text = if caption_el.has_char_spans() {
                                                 debug_print!(
                                                     "🖼️ MERGE COMPLETE: Processing caption with {} line_spans",
                                                     caption_el.line_spans.len()
