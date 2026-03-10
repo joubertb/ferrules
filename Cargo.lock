@@ -3247,9 +3247,9 @@ checksum = "e2db585e1d738fc771bf08a151420d3ed193d9d895a36df7f6f8a9456b911ddc"
 
 [[package]]
 name = "kmeans"
-version = "2.0.1"
+version = "2.0.2"
 source = "registry+https://github.com/rust-lang/crates.io-index"
-checksum = "2df75a1e4d7872214ef99035a789270aa25e44e41498bdf8fad74695116020d8"
+checksum = "7385c79dde3277c0ce751fc29530a321c08e4f2461297db95546fb55b29efd6b"
 dependencies = [
  "aligned-vec",
  "num",

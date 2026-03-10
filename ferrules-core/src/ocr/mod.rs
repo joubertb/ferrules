@@ -665,8 +665,6 @@ mod ocr_mac {
 
 #[cfg(not(target_os = "macos"))]
 mod ocr_linux {
-    use image::GenericImageView;
-
     use super::detection::TextRegion;
     use super::*;
 

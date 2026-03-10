@@ -6,7 +6,9 @@
 
 use anyhow::Context;
 use image::DynamicImage;
-use std::sync::{Mutex, OnceLock};
+use ndarray::Array4;
+use once_cell::sync::OnceCell;
+use std::sync::Mutex;
 
 use ort::{
     execution_providers::{CPUExecutionProvider, CUDAExecutionProvider, TensorRTExecutionProvider},
@@ -25,8 +27,10 @@ struct OcrSession {
     output_name: String,
 }
 
-static DET_SESSION: OnceLock<Mutex<OcrSession>> = OnceLock::new();
-static REC_SESSION: OnceLock<Mutex<OcrSession>> = OnceLock::new();
+static DET_SESSION: OnceCell<Mutex<OcrSession>> = OnceCell::new();
+static REC_SESSION: OnceCell<Mutex<OcrSession>> = OnceCell::new();
+/// Recognition model's fixed input height, read from the ONNX model at init time.
+static REC_INPUT_HEIGHT: OnceCell<u32> = OnceCell::new();
 
 fn build_session(model_bytes: &[u8]) -> anyhow::Result<OcrSession> {
     let session = Session::builder()
@@ -54,6 +58,40 @@ fn build_session(model_bytes: &[u8]) -> anyhow::Result<OcrSession> {
     })
 }
 
+/// Extract the fixed height dimension from a recognition model's input shape.
+///
+/// Expected input shape: [batch, 3, height, width] where batch and width are
+/// dynamic (-1) and height is fixed. Returns an error if the shape doesn't
+/// match this pattern.
+fn extract_rec_input_height(session: &Session) -> anyhow::Result<u32> {
+    let input = session
+        .inputs
+        .first()
+        .context("Recognition model has no inputs")?;
+
+    let dims = input
+        .input_type
+        .tensor_dimensions()
+        .context("Recognition model input is not a tensor")?;
+    anyhow::ensure!(
+        dims.len() == 4,
+        "Recognition model input must be 4D [batch, channels, height, width], got {:?}",
+        dims
+    );
+    anyhow::ensure!(
+        dims[1] == 3,
+        "Recognition model input channels must be 3, got {}",
+        dims[1]
+    );
+    let height = dims[2];
+    anyhow::ensure!(
+        height > 0,
+        "Recognition model input height is dynamic (-1) — expected a fixed dimension. \
+         Cannot auto-detect preprocessing height."
+    );
+    Ok(height as u32)
+}
+
 fn get_det_session() -> anyhow::Result<&'static Mutex<OcrSession>> {
     DET_SESSION
         .get_or_try_init(|| build_session(DET_MODEL_BYTES).map(Mutex::new))
@@ -62,8 +100,55 @@ fn get_det_session() -> anyhow::Result<&'static Mutex<OcrSession>> {
 
 fn get_rec_session() -> anyhow::Result<&'static Mutex<OcrSession>> {
     REC_SESSION
-        .get_or_try_init(|| build_session(REC_MODEL_BYTES).map(Mutex::new))
+        .get_or_try_init(|| -> anyhow::Result<Mutex<OcrSession>> {
+            let ocr_session = build_session(REC_MODEL_BYTES)?;
+
+            let model_height = extract_rec_input_height(&ocr_session.session)?;
+            REC_INPUT_HEIGHT.get_or_init(|| model_height);
+
+            // Validate dictionary size matches model output by running a dummy inference.
+            // The model's last output dimension = num_classes, which must equal our dictionary size.
+            let model_num_classes = {
+                let dummy = Array4::<f32>::zeros((1, 3, model_height as usize, 16));
+                let dummy_out = ocr_session
+                    .session
+                    .run(ort::inputs![dummy.view()]?)
+                    .context("Validation: dummy inference failed")?;
+                let dummy_tensor = dummy_out
+                    .get(&ocr_session.output_name)
+                    .context("Validation: output not found")?;
+                let dummy_array = dummy_tensor
+                    .try_extract_tensor::<f32>()
+                    .context("Validation: failed to extract tensor")?;
+                dummy_array.shape()[2]
+            };
+            let dict_num_classes = dictionary::num_classes();
+            anyhow::ensure!(
+                model_num_classes == dict_num_classes,
+                "Recognition model num_classes ({}) != dictionary size ({}). \
+                 Model and dict_en.txt are out of sync.",
+                model_num_classes,
+                dict_num_classes,
+            );
+
+            tracing::info!(
+                "OCR recognition model loaded: input height={}px, num_classes={}",
+                model_height,
+                model_num_classes,
+            );
+
+            Ok(Mutex::new(ocr_session))
+        })
         .context("Failed to initialize OCR recognition session")
+}
+
+/// Get the recognition model's required input height, initializing the session if needed.
+pub fn rec_input_height() -> anyhow::Result<u32> {
+    // Ensure the session (and REC_INPUT_HEIGHT) are initialized
+    let _ = get_rec_session()?;
+    Ok(*REC_INPUT_HEIGHT
+        .get()
+        .expect("REC_INPUT_HEIGHT must be set after get_rec_session succeeds"))
 }
 
 /// Detect text regions in an image using DBNet.
@@ -116,7 +201,7 @@ pub fn recognize_text(crops: &[DynamicImage]) -> anyhow::Result<Vec<(String, f32
         return Ok(vec![]);
     }
 
-    let input_tensor = recognition::preprocess_batch(crops);
+    let input_tensor = recognition::preprocess_batch(crops)?;
     let batch_size = input_tensor.shape()[0];
 
     // Run recognition inference (mutex-protected for GPU EP safety)
@@ -144,17 +229,6 @@ pub fn recognize_text(crops: &[DynamicImage]) -> anyhow::Result<Vec<(String, f32
     let shape = output_array.shape();
     let seq_len = shape[1];
     let num_classes = shape[2];
-
-    // Verify num_classes matches our dictionary
-    let expected_classes = dictionary::num_classes();
-    if num_classes != expected_classes {
-        tracing::error!(
-            "Recognition model num_classes ({}) != dictionary size ({}). \
-             CTC decode will produce incorrect text.",
-            num_classes,
-            expected_classes
-        );
-    }
 
     let output_data = output_array
         .as_slice()

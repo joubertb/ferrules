@@ -174,20 +174,15 @@ pub fn postprocess(
         regions.push(TextRegion { bbox, score });
     }
 
-    // Sort: top-to-bottom, left-to-right within ~10px Y tolerance
+    // Sort: top-to-bottom by quantised Y-band, left-to-right within band.
+    // Quantising to 10px bands avoids the transitivity violation that a
+    // pairwise tolerance comparison would introduce.
     regions.sort_by(|a, b| {
-        let y_diff = a.bbox.y0 - b.bbox.y0;
-        if y_diff.abs() < 10.0 {
-            a.bbox
-                .x0
-                .partial_cmp(&b.bbox.x0)
-                .unwrap_or(std::cmp::Ordering::Equal)
-        } else {
-            a.bbox
-                .y0
-                .partial_cmp(&b.bbox.y0)
-                .unwrap_or(std::cmp::Ordering::Equal)
-        }
+        let band_a = (a.bbox.y0 / 10.0).floor() as i32;
+        let band_b = (b.bbox.y0 / 10.0).floor() as i32;
+        band_a
+            .cmp(&band_b)
+            .then_with(|| a.bbox.x0.total_cmp(&b.bbox.x0))
     });
 
     regions
