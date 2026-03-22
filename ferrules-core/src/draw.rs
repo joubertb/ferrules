@@ -140,8 +140,8 @@ pub(crate) fn draw_paths(
         for segment in &path.segments {
             match segment {
                 crate::entities::Segment::Line { start, end } => {
-                    let start = (start.0 as f32, start.1 as f32);
-                    let end = (end.0 as f32, end.1 as f32);
+                    let start = (start.0, start.1);
+                    let end = (end.0, end.1);
                     imageproc::drawing::draw_line_segment_mut(
                         &mut out_img,
                         start,

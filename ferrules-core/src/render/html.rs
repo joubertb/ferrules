@@ -152,7 +152,7 @@ impl HTMLRenderer {
                         if cell.row_span > 1 {
                             table_html.push_str(&format!(" rowspan=\"{}\"", cell.row_span));
                         }
-                        table_html.push_str(">");
+                        table_html.push('>');
 
                         if !cell.text.is_empty() {
                             table_html.push_str(&cell.text);

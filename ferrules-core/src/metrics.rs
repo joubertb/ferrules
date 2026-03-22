@@ -60,15 +60,13 @@ impl PageMetrics {
             "false"
         };
         metrics::histogram!("page_processing_duration_ms", "ocr" => ocr_label)
-            .record(self.total_duration_ms as f64);
+            .record(self.total_duration_ms);
 
-        metrics::histogram!("layout_execution_time_ms")
-            .record(self.layout_step.execution_time_ms as f64);
-        metrics::histogram!("layout_queue_time_ms").record(self.layout_step.queue_time_ms as f64);
-        metrics::histogram!("layout_idle_time_ms").record(self.layout_step.idle_time_ms as f64);
+        metrics::histogram!("layout_execution_time_ms").record(self.layout_step.execution_time_ms);
+        metrics::histogram!("layout_queue_time_ms").record(self.layout_step.queue_time_ms);
+        metrics::histogram!("layout_idle_time_ms").record(self.layout_step.idle_time_ms);
 
-        metrics::histogram!("native_execution_time_ms")
-            .record(self.native_step.execution_time_ms as f64);
+        metrics::histogram!("native_execution_time_ms").record(self.native_step.execution_time_ms);
 
         for table in &self.table_steps {
             let algo_str = match table.algorithm {
@@ -79,19 +77,18 @@ impl PageMetrics {
             };
 
             metrics::histogram!("table_execution_time_ms", "method" => algo_str)
-                .record(table.step_metrics.execution_time_ms as f64);
+                .record(table.step_metrics.execution_time_ms);
             metrics::histogram!("table_queue_time_ms", "method" => algo_str)
-                .record(table.step_metrics.queue_time_ms as f64);
+                .record(table.step_metrics.queue_time_ms);
 
             // Still record global table metrics if needed, or just let prometheus aggregate
             metrics::histogram!("table_execution_time_ms")
-                .record(table.step_metrics.execution_time_ms as f64);
+                .record(table.step_metrics.execution_time_ms);
         }
 
         if let Some(ocr) = &self.ocr_step {
-            metrics::histogram!("ocr_execution_time_ms")
-                .record(ocr.step_metrics.execution_time_ms as f64);
-            metrics::histogram!("ocr_idle_time_ms").record(ocr.step_metrics.idle_time_ms as f64);
+            metrics::histogram!("ocr_execution_time_ms").record(ocr.step_metrics.execution_time_ms);
+            metrics::histogram!("ocr_idle_time_ms").record(ocr.step_metrics.idle_time_ms);
         }
     }
 

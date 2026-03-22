@@ -42,7 +42,6 @@ image = "0.25.5"
 ndarray = "0.16.1"
 ort = { version = "=2.0.0-rc.9", features = ["fetch-models"] }
 serde_millis = "0.1.1"
-kmeans = "2.0.1"
 rand = "0.8.5"
 # Rendering
 build_html = "2.6.0"

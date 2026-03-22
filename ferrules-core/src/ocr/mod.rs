@@ -204,6 +204,12 @@ pub struct OCRParser {
     inference_tx: Sender<OCRInferenceRequest>,
 }
 
+impl Default for OCRParser {
+    fn default() -> Self {
+        Self::new()
+    }
+}
+
 impl OCRParser {
     pub fn new() -> Self {
         let (tx, rx) = mpsc::channel(256);
@@ -376,8 +382,6 @@ mod ocr_mac {
             }
         };
 
-        let final_results;
-
         // Wrap the batch Vision call in catch_unwind to handle panics from objc2-vision
         let batch_result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
             unsafe {
@@ -452,10 +456,8 @@ mod ocr_mac {
             }
         }));
 
-        match batch_result {
-            Ok(Ok(results)) => {
-                final_results = results;
-            }
+        let final_results = match batch_result {
+            Ok(Ok(results)) => results,
             Ok(Err(e)) => {
                 // Vision returned an error — fall back to individual processing
                 tracing::warn!(
@@ -475,7 +477,7 @@ mod ocr_mac {
                     .map(|(image, rescale)| parse_single_image_ocr(image, *rescale))
                     .collect();
             }
-        }
+        };
 
         final_results.into_iter().map(Ok).collect()
     }

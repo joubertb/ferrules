@@ -288,7 +288,7 @@ where
         )?
     };
 
-    let native_step = StepMetrics::new(parse_native_metadata.parse_native_duration_ms as f64);
+    let native_step = StepMetrics::new(parse_native_metadata.parse_native_duration_ms);
 
     let page_metrics = PageMetrics {
         page_id,

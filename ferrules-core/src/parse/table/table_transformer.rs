@@ -31,10 +31,11 @@ pub struct TableTransformerStandard {
     tx: mpsc::Sender<InferenceRequest>,
 }
 
+type InferenceResult = Result<(ArrayD<f32>, ArrayD<f32>), FerrulesError>;
+
 struct InferenceRequest {
     input: Array4<f32>,
-    // Tuple of (logits, pred_boxes)
-    response_tx: oneshot::Sender<Result<(ArrayD<f32>, ArrayD<f32>), FerrulesError>>,
+    response_tx: oneshot::Sender<InferenceResult>,
 }
 
 struct BatchInferenceRunner {
@@ -338,10 +339,7 @@ impl TableTransformerStandard {
         input
     }
 
-    pub async fn run(
-        &self,
-        input: Array4<f32>,
-    ) -> Result<(ArrayD<f32>, ArrayD<f32>), FerrulesError> {
+    pub async fn run(&self, input: Array4<f32>) -> InferenceResult {
         let (tx, rx) = oneshot::channel();
 
         self.tx
@@ -570,9 +568,9 @@ impl TableTransformerStandard {
                 let col_span = if let Some(sc) = spanning {
                     // Count how many consecutive columns this spanning cell covers
                     let mut span = 1;
-                    for j in (col_idx + 1)..cols.len() {
-                        let col_overlap = cols[j].bbox.overlap_x(&sc.bbox);
-                        if col_overlap / cols[j].bbox.width() > 0.5 {
+                    for col in cols.iter().skip(col_idx + 1) {
+                        let col_overlap = col.bbox.overlap_x(&sc.bbox);
+                        if col_overlap / col.bbox.width() > 0.5 {
                             span += 1;
                         } else {
                             break;
@@ -824,10 +822,7 @@ impl TableTransformer {
         Ok(results)
     }
 
-    pub async fn run(
-        &self,
-        input: Array4<f32>,
-    ) -> Result<(ArrayD<f32>, ArrayD<f32>), FerrulesError> {
+    pub async fn run(&self, input: Array4<f32>) -> InferenceResult {
         let (tx, rx) = oneshot::channel();
 
         self.tx
@@ -994,9 +989,9 @@ impl TableTransformer {
                 let col_span = if let Some(sc) = spanning {
                     // Count how many consecutive columns this spanning cell covers
                     let mut span = 1;
-                    for j in (col_idx + 1)..cols.len() {
-                        let col_overlap = cols[j].bbox.overlap_x(&sc.bbox);
-                        if col_overlap / cols[j].bbox.width() > 0.5 {
+                    for col in cols.iter().skip(col_idx + 1) {
+                        let col_overlap = col.bbox.overlap_x(&sc.bbox);
+                        if col_overlap / col.bbox.width() > 0.5 {
                             span += 1;
                         } else {
                             break;

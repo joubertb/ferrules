@@ -183,9 +183,9 @@ pub fn parse_table_lattice(
             }
 
             // Mark grid cells as visited
-            for r in i..i + row_span {
-                for c in j..j + col_span {
-                    visited[r][c] = true;
+            for row in visited.iter_mut().skip(i).take(row_span) {
+                for cell in row.iter_mut().skip(j).take(col_span) {
+                    *cell = true;
                 }
             }
 
