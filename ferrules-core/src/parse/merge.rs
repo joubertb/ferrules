@@ -69,7 +69,7 @@ fn join_lines_smart(lines: &[String]) -> String {
         // Get the last word fragment of current result and first word fragment of next line
         let result_word_start = result
             .rfind(|c: char| c.is_whitespace() || c == ',' || c == '.' || c == ';')
-            .map(|i| i + 1)
+            .map(|i| i + result[i..].chars().next().unwrap().len_utf8())
             .unwrap_or(0);
         let word_before = &result[result_word_start..];
 
@@ -200,7 +200,7 @@ fn fix_hyphenated_fragments(text: &mut String) {
             // Find the word before the hyphen
             let word_start = new_text
                 .rfind(|c: char| c.is_whitespace() || c == ',' || c == '.' || c == ';')
-                .map(|idx| idx + 1)
+                .map(|idx| idx + new_text[idx..].chars().next().unwrap().len_utf8())
                 .unwrap_or(0);
             let word_before = &new_text[word_start..];
 
@@ -323,7 +323,12 @@ fn concatenate_spans_with_spacing(line_spans: &[crate::entities::CharSpan]) -> S
             .rfind(|c: char| c.is_whitespace() || c == ',' || c == '.' || c == ';')
         {
             // Adjust word_start_idx to point to after the boundary in the result
-            word_start_idx = result.len() - span.text.len() + last_boundary + 1;
+            let char_len = span.text[last_boundary..]
+                .chars()
+                .next()
+                .unwrap()
+                .len_utf8();
+            word_start_idx = result.len() - span.text.len() + last_boundary + char_len;
         }
     }
 

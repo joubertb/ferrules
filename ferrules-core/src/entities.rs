@@ -287,7 +287,14 @@ impl ElementText {
             self.text.push_str(txt);
             debug_print!(
                 "🔗 CROSS-LINE HYPHEN JOIN: text ending with '-' + '{}' → joined without space",
-                &txt[..txt.len().min(20)]
+                {
+                    let max = 20.min(txt.len());
+                    let end = (0..=max)
+                        .rev()
+                        .find(|&i| txt.is_char_boundary(i))
+                        .unwrap_or(0);
+                    &txt[..end]
+                }
             );
         } else {
             // Normal case: add space and append text
@@ -498,8 +505,13 @@ impl Element {
                     .text
                     .rfind(|c: char| c.is_whitespace() || c == ',' || c == '.' || c == ';')
                 {
+                    let char_len = span.text[last_boundary..]
+                        .chars()
+                        .next()
+                        .unwrap()
+                        .len_utf8();
                     word_start_in_line =
-                        accumulated_text.len() - span.text.len() + last_boundary + 1;
+                        accumulated_text.len() - span.text.len() + last_boundary + char_len;
                 }
             }
 
@@ -532,7 +544,10 @@ impl Element {
         // Get the last word fragment from prev line
         let word_before = prev
             .rfind(|c: char| c.is_whitespace() || c == ',' || c == '.' || c == ';')
-            .map(|i| &prev[i + 1..])
+            .map(|i| {
+                let char_len = prev[i..].chars().next().unwrap().len_utf8();
+                &prev[i + char_len..]
+            })
             .unwrap_or(prev);
 
         // Get the first word fragment from curr line

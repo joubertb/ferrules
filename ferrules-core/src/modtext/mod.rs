@@ -283,7 +283,7 @@ fn remove_spurious_spaces(text: &str) -> String {
             // Find the word fragment before the space
             let word_start = result
                 .rfind(|c: char| c.is_whitespace() || c == ',' || c == '.' || c == ';' || c == ':')
-                .map(|idx| idx + 1)
+                .map(|idx| idx + result[idx..].chars().next().unwrap().len_utf8())
                 .unwrap_or(0);
             let word_before = &result[word_start..];
 
