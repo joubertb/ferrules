@@ -624,6 +624,7 @@ async fn main() {
         .route("/parse", post(parse_document_handler))
         .route("/parse/sse", post(parse_document_sse_handler))
         .route("/parse/cancel/:job_id", post(cancel_job_handler))
+        .route("/debug/queue-status", get(queue_status_handler))
         .route("/debug/:doc_name", get(get_debug_handler))
         .route("/debug/:doc_name", delete(delete_debug_handler))
         .route("/images/:job_id/figures/:filename", get(get_image_handler))
@@ -670,6 +671,15 @@ async fn health_check() -> impl IntoResponse {
         data: Some("Service is healthy"),
         error: None,
     })
+}
+
+async fn queue_status_handler(state: State<AppState>) -> impl IntoResponse {
+    let status = state.parser.queue_status();
+    Json(serde_json::json!({
+        "native_thread_alive": status.native_thread_alive,
+        "native_queue_capacity": status.native_queue_capacity,
+        "native_queue_max_capacity": status.native_queue_max_capacity,
+    }))
 }
 
 #[tracing::instrument(skip_all)]

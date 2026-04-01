@@ -1,4 +1,11 @@
-use std::{ops::Range, sync::Arc, time::Instant};
+use std::{
+    ops::Range,
+    sync::{
+        atomic::{AtomicBool, Ordering},
+        Arc,
+    },
+    time::Instant,
+};
 
 use image::DynamicImage;
 use pdfium_render::prelude::*;
@@ -372,6 +379,7 @@ pub struct ParseNativePageResult {
 #[derive(Debug, Clone)]
 pub struct ParseNativeQueue {
     queue: Sender<(ParseNativeRequest, Span)>,
+    native_thread_alive: Arc<AtomicBool>,
 }
 
 impl Default for ParseNativeQueue {
@@ -383,19 +391,71 @@ impl Default for ParseNativeQueue {
 impl ParseNativeQueue {
     pub fn new() -> Self {
         let (queue_sender, queue_receiver) = mpsc::channel(MAX_CONCURRENT_NATIVE_REQS);
+        let alive_flag = Arc::new(AtomicBool::new(true));
+        let alive_flag_clone = alive_flag.clone();
 
-        tokio::task::spawn_blocking(move || start_native_parser(queue_receiver));
+        tokio::task::spawn_blocking(move || {
+            tracing::info!("Native parser thread started");
+            let result = std::panic::catch_unwind(std::panic::AssertUnwindSafe(|| {
+                start_native_parser(queue_receiver);
+            }));
+            alive_flag_clone.store(false, Ordering::SeqCst);
+            match result {
+                Ok(()) => tracing::error!("Native parser thread exited normally (receiver closed)"),
+                Err(panic_info) => {
+                    let msg = if let Some(s) = panic_info.downcast_ref::<&str>() {
+                        s.to_string()
+                    } else if let Some(s) = panic_info.downcast_ref::<String>() {
+                        s.clone()
+                    } else {
+                        "unknown panic".to_string()
+                    };
+                    tracing::error!("Native parser thread PANICKED: {}", msg);
+                }
+            }
+        });
         Self {
             queue: queue_sender,
+            native_thread_alive: alive_flag,
         }
     }
 
+    /// Check if the native parser thread is still alive
+    pub fn is_alive(&self) -> bool {
+        self.native_thread_alive.load(Ordering::SeqCst)
+    }
+
+    /// Get current queue capacity info
+    pub fn capacity(&self) -> usize {
+        self.queue.capacity()
+    }
+
+    /// Get max queue capacity
+    pub fn max_capacity(&self) -> usize {
+        self.queue.max_capacity()
+    }
+
     pub(crate) async fn push(&self, req: ParseNativeRequest) -> Result<(), FerrulesError> {
+        if !self.is_alive() {
+            tracing::error!(
+                "Native parser thread is DEAD — cannot process requests. \
+                 Queue capacity: {}/{}. Ferrules must be restarted.",
+                self.capacity(),
+                self.max_capacity()
+            );
+            return Err(FerrulesError::ParseNativeError);
+        }
         let span = Span::current();
-        self.queue
-            .send((req, span))
-            .await
-            .map_err(|_| FerrulesError::ParseNativeError)
+        self.queue.send((req, span)).await.map_err(|_| {
+            tracing::error!(
+                "Failed to send to native queue (channel closed). \
+                 Thread alive: {}, capacity: {}/{}",
+                self.is_alive(),
+                self.capacity(),
+                self.max_capacity()
+            );
+            FerrulesError::ParseNativeError
+        })
     }
 }
 

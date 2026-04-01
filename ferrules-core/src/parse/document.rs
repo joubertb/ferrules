@@ -25,6 +25,14 @@ use crate::{
     parse::table::{ParseTableQueue, TableParser, TableTransformer},
 };
 
+/// Diagnostic info about internal queue health
+#[derive(Debug, Clone, serde::Serialize)]
+pub struct QueueStatus {
+    pub native_thread_alive: bool,
+    pub native_queue_capacity: usize,
+    pub native_queue_max_capacity: usize,
+}
+
 /// Configuration options for parsing documents with FerrulesParser
 #[derive(Debug, Clone)]
 pub struct FerrulesParseConfig<'a> {
@@ -147,6 +155,15 @@ impl FerrulesParser {
             native_queue,
             table_queue,
             ocr_queue,
+        }
+    }
+
+    /// Returns diagnostic info about internal queue health
+    pub fn queue_status(&self) -> QueueStatus {
+        QueueStatus {
+            native_thread_alive: self.native_queue.is_alive(),
+            native_queue_capacity: self.native_queue.capacity(),
+            native_queue_max_capacity: self.native_queue.max_capacity(),
         }
     }
 
