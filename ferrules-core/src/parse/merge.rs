@@ -5,7 +5,7 @@ use crate::{
         Block, BlockType, FormulaBlock, ImageBlock, List, TableBlock, TextBlock, Title, TitleLevel,
     },
     debug_print,
-    entities::{Element, ElementID, ElementType, Line, PageID},
+    entities::{BBox, Element, ElementID, ElementType, Line, PageID},
     error::FerrulesError,
     layout::model::LayoutBBox,
     sentence_detection::detect_sentence_ends,
@@ -425,17 +425,50 @@ fn is_likely_figure_embedded_text(element: &Element) -> bool {
     is_between_columns || has_attribution
 }
 
-/// Detects if a text block is likely embedded within a figure (works on Blocks)
-fn is_likely_figure_embedded_text_from_block(block: &Block) -> bool {
-    let block_x = block.bbox.x0;
-    let is_between_columns = block_x > 300.0 && block_x < 550.0;
+/// Margin (in points) to expand the image bbox when checking for embedded
+/// text.  Figure labels/titles are often just outside the image boundary.
+const FIGURE_EMBED_MARGIN: f32 = 15.0;
 
-    if let crate::blocks::BlockType::TextBlock(text) = &block.kind {
-        let has_attribution = text.text.contains("(from ") || text.text.contains("(source:");
-        is_between_columns || has_attribution
-    } else {
-        false
+/// Detects if a block is likely embedded within or labelling a figure.
+///
+/// Checks whether the block is spatially contained within (or significantly
+/// overlaps) the image bounding box (expanded by a small margin), or matches
+/// known attribution patterns.  Works for both TextBlock and Title blocks.
+fn is_likely_figure_embedded_text_from_block(block: &Block, image_bbox: &BBox) -> bool {
+    let block_text = match &block.kind {
+        crate::blocks::BlockType::TextBlock(t) => &t.text,
+        crate::blocks::BlockType::Title(t) => &t.text,
+        _ => return false,
+    };
+
+    // Check for attribution patterns
+    if block_text.contains("(from ") || block_text.contains("(source:") {
+        return true;
     }
+
+    // Expand the image bbox by a small margin to catch labels just outside
+    let expanded = BBox {
+        x0: image_bbox.x0 - FIGURE_EMBED_MARGIN,
+        y0: image_bbox.y0 - FIGURE_EMBED_MARGIN,
+        x1: image_bbox.x1 + FIGURE_EMBED_MARGIN,
+        y1: image_bbox.y1 + FIGURE_EMBED_MARGIN,
+    };
+
+    // Check if the block is contained within the expanded image bbox
+    if expanded.contains(&block.bbox) {
+        return true;
+    }
+
+    // Check if there's significant overlap (>50% of the block area)
+    let block_area = block.bbox.area();
+    if block_area > 0.0 {
+        let overlap = expanded.intersection(&block.bbox);
+        if overlap / block_area > 0.5 {
+            return true;
+        }
+    }
+
+    false
 }
 
 fn merge_or_create_elements(
@@ -826,21 +859,34 @@ fn post_process_figure_blocks(blocks: &mut Vec<Block>) {
             let mut figure_bbox = block.bbox.clone();
             let mut embedded_indices = Vec::new();
 
-            // Look backwards for embedded text blocks
-            for j in (0..i).rev() {
-                if let crate::blocks::BlockType::TextBlock(text_block) = &blocks[j].kind {
-                    // Check if this text block should be part of the figure
-                    if is_likely_figure_embedded_text_from_block(&blocks[j]) {
-                        figure_elements.insert(0, text_block.text.clone());
+            // Scan all TextBlocks on the same page for spatial containment
+            // within the image bbox (labels can appear before or after the
+            // Image block in document order)
+            let image_bbox = block.bbox.clone();
+            let image_pages = &block.pages_id;
+            for j in 0..blocks.len() {
+                if j == i {
+                    continue;
+                }
+                // Only check blocks on the same page
+                if !blocks[j]
+                    .pages_id
+                    .iter()
+                    .any(|p| image_pages.contains(p))
+                {
+                    continue;
+                }
+                let embedded_text = match &blocks[j].kind {
+                    crate::blocks::BlockType::TextBlock(t) => Some(&t.text),
+                    crate::blocks::BlockType::Title(t) => Some(&t.text),
+                    _ => None,
+                };
+                if let Some(text) = embedded_text {
+                    if is_likely_figure_embedded_text_from_block(&blocks[j], &image_bbox) {
+                        figure_elements.push(text.clone());
                         figure_bbox.merge(&blocks[j].bbox);
                         embedded_indices.push(j);
-                    } else {
-                        // Stop when we hit regular text that's not in the figure area
-                        break;
                     }
-                } else {
-                    // Stop at any other block type
-                    break;
                 }
             }
 
@@ -1418,7 +1464,7 @@ pub(crate) fn merge_elements_into_blocks(
                                 text.text.chars().take(50).collect::<String>()
                             );
                             // Check if this text block is likely embedded in the figure
-                            if is_likely_figure_embedded_text_from_block(existing_block) {
+                            if is_likely_figure_embedded_text_from_block(existing_block, &curr_el.bbox) {
                                 debug_print!(
                                     "🖼️ ✅ MATCHED - Found embedded text for figure: {}",
                                     text.text.chars().take(50).collect::<String>()
