@@ -28,6 +28,13 @@ const SINGLE_COLUMN_MAX_RATIO: f32 = 0.35;
 const MIN_COLUMN_GAP_RATIO: f32 = 0.01;
 /// Histogram bin width in points for column gap detection
 const HISTOGRAM_BIN_WIDTH: f32 = 2.0;
+/// Columns whose elements span less than this fraction of the total Y range
+/// are treated as inline side-by-side content rather than a true column.
+/// Their elements are interleaved by Y position into the main reading flow.
+const SPARSE_COLUMN_Y_COVERAGE: f32 = 0.25;
+/// Y-tolerance in points for treating elements as being on the same row.
+/// Elements within this vertical distance sort by X (left-to-right) rather than Y.
+const SAME_ROW_Y_TOLERANCE: f32 = 5.0;
 
 lazy_static! {
     /// Pre-compiled regex for figure caption pattern detection
@@ -407,24 +414,6 @@ fn is_figure_caption(text: &str) -> bool {
     FIGURE_CAPTION_REGEX.is_match(text.trim())
 }
 
-/// Detects text blocks that are likely embedded within a figure
-/// TODO: WORKAROUND - The ONNX model should detect complete figure boundaries
-/// including embedded text, not just the formula/image portion
-#[allow(dead_code)]
-fn is_likely_figure_embedded_text(element: &Element) -> bool {
-    // Check if text block is spatially between main columns (figure area)
-    // Main text columns typically at x ≈ 50-75 or x ≈ 314
-    // Figure text often at x ≈ 327-483
-    let block_x = element.bbox.x0;
-    let is_between_columns = block_x > 300.0 && block_x < 550.0;
-
-    // Check for attribution patterns
-    let text = &element.text_block.text;
-    let has_attribution = text.contains("(from ") || text.contains("(source:");
-
-    is_between_columns || has_attribution
-}
-
 /// Margin (in points) to expand the image bbox when checking for embedded
 /// text.  Figure labels/titles are often just outside the image boundary.
 const FIGURE_EMBED_MARGIN: f32 = 15.0;
@@ -468,6 +457,27 @@ fn is_likely_figure_embedded_text_from_block(block: &Block, image_bbox: &BBox) -
         }
     }
 
+    // Check for vertically adjacent block with matching X range.
+    // Figures often contain text blocks that span the full figure width
+    // but sit just above/below the detected image area (e.g. inside a
+    // bordered figure box).  Require >80% X overlap and ≤5pt Y gap.
+    let x_overlap_start = block.bbox.x0.max(image_bbox.x0);
+    let x_overlap_end = block.bbox.x1.min(image_bbox.x1);
+    let block_width = block.bbox.x1 - block.bbox.x0;
+    if x_overlap_end > x_overlap_start && block_width > 0.0 {
+        let x_overlap_ratio = (x_overlap_end - x_overlap_start) / block_width;
+        let y_gap = if block.bbox.y1 < image_bbox.y0 {
+            image_bbox.y0 - block.bbox.y1
+        } else if block.bbox.y0 > image_bbox.y1 {
+            block.bbox.y0 - image_bbox.y1
+        } else {
+            0.0 // vertically overlapping
+        };
+        if x_overlap_ratio > 0.5 && y_gap < 5.0 {
+            return true;
+        }
+    }
+
     false
 }
 
@@ -484,7 +494,6 @@ fn merge_or_create_elements(
         return;
     }
 
-    // let last_el = elements.last_mut().unwrap();
     let matched_element = elements
         .iter_mut()
         .find(|e| e.layout_block_id == line_layout_block.id);
@@ -572,15 +581,24 @@ pub(crate) fn reorder_elements_by_column(elements: &mut Vec<Element>) {
         return;
     }
 
-    // Assign each narrow element to a column based on where its center x falls
+    // Assign each narrow element to a column.
+    // For elements narrow enough to fit a single column, use center_x (reliable
+    // for true column content). For wider elements that span across column
+    // boundaries, use x0 so they stay in the column where they originate.
     let num_columns = column_boundaries.len() + 1;
     let mut columns: Vec<Vec<Element>> = (0..num_columns).map(|_| Vec::new()).collect();
-
     for elem in narrow {
-        let center_x = (elem.bbox.x0 + elem.bbox.x1) / 2.0;
+        // Elements wider than 60% of the page nearly span the full width and
+        // are likely anchored to their starting column — use x0 to avoid
+        // misassigning them across the column boundary via center_x.
+        let assign_x = if elem.bbox.width() > page_width * 0.60 {
+            elem.bbox.x0
+        } else {
+            (elem.bbox.x0 + elem.bbox.x1) / 2.0
+        };
         let col_idx = column_boundaries
             .iter()
-            .position(|&b| center_x < b)
+            .position(|&b| assign_x < b)
             .unwrap_or(column_boundaries.len());
         columns[col_idx].push(elem);
     }
@@ -590,8 +608,58 @@ pub(crate) fn reorder_elements_by_column(elements: &mut Vec<Element>) {
         col.sort_by(|a, b| a.bbox.y0.total_cmp(&b.bbox.y0));
     }
 
-    // Flatten columns into sequential reading order (left to right)
-    let column_elements: Vec<Element> = columns.into_iter().flatten().collect();
+    // Detect sparse columns: columns whose elements cover a small fraction
+    // of the total Y range are side-by-side inline content (e.g. contact info
+    // in a resume header), not a true reading column. Interleave them by Y
+    // position into the main flow instead of appending after the real column.
+    let total_y0 = columns
+        .iter()
+        .flat_map(|c| c.iter())
+        .map(|e| e.bbox.y0)
+        .fold(f32::INFINITY, f32::min);
+    let total_y1 = columns
+        .iter()
+        .flat_map(|c| c.iter())
+        .map(|e| e.bbox.y1)
+        .fold(f32::NEG_INFINITY, f32::max);
+    let total_y_range = total_y1 - total_y0;
+
+    let mut real_columns: Vec<Vec<Element>> = Vec::new();
+    if total_y_range > 0.0 {
+        // A column must have content past this Y threshold to be considered a
+        // real reading column. Columns that end in the top portion of the page
+        // are likely header grids (e.g. a multi-author layout) rather than
+        // actual document columns.
+        let column_depth_threshold = total_y0 + total_y_range * 0.60;
+
+        for col in columns {
+            if col.is_empty() {
+                continue;
+            }
+            let col_y0 = col.iter().map(|e| e.bbox.y0).fold(f32::INFINITY, f32::min);
+            let col_y1 = col
+                .iter()
+                .map(|e| e.bbox.y1)
+                .fold(f32::NEG_INFINITY, f32::max);
+            let col_y_coverage = (col_y1 - col_y0) / total_y_range;
+
+            if col_y_coverage < SPARSE_COLUMN_Y_COVERAGE {
+                // Sparse column — treat elements as inline, interleave by Y position
+                full_width.extend(col);
+            } else if col_y1 < column_depth_threshold {
+                // Column ends in the top portion of the page — likely a header
+                // grid (e.g. author names) rather than a real reading column
+                full_width.extend(col);
+            } else {
+                real_columns.push(col);
+            }
+        }
+    } else {
+        real_columns = columns;
+    }
+
+    // Flatten real columns into sequential reading order (left to right)
+    let column_elements: Vec<Element> = real_columns.into_iter().flatten().collect();
     let body = interleave_full_width(column_elements, full_width);
     reassemble_elements(elements, headers, body, footers);
 }
@@ -680,7 +748,15 @@ fn interleave_full_width(
         return column_elements;
     }
 
-    full_width.sort_by(|a, b| a.bbox.y0.total_cmp(&b.bbox.y0));
+    // Sort by Y position, using X for left-to-right ordering when elements
+    // are on the same visual row (within SAME_ROW_Y_TOLERANCE points).
+    full_width.sort_by(|a, b| {
+        if (a.bbox.y0 - b.bbox.y0).abs() < SAME_ROW_Y_TOLERANCE {
+            a.bbox.x0.total_cmp(&b.bbox.x0)
+        } else {
+            a.bbox.y0.total_cmp(&b.bbox.y0)
+        }
+    });
 
     let mut result: Vec<Element> = Vec::with_capacity(column_elements.len() + full_width.len());
     let mut fw_iter = full_width.into_iter().peekable();
@@ -846,53 +922,69 @@ pub(crate) fn merge_remaining(
     }
 }
 
-/// Post-process blocks to create Figure blocks from Image blocks with nearby embedded text
-/// This handles cases where the ONNX model correctly identifies images but misses embedded text
+/// Post-process blocks to absorb nearby text into Image/Figure blocks.
+///
+/// Handles two cases:
+/// 1. Image blocks that have nearby embedded text → convert to Figure
+/// 2. Figure blocks (already created by inline path with caption) that
+///    still have unabsorbed text nearby (e.g. wrap-around text)
 fn post_process_figure_blocks(blocks: &mut Vec<Block>) {
     let mut indices_to_remove = Vec::new();
     let mut figures_to_add = Vec::new();
 
-    // Find Image blocks and check for nearby embedded text
     for (i, block) in blocks.iter().enumerate() {
-        if let crate::blocks::BlockType::Image(image_block) = &block.kind {
-            let mut figure_elements = Vec::new();
-            let mut figure_bbox = block.bbox.clone();
-            let mut embedded_indices = Vec::new();
+        // Extract the image bbox for spatial checks.
+        // - Image blocks: use block bbox directly, two-pass (pass 1 finds
+        //   attribution text, pass 2 uses expanded bbox for nearby text)
+        // - Figure blocks: use block bbox (which includes caption area)
+        //   for a single-pass to catch remaining overlapping text
+        let image_bbox = match &block.kind {
+            crate::blocks::BlockType::Image(_) => block.bbox.clone(),
+            crate::blocks::BlockType::Figure(_) => block.bbox.clone(),
+            _ => continue,
+        };
 
-            // Scan all TextBlocks on the same page for spatial containment
-            // within the image bbox (labels can appear before or after the
-            // Image block in document order)
-            let image_bbox = block.bbox.clone();
-            let image_pages = &block.pages_id;
-            for j in 0..blocks.len() {
-                if j == i {
+        let mut figure_elements = Vec::new();
+        let mut figure_bbox = block.bbox.clone();
+        let mut embedded_indices = Vec::new();
+
+        // Two-pass scan: pass 1 uses the original/block bbox to find
+        // attribution text and directly overlapping blocks.  Pass 2 uses
+        // the expanded bbox (after merging pass-1 results) to catch text
+        // that is adjacent to the now-larger figure area.
+        let image_pages = &block.pages_id;
+        for pass in 0..2 {
+            let check_bbox = if pass == 0 {
+                image_bbox.clone()
+            } else {
+                figure_bbox.clone()
+            };
+            for (j, block_j) in blocks.iter().enumerate() {
+                if j == i || embedded_indices.contains(&j) {
                     continue;
                 }
-                // Only check blocks on the same page
-                if !blocks[j]
-                    .pages_id
-                    .iter()
-                    .any(|p| image_pages.contains(p))
-                {
+                if !block_j.pages_id.iter().any(|p| image_pages.contains(p)) {
                     continue;
                 }
-                let embedded_text = match &blocks[j].kind {
+                let embedded_text = match &block_j.kind {
                     crate::blocks::BlockType::TextBlock(t) => Some(&t.text),
                     crate::blocks::BlockType::Title(t) => Some(&t.text),
                     _ => None,
                 };
                 if let Some(text) = embedded_text {
-                    if is_likely_figure_embedded_text_from_block(&blocks[j], &image_bbox) {
+                    if is_likely_figure_embedded_text_from_block(block_j, &check_bbox) {
                         figure_elements.push(text.clone());
-                        figure_bbox.merge(&blocks[j].bbox);
+                        figure_bbox.merge(&block_j.bbox);
                         embedded_indices.push(j);
                     }
                 }
             }
+        }
 
-            // If we found embedded text, create a Figure block
-            if !figure_elements.is_empty() {
-                let figure_block = Block {
+        // If we found embedded text, create or update a Figure block
+        if !figure_elements.is_empty() {
+            let figure_block = match &block.kind {
+                crate::blocks::BlockType::Image(image_block) => Block {
                     id: block.id,
                     kind: crate::blocks::BlockType::Figure(crate::blocks::FigureBlock {
                         id: image_block.id,
@@ -903,12 +995,29 @@ fn post_process_figure_blocks(blocks: &mut Vec<Block>) {
                     }),
                     pages_id: block.pages_id.clone(),
                     bbox: figure_bbox,
-                };
+                },
+                crate::blocks::BlockType::Figure(fig) => {
+                    let mut all_texts = fig.embedded_texts.clone();
+                    all_texts.extend(figure_elements);
+                    Block {
+                        id: block.id,
+                        kind: crate::blocks::BlockType::Figure(crate::blocks::FigureBlock {
+                            id: fig.id,
+                            embedded_texts: all_texts,
+                            image_bbox: fig.image_bbox.clone(),
+                            caption: fig.caption.clone(),
+                            image_path: None,
+                        }),
+                        pages_id: block.pages_id.clone(),
+                        bbox: figure_bbox,
+                    }
+                }
+                _ => continue,
+            };
 
-                figures_to_add.push((i, figure_block));
-                indices_to_remove.push(i); // Remove the original Image block
-                indices_to_remove.extend(embedded_indices); // Remove the embedded text blocks
-            }
+            figures_to_add.push((i, figure_block));
+            indices_to_remove.push(i); // Remove the original block
+            indices_to_remove.extend(embedded_indices); // Remove the embedded text blocks
         }
     }
 
@@ -1439,53 +1548,38 @@ pub(crate) fn merge_elements_into_blocks(
                     continue; // Skip normal Image processing
                 }
 
-                // Check if we should create a Figure block by looking for nearby embedded text
+                // Check if we should create a Figure block by looking for nearby embedded text.
+                // Two-pass scan: pass 1 finds attribution text and directly overlapping
+                // blocks using the raw Image element bbox.  Pass 2 uses the expanded bbox
+                // (after merging pass-1 results) to catch adjacent text inside the
+                // figure's visual border.
                 let mut figure_elements = Vec::new();
                 let mut figure_bbox = curr_el.bbox.clone();
-
-                // Look backward for elements that might be part of this figure
-                // We'll collect the indices but only remove them when we actually create a Figure block
-                let blocks_to_check: Vec<_> = blocks.iter().enumerate().rev().collect();
                 let mut blocks_to_remove = Vec::new();
 
-                for (i, existing_block) in blocks_to_check {
-                    debug_print!(
-                        "🖼️ Checking block {} ({}): {:?}",
-                        existing_block.id,
-                        i,
-                        &existing_block.kind
-                    );
-                    match &existing_block.kind {
-                        crate::blocks::BlockType::TextBlock(text) => {
-                            debug_print!(
-                                "🖼️ TextBlock {} at x={:.1}: {}",
-                                existing_block.id,
-                                existing_block.bbox.x0,
-                                text.text.chars().take(50).collect::<String>()
-                            );
-                            // Check if this text block is likely embedded in the figure
-                            if is_likely_figure_embedded_text_from_block(existing_block, &curr_el.bbox) {
-                                debug_print!(
-                                    "🖼️ ✅ MATCHED - Found embedded text for figure: {}",
-                                    text.text.chars().take(50).collect::<String>()
-                                );
-                                figure_elements.insert(0, text.text.clone()); // Insert at beginning to maintain order
-                                figure_bbox.merge(&existing_block.bbox);
-                                blocks_to_remove.push(i);
-                                debug_print!(
-                                    "🖼️ Added block {} to removal list at index {}",
-                                    existing_block.id,
-                                    i
-                                );
-                            } else {
-                                debug_print!("🖼️ ❌ NO MATCH - Not embedded text, stopping search");
-                                // Stop when we hit regular text that's not in the figure area
-                                break;
-                            }
+                for pass in 0..2 {
+                    let check_bbox = if pass == 0 {
+                        curr_el.bbox.clone()
+                    } else {
+                        figure_bbox.clone()
+                    };
+                    for (i, existing_block) in blocks.iter().enumerate() {
+                        if blocks_to_remove.contains(&i) {
+                            continue;
                         }
-                        _ => {
-                            debug_print!("🖼️ Non-TextBlock, stopping search");
-                            break; // Stop at any other block type
+                        // Only check blocks on the same page
+                        if !existing_block.pages_id.contains(&curr_el.page_id) {
+                            continue;
+                        }
+                        let text = match &existing_block.kind {
+                            crate::blocks::BlockType::TextBlock(t) => &t.text,
+                            crate::blocks::BlockType::Title(t) => &t.text,
+                            _ => continue,
+                        };
+                        if is_likely_figure_embedded_text_from_block(existing_block, &check_bbox) {
+                            figure_elements.push(text.clone());
+                            figure_bbox.merge(&existing_block.bbox);
+                            blocks_to_remove.push(i);
                         }
                     }
                 }

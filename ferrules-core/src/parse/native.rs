@@ -247,31 +247,6 @@ pub(crate) fn parse_text_spans<'a>(
         }
     }
 
-    // Debug: Look for Vi-/Vifijil patterns in spans after creation
-    debug_print!("🔍 SPAN ANALYSIS: Created {} spans total", spans.len());
-    for (i, span) in spans.iter().enumerate() {
-        if span.text.contains("Vi") {
-            debug_print!("🔍 SPAN DEBUG[{}]: Found 'Vi' span: '{}'", i, span.text);
-        }
-        if span.text.contains("jil") {
-            debug_print!("🔍 SPAN DEBUG[{}]: Found 'jil' span: '{}'", i, span.text);
-        }
-        if span.text.contains("Vifijil") {
-            debug_print!(
-                "🔍 SPAN DEBUG[{}]: Found 'Vifijil' span: '{}'",
-                i,
-                span.text
-            );
-        }
-        if span.text.contains("Prompt Injection") {
-            debug_print!(
-                "🔍 SPAN DEBUG[{}]: Found 'Prompt Injection' span: '{}'",
-                i,
-                span.text
-            );
-        }
-    }
-
     spans
 }
 
@@ -401,7 +376,9 @@ impl ParseNativeQueue {
             }));
             alive_flag_clone.store(false, Ordering::SeqCst);
             match result {
-                Ok(()) => tracing::error!("Native parser thread exited normally (receiver closed)"),
+                Ok(()) => tracing::info!(
+                    "Native parser thread exited — queue channel closed (normal shutdown)"
+                ),
                 Err(panic_info) => {
                     let msg = if let Some(s) = panic_info.downcast_ref::<&str>() {
                         s.to_string()
