@@ -2856,8 +2856,12 @@ fn is_footnote_reference_in_context(
         // Exclude single mathematical variables (like 't', 'c', 'n') which should have subscripts
         // Check the LAST character of context (accumulated from possibly multiple spans)
         let last_char = ctx.chars().last();
+        // Context ending with lowercase letter (like "mc" in "mc²") suggests a math
+        // variable/expression, not a footnote. Only treat as footnote if context ends
+        // with uppercase, digit, or punctuation (e.g., "BERT¹", "Table1²", "text.²").
         let has_footnote_context = matches!(last_char, Some(',' | '.' | ')' | ']'))
-            || (ctx.len() > 1 && last_char.is_some_and(|c| c.is_ascii_alphanumeric()));
+            || (ctx.len() > 1
+                && last_char.is_some_and(|c| c.is_ascii_alphanumeric() && !c.is_ascii_lowercase()));
 
         if has_footnote_context {
             debug_print!(
