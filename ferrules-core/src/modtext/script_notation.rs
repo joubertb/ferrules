@@ -1467,6 +1467,48 @@ fn apply_clustering_formatting(spans: &[CharSpan]) -> String {
             );
         }
 
+        // IN-WORD STYLISTIC SUBSCRIPT/SUPERSCRIPT SUPPRESSION (clustering path)
+        // Suppress script tags when a SINGLE alphabetic character is positioned as
+        // sub/superscript but is physically adjacent to letters on both sides
+        // (no X-gap indicating a word boundary). This handles logos like "LaTeX"
+        // where "A" is typeset low but is not semantic.
+        // Does NOT suppress: multi-char subscripts (e.g., "KV" in C_KV),
+        // digit subscripts (H₂O), or subscripts with word-boundary gaps (D_S).
+        if (actual_is_sub || actual_is_sup)
+            && text_trimmed.chars().count() == 1
+            && text_trimmed.chars().all(|c| c.is_alphabetic())
+        {
+            let gap_threshold = span.font_size * 0.15;
+            let prev_adjacent = i > 0 && {
+                let prev = &spans[i - 1];
+                let gap = span.bbox.x0 - prev.bbox.x1;
+                prev.text
+                    .trim()
+                    .chars()
+                    .last()
+                    .is_some_and(|c| c.is_alphabetic())
+                    && gap < gap_threshold
+            };
+            let next_adjacent = i + 1 < spans.len() && {
+                let next = &spans[i + 1];
+                let gap = next.bbox.x0 - span.bbox.x1;
+                next.text
+                    .trim()
+                    .chars()
+                    .next()
+                    .is_some_and(|c| c.is_alphabetic())
+                    && gap < gap_threshold
+            };
+            if prev_adjacent && next_adjacent {
+                debug_print!(
+                    "🚫 CLUSTER IN-WORD SCRIPT SUPPRESSION: '{}' is sole script char physically adjacent to letters on both sides",
+                    text_trimmed
+                );
+                actual_is_sub = false;
+                actual_is_sup = false;
+            }
+        }
+
         // Choose tag based on whether this is a footnote reference
         let (sup_open, sup_close): (&'static str, &'static str) = if is_footnote {
             ("<foot>", "</foot>")
@@ -2171,6 +2213,47 @@ pub(crate) fn apply_text_formatting(spans: &[CharSpan]) -> String {
                         text_trimmed,
                         prev_text
                     );
+                }
+
+                // IN-WORD STYLISTIC SUBSCRIPT/SUPERSCRIPT SUPPRESSION
+                // Suppress script tags when an alphabetic character is the ONLY
+                // sub/superscript span in a continuous word (no whitespace gap on
+                // either side and neither neighbor is also sub/superscript).
+                // Handles logos like "LaTeX" where "A" is the sole lowered char.
+                // Does NOT suppress multi-char subscript groups like C_KV or digit
+                // subscripts like H₂O.
+                if (should_be_subscript || should_be_superscript)
+                    && text_trimmed.chars().count() == 1
+                    && text_trimmed.chars().all(|c| c.is_alphabetic())
+                {
+                    let prev_ends_alpha = i > 0
+                        && spans[i - 1]
+                            .text
+                            .chars()
+                            .last()
+                            .is_some_and(|c| c.is_alphabetic());
+                    let next_starts_alpha = i + 1 < spans.len()
+                        && spans[i + 1]
+                            .text
+                            .chars()
+                            .next()
+                            .is_some_and(|c| c.is_alphabetic());
+                    // Check that neighbors are NOT also sub/superscript.
+                    // Use font size as a proxy: subscript chars are typically smaller
+                    // than base font. If a neighbor has a script-sized font, it's part
+                    // of a multi-char subscript group (like "KV" in C_KV).
+                    let script_font_threshold = base_font_size * FONT_SIZE_SCRIPT_THRESHOLD;
+                    let prev_is_script = i > 0 && spans[i - 1].font_size < script_font_threshold;
+                    let next_is_script =
+                        i + 1 < spans.len() && spans[i + 1].font_size < script_font_threshold;
+                    if prev_ends_alpha && next_starts_alpha && !prev_is_script && !next_is_script {
+                        debug_print!(
+                            "🚫 IN-WORD SCRIPT SUPPRESSION: '{}' is sole script char in continuous word",
+                            text_trimmed
+                        );
+                        should_be_subscript = false;
+                        should_be_superscript = false;
+                    }
                 }
 
                 // Check for footnote reference pattern (using PDF positional + font data)
