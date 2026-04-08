@@ -132,6 +132,18 @@ pub fn should_add_space_between_spans(
     if curr_span.text == "." && prev_span.text.ends_with(|c: char| c.is_ascii_digit()) {
         return false;
     }
+    // Case 4: curr is a standalone "." and prev ends with a letter, closing bracket/paren,
+    // or closing HTML tag (e.g., "</sub>").  PDFs typeset math expressions with extra
+    // kerning, so sentence-ending periods after math variables (Q, V, k), parenthesized
+    // groups, or subscripted/superscripted text get a gap that exceeds the word-boundary
+    // threshold. The period is always punctuation, not a separate word.
+    if curr_span.text == "."
+        && prev_span
+            .text
+            .ends_with(|c: char| c.is_alphabetic() || c == ')' || c == ']' || c == '>')
+    {
+        return false;
+    }
 
     // Don't insert space between adjacent digits on the same line.
     // PDFs sometimes typeset numbers with wider kerning (e.g., "100" becomes spans "1" + "00").
@@ -300,7 +312,12 @@ pub fn should_add_space_simple(
     if curr_text == "." && prev_text.ends_with(|c: char| c.is_ascii_digit()) {
         return false;
     }
-
+    // Case 4: standalone "." after letter, closing bracket/paren, or closing HTML tag
+    if curr_text == "."
+        && prev_text.ends_with(|c: char| c.is_alphabetic() || c == ')' || c == ']' || c == '>')
+    {
+        return false;
+    }
     // Don't insert space between adjacent digits on the same line.
     if horizontal_gap_indicates_word_boundary
         && !vertical_gap_indicates_line_wrap

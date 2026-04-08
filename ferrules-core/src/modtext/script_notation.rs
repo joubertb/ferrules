@@ -1231,7 +1231,9 @@ fn is_real_subscript(
 
 /// Helper function to close a subscript or superscript tag
 fn close_script_tag(result: &mut String, tag: &str) {
-    // Always add a space after closing tags to prevent word concatenation
+    // Add a space after closing tags to prevent word concatenation.
+    // The spacing functions will skip inserting an additional space when they
+    // see the trailing space, so this is the only place we control it.
     result.push_str(tag);
     result.push(' ');
 }
@@ -1274,6 +1276,12 @@ lazy_static! {
     static ref SCRIPT_TAG_SPACING_REGEX: regex::Regex = regex::Regex::new(r"\s+</").unwrap();
     /// Pre-compiled regex for removing spaces after opening tags
     static ref SCRIPT_OPENING_TAG_SPACING_REGEX: regex::Regex = regex::Regex::new(r"(<su[bp]>|<b>|<foot>)\s+").unwrap();
+    /// Pre-compiled regex for removing spaces between closing tags and punctuation.
+    /// Matches: "</sub> ." or "</sup> ," etc.  The close_script_tag helper always
+    /// appends a space to prevent word concatenation, but that space is wrong when
+    /// the very next visible character is punctuation (period, comma, semicolon, colon).
+    static ref SCRIPT_CLOSE_PUNCT_SPACING_REGEX: regex::Regex =
+        regex::Regex::new(r"(</su[bp]>|</b>|</foot>|</formula>)\s+([.,;:!?])").unwrap();
     /// Pre-compiled regex for fixing adjacent script patterns
     static ref ADJACENT_SCRIPT_PATTERN_REGEX: regex::Regex = regex::Regex::new(r"<sup>([SH])(KV)</sup>").unwrap();
 }
@@ -1287,8 +1295,13 @@ fn fix_script_tag_spacing(text: &str) -> String {
     let step1 = SCRIPT_TAG_SPACING_REGEX.replace_all(text, "</");
 
     // Remove spaces after opening tags: "<sup> 2</sup>" -> "<sup>2</sup>"
-    SCRIPT_OPENING_TAG_SPACING_REGEX
-        .replace_all(&step1, "$1")
+    let step2 = SCRIPT_OPENING_TAG_SPACING_REGEX
+        .replace_all(&step1, "$1");
+
+    // Remove spaces between closing tags and punctuation:
+    // "</sub> ." -> "</sub>." and "</sup> ," -> "</sup>,"
+    SCRIPT_CLOSE_PUNCT_SPACING_REGEX
+        .replace_all(&step2, "$1$2")
         .to_string()
 }
 
