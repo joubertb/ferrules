@@ -1,16 +1,14 @@
-# Unified Dockerfile for ferrules-api (CPU and GPU)
+# Unified Dockerfile for ferrules-api
 #
-# CPU build (default):
+# Builds a single image that supports both CPU and GPU execution.
+# GPU acceleration is enabled at runtime via the --cuda flag
+# (added by docker-compose-gpu.yml). Without --cuda, ORT uses CPU only.
+#
+# Build:
 #   docker build -f ferrules/Dockerfile ferrules/
-#
-# GPU build:
-#   docker build -f ferrules/Dockerfile ferrules/ \
-#     --build-arg BASE_BUILD=nvidia/cuda:12.3.2-cudnn9-devel-ubuntu22.04 \
-#     --build-arg BASE_RUNTIME=nvidia/cuda:12.3.2-cudnn9-runtime-ubuntu22.04 \
-#     --build-arg GPU=1
 
-ARG BASE_BUILD=ubuntu:22.04
-ARG BASE_RUNTIME=ubuntu:22.04
+ARG BASE_BUILD=nvidia/cuda:12.8.1-cudnn-devel-ubuntu22.04
+ARG BASE_RUNTIME=nvidia/cuda:12.8.1-cudnn-runtime-ubuntu22.04
 
 # ============================================================
 # Builder stage
@@ -18,7 +16,6 @@ ARG BASE_RUNTIME=ubuntu:22.04
 FROM ${BASE_BUILD} AS builder
 
 ARG RUST_VERSION=nightly-2025-08-15
-ARG GPU=0
 ARG ONNXRUNTIME_VERSION=1.22.0
 
 WORKDIR /app
@@ -45,29 +42,20 @@ ENV PATH="/root/.cargo/bin:${PATH}"
 # Copy source code and essential files
 COPY . .
 
-# Build the application
-RUN cargo build --release -p ferrules-api
+# Build with ort-dynamic: ORT is loaded at runtime, enabling GPU/CPU selection
+RUN cargo build --release -p ferrules-api --features ferrules-core/ort-dynamic
 
-# Collect ONNX Runtime libraries into a single directory.
-# CPU: download the CPU-only ONNX Runtime (smaller, no CUDA deps).
-# GPU: copy the CUDA-enabled ONNX Runtime that ort fetched during cargo build.
+# Download GPU-enabled ONNX Runtime (includes CUDA/TensorRT EPs + CPU fallback)
 RUN mkdir -p /app/onnx_libs && \
-    if [ "${GPU}" = "0" ]; then \
-        echo "Downloading ONNX Runtime CPU ${ONNXRUNTIME_VERSION}..." && \
-        curl -L https://github.com/microsoft/onnxruntime/releases/download/v${ONNXRUNTIME_VERSION}/onnxruntime-linux-x64-${ONNXRUNTIME_VERSION}.tgz | \
-        tar xzf - -C /app/onnx_libs --strip-components=2 --wildcards "*/lib/libonnxruntime.so*"; \
-    else \
-        echo "Copying CUDA-enabled ONNX Runtime from build output..." && \
-        cp /app/target/release/*onnxruntime*.so* /app/onnx_libs/; \
-    fi && \
+    echo "Downloading ONNX Runtime GPU ${ONNXRUNTIME_VERSION}..." && \
+    curl -L https://github.com/microsoft/onnxruntime/releases/download/v${ONNXRUNTIME_VERSION}/onnxruntime-linux-x64-gpu-${ONNXRUNTIME_VERSION}.tgz | \
+    tar xzf - -C /app/onnx_libs --strip-components=2 --wildcards "*/lib/libonnxruntime*.so*" && \
     echo "ONNX Runtime libraries:" && ls -la /app/onnx_libs/
 
 # ============================================================
 # Runtime stage
 # ============================================================
 FROM ${BASE_RUNTIME}
-
-ARG GPU=0
 
 # Install runtime dependencies
 RUN apt-get update && apt-get install -y \
@@ -79,7 +67,7 @@ RUN apt-get update && apt-get install -y \
 # Create app directory structure
 RUN mkdir -p /app/models /app/scripts
 
-# Set CUDA paths (only meaningful for GPU builds, harmless on CPU)
+# Set CUDA paths (harmless on CPU-only execution)
 ENV CUDA_HOME=/usr/local/cuda
 ENV PATH="${CUDA_HOME}/bin:${PATH}"
 ENV LD_LIBRARY_PATH="${CUDA_HOME}/lib64:${LD_LIBRARY_PATH}"

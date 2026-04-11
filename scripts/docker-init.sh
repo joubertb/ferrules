@@ -41,7 +41,17 @@ if ! health_check; then
     exit 1
 fi
 
+# Auto-detect GPU: if nvidia-smi is available and working, enable CUDA
+GPU_ARGS=""
+if command -v nvidia-smi &>/dev/null && nvidia-smi &>/dev/null; then
+    GPU_NAME=$(nvidia-smi --query-gpu=name --format=csv,noheader 2>/dev/null | head -1)
+    echo "🎮 GPU detected: ${GPU_NAME:-unknown}, enabling CUDA acceleration"
+    GPU_ARGS="--cuda"
+else
+    echo "💻 No GPU detected, using CPU execution"
+fi
+
 echo "🎯 Starting Ferrules API with text corrections..."
 
-# Execute the main application
-exec "$@"
+# Execute the main application with GPU args prepended
+exec "$1" $GPU_ARGS "${@:2}"

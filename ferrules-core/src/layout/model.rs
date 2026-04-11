@@ -1,16 +1,18 @@
 use anyhow::{bail, Context};
 use image::{imageops::FilterType, DynamicImage, GenericImageView};
 use lazy_static::lazy_static;
-use ndarray::{s, Array4, ArrayBase, Axis, Dim, OwnedRepr};
+use ndarray::{s, Array3, Array4, ArrayBase, Axis, Dim, OwnedRepr};
 use ort::{
     execution_providers::{
         CPUExecutionProvider, CUDAExecutionProvider, CoreMLExecutionProvider,
         TensorRTExecutionProvider,
     },
-    session::{builder::GraphOptimizationLevel, Session},
+    session::{builder::GraphOptimizationLevel, run_options::RunOptions, Session},
+    value::TensorRef,
 };
 use rkyv::{Archive, Deserialize as RkyvDeserialize, Serialize as RkyvSerialize};
 use std::sync::Mutex;
+use tokio::sync::Mutex as TokioMutex;
 
 use crate::entities::BBox;
 
@@ -134,7 +136,7 @@ impl LayoutBBox {
 
 #[derive(Debug)]
 pub struct ORTLayoutParser {
-    session: Session,
+    session: TokioMutex<Session>,
     output_name: String,
     pub config: ORTConfig,
     buffer_pool: Mutex<Vec<Array4<f32>>>,
@@ -162,17 +164,21 @@ impl ORTLayoutParser {
         &self,
         input: &Array4<f32>,
     ) -> anyhow::Result<ArrayBase<OwnedRepr<f32>, Dim<[usize; 3]>>> {
-        let outputs = &self.session.run_async(ort::inputs![input.view()]?)?.await?;
+        let run_options = RunOptions::new()?;
+        let mut session = self.session.lock().await;
+        let outputs = session
+            .run_async(ort::inputs![TensorRef::from_array_view(input.view())?], &run_options)?
+            .await?;
 
-        let output_tensor = outputs
+        let output_val = outputs
             .get(&self.output_name)
-            .context("can't get the value of first output")?
-            .try_extract_tensor::<f32>()?;
-
-        let output_tensor = output_tensor
-            .to_shape(Self::OUTPUT_SIZE)
-            .unwrap()
-            .to_owned();
+            .context("can't get the value of first output")?;
+        let (shape, data) = output_val.try_extract_tensor::<f32>()?;
+        let shape_vec: Vec<usize> = shape.iter().map(|&i| i as usize).collect();
+        let output_tensor = Array3::<f32>::from_shape_vec(
+            [shape_vec[0], shape_vec[1], shape_vec[2]],
+            data.to_vec(),
+        )?;
 
         Ok(output_tensor)
     }
@@ -183,18 +189,21 @@ impl ORTLayoutParser {
         input: Array4<f32>,
     ) -> anyhow::Result<ndarray::Array3<f32>> {
         let batch_size = input.dim().0;
-        let outputs = &self.session.run_async(ort::inputs![input]?)?.await?;
+        let run_options = RunOptions::new()?;
+        let mut session = self.session.lock().await;
+        let outputs = session
+            .run_async(
+                ort::inputs![TensorRef::from_array_view(input.view())?],
+                &run_options,
+            )?
+            .await?;
 
-        let output_tensor = outputs
+        let output_val = outputs
             .get(&self.output_name)
-            .context("can't get the value of first output")?
-            .try_extract_tensor::<f32>()?;
-
+            .context("can't get the value of first output")?;
+        let (_shape, data) = output_val.try_extract_tensor::<f32>()?;
         // Adjust output shape to [batch_size, classes + bbox, candidate_boxes]
-        let output_tensor = output_tensor
-            .to_shape([batch_size, 15, 21504])
-            .unwrap()
-            .to_owned();
+        let output_tensor = Array3::<f32>::from_shape_vec([batch_size, 15, 21504], data.to_vec())?;
 
         Ok(output_tensor)
     }
@@ -246,11 +255,8 @@ impl ORTLayoutParser {
                 }
                 OrtExecutionProvider::CoreML { ane_only } => {
                     let provider = CoreMLExecutionProvider::default();
-                    let provider = if ane_only {
-                        provider.with_ane_only().build()
-                    } else {
-                        provider.build()
-                    };
+                    let _ = ane_only; // with_ane_only() removed in ort rc.10
+                    let provider = provider.build();
                     execution_providers.push(provider)
                 }
                 OrtExecutionProvider::CPU => {
@@ -286,7 +292,7 @@ impl ORTLayoutParser {
             .to_owned();
 
         let parser = Self {
-            session,
+            session: TokioMutex::new(session),
             output_name,
             config,
             buffer_pool: Mutex::new(Vec::with_capacity(32)),
@@ -301,14 +307,18 @@ impl ORTLayoutParser {
 
     #[tracing::instrument(skip(self))]
     fn warmup(&self) -> anyhow::Result<()> {
-        let input = Array4::zeros([
+        let input: Array4<f32> = Array4::zeros([
             1,
             3,
             Self::REQUIRED_HEIGHT as usize,
             Self::REQUIRED_WIDTH as usize,
         ]);
-        // We use the sync run method for warmup during initialization
-        let _ = self.run(&input)?;
+        // Use try_lock during init — no contention possible yet.
+        // This avoids blocking_lock() panic when called from within a tokio runtime.
+        let mut session = self.session.try_lock().context("Session lock held during warmup")?;
+        let outputs = session.run(ort::inputs![TensorRef::from_array_view(input.view())?])?;
+        drop(outputs);
+        drop(session);
         tracing::info!("Layout model warmup complete");
         Ok(())
     }
@@ -317,17 +327,18 @@ impl ORTLayoutParser {
         &self,
         input: &Array4<f32>,
     ) -> anyhow::Result<ArrayBase<OwnedRepr<f32>, Dim<[usize; 3]>>> {
-        let outputs = &self.session.run(ort::inputs![input.view()]?)?;
+        let mut session = self.session.blocking_lock();
+        let outputs = session.run(ort::inputs![TensorRef::from_array_view(input.view())?])?;
 
-        let output_tensor = outputs
+        let output_val = outputs
             .get(&self.output_name)
-            .context("can't get the value of first output")?
-            .try_extract_tensor::<f32>()?;
-
-        let output_tensor = output_tensor
-            .to_shape(Self::OUTPUT_SIZE)
-            .unwrap()
-            .to_owned();
+            .context("can't get the value of first output")?;
+        let (shape, data) = output_val.try_extract_tensor::<f32>()?;
+        let shape_vec: Vec<usize> = shape.iter().map(|&i| i as usize).collect();
+        let output_tensor = Array3::<f32>::from_shape_vec(
+            [shape_vec[0], shape_vec[1], shape_vec[2]],
+            data.to_vec(),
+        )?;
 
         Ok(output_tensor)
     }
@@ -335,17 +346,15 @@ impl ORTLayoutParser {
     #[tracing::instrument(skip_all)]
     pub fn run_batch(&self, input: Array4<f32>) -> anyhow::Result<ndarray::Array3<f32>> {
         let batch_size = input.dim().0;
-        let outputs = &self.session.run(ort::inputs![input]?)?;
+        let mut session = self.session.blocking_lock();
+        let outputs =
+            session.run(ort::inputs![TensorRef::from_array_view(input.view())?])?;
 
-        let output_tensor = outputs
+        let output_val = outputs
             .get(&self.output_name)
-            .context("can't get the value of first output")?
-            .try_extract_tensor::<f32>()?;
-
-        let output_tensor = output_tensor
-            .to_shape([batch_size, 15, 21504])
-            .unwrap()
-            .to_owned();
+            .context("can't get the value of first output")?;
+        let (_shape, data) = output_val.try_extract_tensor::<f32>()?;
+        let output_tensor = Array3::<f32>::from_shape_vec([batch_size, 15, 21504], data.to_vec())?;
 
         Ok(output_tensor)
     }

@@ -40,7 +40,7 @@ lopdf = "0.34.0"
 # Inference
 image = "0.25.5"
 ndarray = "0.16.1"
-ort = { version = "=2.0.0-rc.9", features = ["fetch-models"] }
+ort = { version = "=2.0.0-rc.10", features = ["fetch-models"] }
 serde_millis = "0.1.1"
 rand = "0.8.5"
 # Rendering
@@ -61,9 +61,11 @@ default = ["correction-engine", "modtext"]
 correction-engine = ["spellbook", "moka"]
 metrics = ["dep:metrics"]
 modtext = []
+# Enable dynamic loading of ONNX Runtime .so at runtime (used in Docker GPU builds)
+ort-dynamic = ["ort/load-dynamic"]
 
 [target.'cfg(target_os = "macos")'.dependencies]
-ort = { version = "=2.0.0-rc.9", features = ["coreml", "fetch-models", "half"] }
+ort = { version = "=2.0.0-rc.10", features = ["coreml", "fetch-models", "half"] }
 objc2 = { version = "^0.6.4" }
 objc2-core-foundation = { version = "^0.3.2" }
 objc2-foundation = { version = "^0.3.2" }
@@ -77,12 +79,11 @@ objc2-vision = { version = "^0.3.2", features = [
 ] }
 
 [target.'cfg(target_os = "linux")'.dependencies]
-ort = { version = "=2.0.0-rc.9", features = [
+ort = { version = "=2.0.0-rc.10", features = [
     "fetch-models",
     "half",
     "cuda",
     "tensorrt",
-    "load-dynamic",
 ] }
 
 [dev-dependencies]

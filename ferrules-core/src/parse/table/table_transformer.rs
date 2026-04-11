@@ -4,13 +4,15 @@ use std::time::Duration;
 
 use image::imageops::FilterType;
 use image::{DynamicImage, GenericImageView};
-use ndarray::{s, stack, Array4, ArrayD, Axis};
+use ndarray::{s, stack, Array4, ArrayD, Axis, OwnedRepr};
 use ort::execution_providers::{
     CPUExecutionProvider, CUDAExecutionProvider, CoreMLExecutionProvider, TensorRTExecutionProvider,
 };
 use ort::session::builder::GraphOptimizationLevel;
+use ort::session::run_options::RunOptions;
 use ort::session::Session;
-use tokio::sync::{mpsc, oneshot};
+use ort::value::TensorRef;
+use tokio::sync::{mpsc, oneshot, Mutex as TokioMutex};
 use tokio::time::timeout;
 use tracing::Instrument;
 
@@ -39,7 +41,7 @@ struct InferenceRequest {
 }
 
 struct BatchInferenceRunner {
-    session: Arc<Session>,
+    session: Arc<TokioMutex<Session>>,
     rx: mpsc::Receiver<InferenceRequest>,
     max_batch_size: usize,
     batch_timeout: Duration,
@@ -54,7 +56,7 @@ impl BatchInferenceRunner {
 
     fn new(session: Session, rx: mpsc::Receiver<InferenceRequest>, is_fp16: bool) -> Self {
         Self {
-            session: Arc::new(session),
+            session: Arc::new(TokioMutex::new(session)),
             rx,
             max_batch_size: Self::MAX_BATCH_SIZE,
             batch_timeout: Self::BATCH_TIMEOUT,
@@ -146,29 +148,61 @@ impl BatchInferenceRunner {
             // 3. Run Inference (Async)
             let run_start = tokio::time::Instant::now();
             let run_result = async {
+                let run_options = RunOptions::new()?;
+                let mut session = self.session.lock().await;
                 if self.is_fp16 {
                     let input_f16 = batch_tensor.mapv(half::f16::from_f32);
-                    let outputs = self.session.run_async(ort::inputs![input_f16]?)?.await?;
-                    let logits = outputs["logits"]
-                        .try_extract_tensor::<half::f16>()?
-                        .mapv(|x| x.to_f32())
-                        .into_dyn();
-                    let boxes = outputs["pred_boxes"]
-                        .try_extract_tensor::<half::f16>()?
-                        .mapv(|x| x.to_f32())
-                        .into_dyn();
-                    Ok::<_, ort::Error>((logits, boxes))
+                    let outputs = session
+                        .run_async(
+                            ort::inputs![TensorRef::from_array_view(input_f16.view())?],
+                            &run_options,
+                        )?
+                        .await?;
+                    let (logits_shape, logits_data) =
+                        outputs["logits"].try_extract_tensor::<half::f16>()?;
+                    let logits_shape_vec: Vec<usize> =
+                        logits_shape.iter().map(|&i| i as usize).collect();
+                    let logits_data_f32: Vec<f32> =
+                        logits_data.iter().map(|x| x.to_f32()).collect();
+                    let logits = ndarray::ArrayBase::<OwnedRepr<f32>, ndarray::IxDyn>::from_shape_vec(
+                        logits_shape_vec,
+                        logits_data_f32,
+                    )?;
+                    let (boxes_shape, boxes_data) =
+                        outputs["pred_boxes"].try_extract_tensor::<half::f16>()?;
+                    let boxes_shape_vec: Vec<usize> =
+                        boxes_shape.iter().map(|&i| i as usize).collect();
+                    let boxes_data_f32: Vec<f32> =
+                        boxes_data.iter().map(|x| x.to_f32()).collect();
+                    let boxes = ndarray::ArrayBase::<OwnedRepr<f32>, ndarray::IxDyn>::from_shape_vec(
+                        boxes_shape_vec,
+                        boxes_data_f32,
+                    )?;
+                    Ok::<_, anyhow::Error>((logits, boxes))
                 } else {
-                    let outputs = self.session.run_async(ort::inputs![batch_tensor]?)?.await?;
-                    let logits = outputs["logits"]
-                        .try_extract_tensor::<f32>()?
-                        .to_owned()
-                        .into_dyn();
-                    let boxes = outputs["pred_boxes"]
-                        .try_extract_tensor::<f32>()?
-                        .to_owned()
-                        .into_dyn();
-                    Ok::<_, ort::Error>((logits, boxes))
+                    let outputs = session
+                        .run_async(
+                            ort::inputs![TensorRef::from_array_view(batch_tensor.view())?],
+                            &run_options,
+                        )?
+                        .await?;
+                    let (logits_shape, logits_data) =
+                        outputs["logits"].try_extract_tensor::<f32>()?;
+                    let logits_shape_vec: Vec<usize> =
+                        logits_shape.iter().map(|&i| i as usize).collect();
+                    let logits = ndarray::ArrayBase::<OwnedRepr<f32>, ndarray::IxDyn>::from_shape_vec(
+                        logits_shape_vec,
+                        logits_data.to_vec(),
+                    )?;
+                    let (boxes_shape, boxes_data) =
+                        outputs["pred_boxes"].try_extract_tensor::<f32>()?;
+                    let boxes_shape_vec: Vec<usize> =
+                        boxes_shape.iter().map(|&i| i as usize).collect();
+                    let boxes = ndarray::ArrayBase::<OwnedRepr<f32>, ndarray::IxDyn>::from_shape_vec(
+                        boxes_shape_vec,
+                        boxes_data.to_vec(),
+                    )?;
+                    Ok::<_, anyhow::Error>((logits, boxes))
                 }
             }
             .await;
@@ -262,11 +296,8 @@ impl TableTransformerStandard {
                 }
                 crate::layout::model::OrtExecutionProvider::CoreML { ane_only } => {
                     let provider = CoreMLExecutionProvider::default();
-                    let provider = if ane_only {
-                        provider.with_ane_only().build()
-                    } else {
-                        provider.build()
-                    };
+                    let _ = ane_only; // with_ane_only() removed in ort rc.10
+                    let provider = provider.build();
                     execution_providers.push(provider)
                 }
                 crate::layout::model::OrtExecutionProvider::CPU => {
@@ -675,11 +706,8 @@ impl TableTransformer {
                 }
                 crate::layout::model::OrtExecutionProvider::CoreML { ane_only } => {
                     let provider = CoreMLExecutionProvider::default();
-                    let provider = if ane_only {
-                        provider.with_ane_only().build()
-                    } else {
-                        provider.build()
-                    };
+                    let _ = ane_only; // with_ane_only() removed in ort rc.10
+                    let provider = provider.build();
                     execution_providers.push(provider)
                 }
                 crate::layout::model::OrtExecutionProvider::CPU => {

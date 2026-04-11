@@ -143,6 +143,17 @@ struct Args {
     profile_table: bool,
 }
 
+/// Check if an error is GPU-related and exit the process if so.
+/// On restart, docker-init.sh will re-detect GPU availability and fall back to CPU if needed.
+fn check_gpu_error_and_exit(error: &dyn std::fmt::Display) {
+    let err_msg = error.to_string().to_lowercase();
+    if err_msg.contains("cuda") || err_msg.contains("gpu") || err_msg.contains("device") {
+        tracing::error!("GPU error detected: {}", error);
+        tracing::error!("Exiting process for restart with CPU fallback");
+        std::process::exit(1);
+    }
+}
+
 fn parse_ep_args(args: &Args) -> Vec<OrtExecutionProvider> {
     let mut providers = Vec::new();
     if args.trt {
@@ -853,6 +864,7 @@ async fn parse_document_handler(
         )
         .await
         .map_err(|e| {
+            check_gpu_error_and_exit(&e);
             clear_debug_context(); // Clear on error
             (
                 StatusCode::INTERNAL_SERVER_ERROR,
@@ -1273,6 +1285,7 @@ async fn parse_document_sse_handler(
                 }
             }
             Err(e) => {
+                check_gpu_error_and_exit(&e);
                 // Check if the error is due to cancellation
                 if e.to_string().contains("cancelled") {
                     tracing::info!("Document processing was cancelled: {}", e);

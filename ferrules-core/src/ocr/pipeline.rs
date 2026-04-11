@@ -13,6 +13,7 @@ use std::sync::Mutex;
 use ort::{
     execution_providers::{CPUExecutionProvider, CUDAExecutionProvider, TensorRTExecutionProvider},
     session::{builder::GraphOptimizationLevel, Session},
+    value::TensorRef,
 };
 
 use super::detection::{self, TextRegion};
@@ -71,7 +72,7 @@ fn extract_rec_input_height(session: &Session) -> anyhow::Result<u32> {
 
     let dims = input
         .input_type
-        .tensor_dimensions()
+        .tensor_shape()
         .context("Recognition model input is not a tensor")?;
     anyhow::ensure!(
         dims.len() == 4,
@@ -101,7 +102,7 @@ fn get_det_session() -> anyhow::Result<&'static Mutex<OcrSession>> {
 fn get_rec_session() -> anyhow::Result<&'static Mutex<OcrSession>> {
     REC_SESSION
         .get_or_try_init(|| -> anyhow::Result<Mutex<OcrSession>> {
-            let ocr_session = build_session(REC_MODEL_BYTES)?;
+            let mut ocr_session = build_session(REC_MODEL_BYTES)?;
 
             let model_height = extract_rec_input_height(&ocr_session.session)?;
             REC_INPUT_HEIGHT.get_or_init(|| model_height);
@@ -112,15 +113,15 @@ fn get_rec_session() -> anyhow::Result<&'static Mutex<OcrSession>> {
                 let dummy = Array4::<f32>::zeros((1, 3, model_height as usize, 16));
                 let dummy_out = ocr_session
                     .session
-                    .run(ort::inputs![dummy.view()]?)
+                    .run(ort::inputs![TensorRef::from_array_view(dummy.view())?])
                     .context("Validation: dummy inference failed")?;
                 let dummy_tensor = dummy_out
                     .get(&ocr_session.output_name)
                     .context("Validation: output not found")?;
-                let dummy_array = dummy_tensor
+                let (dummy_shape, _dummy_data) = dummy_tensor
                     .try_extract_tensor::<f32>()
                     .context("Validation: failed to extract tensor")?;
-                dummy_array.shape()[2]
+                dummy_shape[2] as usize
             };
             let dict_num_classes = dictionary::num_classes();
             anyhow::ensure!(
@@ -161,29 +162,25 @@ pub fn detect_text_regions(image: &DynamicImage) -> anyhow::Result<Vec<TextRegio
 
     // Run detection inference (mutex-protected for GPU EP safety)
     let det = get_det_session()?;
-    let det_guard = det
+    let mut det_guard = det
         .lock()
         .map_err(|e| anyhow::anyhow!("Detection session lock poisoned: {}", e))?;
 
+    let det_output_name = det_guard.output_name.clone();
     let outputs = det_guard
         .session
-        .run(ort::inputs![input_tensor.view()]?)
+        .run(ort::inputs![TensorRef::from_array_view(input_tensor.view())?])
         .context("DBNet detection inference failed")?;
 
-    let output_tensor = outputs.get(&det_guard.output_name).with_context(|| {
-        format!(
-            "Detection model output '{}' not found",
-            det_guard.output_name
-        )
+    let output_tensor = outputs.get(&det_output_name).with_context(|| {
+        format!("Detection model output '{}' not found", det_output_name)
     })?;
 
-    let output_array = output_tensor
+    let (_output_shape, output_data) = output_tensor
         .try_extract_tensor::<f32>()
         .context("Failed to extract detection output tensor")?;
 
-    let pred = output_array
-        .as_slice()
-        .context("Detection output not contiguous")?;
+    let pred: &[f32] = output_data;
 
     // Postprocess while still holding the lock — avoids copying ~3.5MB of pred data.
     // Postprocessing is fast CPU work (~1ms) so the added mutex hold time is negligible.
@@ -206,33 +203,26 @@ pub fn recognize_text(crops: &[DynamicImage]) -> anyhow::Result<Vec<(String, f32
 
     // Run recognition inference (mutex-protected for GPU EP safety)
     let rec = get_rec_session()?;
-    let rec_guard = rec
+    let mut rec_guard = rec
         .lock()
         .map_err(|e| anyhow::anyhow!("Recognition session lock poisoned: {}", e))?;
 
+    let rec_output_name = rec_guard.output_name.clone();
     let outputs = rec_guard
         .session
-        .run(ort::inputs![input_tensor.view()]?)
+        .run(ort::inputs![TensorRef::from_array_view(input_tensor.view())?])
         .context("SVTR recognition inference failed")?;
 
-    let output_tensor = outputs.get(&rec_guard.output_name).with_context(|| {
-        format!(
-            "Recognition model output '{}' not found",
-            rec_guard.output_name
-        )
+    let output_tensor = outputs.get(&rec_output_name).with_context(|| {
+        format!("Recognition model output '{}' not found", rec_output_name)
     })?;
 
-    let output_array = output_tensor
+    let (output_shape, output_data) = output_tensor
         .try_extract_tensor::<f32>()
         .context("Failed to extract recognition output tensor")?;
 
-    let shape = output_array.shape();
-    let seq_len = shape[1];
-    let num_classes = shape[2];
-
-    let output_data = output_array
-        .as_slice()
-        .context("Recognition output not contiguous")?;
+    let seq_len = output_shape[1] as usize;
+    let num_classes = output_shape[2] as usize;
 
     let output_owned: Vec<f32> = output_data.to_vec();
     drop(outputs);
