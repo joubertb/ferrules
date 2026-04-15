@@ -4,10 +4,10 @@
 
 ## macOS Development
 
-Must be started manually (Docker incompatible on Mac):
-```bash
-cd ferrules && cargo run --release --bin ferrules-api
-```
+Auto-started by `start.speakdoc development run` as a host process (Docker incompatible on Mac).
+To build: `start.speakdoc development build --ferrules` (runs `cargo build --release`).
+To skip auto-start: `start.speakdoc development run --no-ferrules-autostart`.
+To start manually: `cd ferrules && cargo run --release --bin ferrules-api`.
 Logs to `ferrules-api.log` in ferrules directory.
 
 ## Development
