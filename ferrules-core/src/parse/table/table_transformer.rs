@@ -4,9 +4,10 @@ use std::time::Duration;
 
 use image::imageops::FilterType;
 use image::{DynamicImage, GenericImageView};
+use lazy_static::lazy_static;
 use ndarray::{s, stack, Array4, ArrayD, Axis, OwnedRepr};
 use ort::execution_providers::{
-    CPUExecutionProvider, CUDAExecutionProvider, CoreMLExecutionProvider, TensorRTExecutionProvider,
+    CPUExecutionProvider, CUDAExecutionProvider, TensorRTExecutionProvider,
 };
 use ort::session::builder::GraphOptimizationLevel;
 use ort::session::run_options::RunOptions;
@@ -15,6 +16,8 @@ use ort::value::TensorRef;
 use tokio::sync::{mpsc, oneshot, Mutex as TokioMutex};
 use tokio::time::timeout;
 use tracing::Instrument;
+
+use crate::onnx_coreml::{build_coreml_provider, fnv1a_hex8, per_model_cache_dir};
 
 use crate::blocks::{TableAlgorithm, TableBlock};
 use crate::entities::BBox;
@@ -26,6 +29,15 @@ pub const TABLE_MODEL_BYTES: &[u8] =
 
 pub const TABLE_MODEL_ANE_BYTES: &[u8] =
     include_bytes!("../../../../models/table-transformer-structure-recognition-ane-b4.onnx");
+
+lazy_static! {
+    static ref TABLE_MODEL_CACHE_KEY: String =
+        format!("table-structure-fp16-v{}", fnv1a_hex8(TABLE_MODEL_BYTES));
+    static ref TABLE_MODEL_ANE_CACHE_KEY: String = format!(
+        "table-structure-ane-b4-v{}",
+        fnv1a_hex8(TABLE_MODEL_ANE_BYTES)
+    );
+}
 
 #[allow(dead_code)]
 #[derive(Clone)]
@@ -295,10 +307,11 @@ impl TableTransformerStandard {
                     );
                 }
                 crate::layout::model::OrtExecutionProvider::CoreML { ane_only } => {
-                    let provider = CoreMLExecutionProvider::default();
-                    let _ = ane_only; // with_ane_only() removed in ort rc.10
-                    let provider = provider.build();
-                    execution_providers.push(provider)
+                    let cache = config
+                        .model_cache_dir
+                        .as_deref()
+                        .and_then(|root| per_model_cache_dir(root, &TABLE_MODEL_CACHE_KEY));
+                    execution_providers.push(build_coreml_provider(ane_only, cache.as_deref()));
                 }
                 crate::layout::model::OrtExecutionProvider::CPU => {
                     execution_providers.push(CPUExecutionProvider::default().build());
@@ -705,10 +718,11 @@ impl TableTransformer {
                     );
                 }
                 crate::layout::model::OrtExecutionProvider::CoreML { ane_only } => {
-                    let provider = CoreMLExecutionProvider::default();
-                    let _ = ane_only; // with_ane_only() removed in ort rc.10
-                    let provider = provider.build();
-                    execution_providers.push(provider)
+                    let cache = config
+                        .model_cache_dir
+                        .as_deref()
+                        .and_then(|root| per_model_cache_dir(root, &TABLE_MODEL_ANE_CACHE_KEY));
+                    execution_providers.push(build_coreml_provider(ane_only, cache.as_deref()));
                 }
                 crate::layout::model::OrtExecutionProvider::CPU => {
                     execution_providers.push(CPUExecutionProvider::default().build());

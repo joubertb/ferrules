@@ -3,13 +3,12 @@ use image::{imageops::FilterType, DynamicImage, GenericImageView};
 use lazy_static::lazy_static;
 use ndarray::{s, Array3, Array4, ArrayBase, Axis, Dim, OwnedRepr};
 use ort::{
-    execution_providers::{
-        CPUExecutionProvider, CUDAExecutionProvider, CoreMLExecutionProvider,
-        TensorRTExecutionProvider,
-    },
+    execution_providers::{CPUExecutionProvider, CUDAExecutionProvider, TensorRTExecutionProvider},
     session::{builder::GraphOptimizationLevel, run_options::RunOptions, Session},
     value::TensorRef,
 };
+
+use crate::onnx_coreml::{build_coreml_provider, fnv1a_hex8, per_model_cache_dir};
 use rkyv::{Archive, Deserialize as RkyvDeserialize, Serialize as RkyvSerialize};
 use std::sync::Mutex;
 use tokio::sync::Mutex as TokioMutex;
@@ -47,6 +46,11 @@ pub struct ORTConfig {
     pub warmup: bool,
     pub profile_layout: Option<std::path::PathBuf>,
     pub profile_table: Option<std::path::PathBuf>,
+    /// Root directory for caching compiled CoreML models. When set, each
+    /// ONNX session writes its `.mlmodelc` to a hash-keyed subdirectory
+    /// beneath this path, avoiding recompilation on every restart. When
+    /// `None`, CoreML falls back to its default (typically `/tmp`).
+    pub model_cache_dir: Option<std::path::PathBuf>,
 }
 
 impl ORTConfig {
@@ -91,8 +95,17 @@ impl Default for ORTConfig {
             warmup: false,
             profile_layout: None,
             profile_table: None,
+            model_cache_dir: None,
         }
     }
+}
+
+lazy_static! {
+    /// Per-model cache key (hash of the embedded ONNX bytes). Recomputed
+    /// once at first use; stable within a binary release, so cached
+    /// `.mlmodelc` artifacts remain valid across restarts of the same build.
+    static ref LAYOUT_MODEL_CACHE_KEY: String =
+        format!("layout-yolov8s-doclaynet-v{}", fnv1a_hex8(LAYOUT_MODEL_BYTES));
 }
 
 lazy_static! {
@@ -215,10 +228,6 @@ impl ORTLayoutParser {
     /// Required height of the input image for layout parsing.
     pub const REQUIRED_HEIGHT: u32 = 1024;
 
-    // Output size of the tensor from the ONNX model.
-    // It has dimensions [batch_size = 1, classes + bbox = 15, candidate_boxes = 21504].
-    const OUTPUT_SIZE: [usize; 3] = [1, 15, 21504];
-
     /// Confidence threshold for filtering out low probability bounding boxes.
     /// Bounding boxes with probability below this threshold will be ignored.
     pub const CONF_THRESHOLD: f32 = 0.1;
@@ -254,10 +263,11 @@ impl ORTLayoutParser {
                     );
                 }
                 OrtExecutionProvider::CoreML { ane_only } => {
-                    let provider = CoreMLExecutionProvider::default();
-                    let _ = ane_only; // with_ane_only() removed in ort rc.10
-                    let provider = provider.build();
-                    execution_providers.push(provider)
+                    let cache = config
+                        .model_cache_dir
+                        .as_deref()
+                        .and_then(|root| per_model_cache_dir(root, &LAYOUT_MODEL_CACHE_KEY));
+                    execution_providers.push(build_coreml_provider(ane_only, cache.as_deref()));
                 }
                 OrtExecutionProvider::CPU => {
                     execution_providers.push(CPUExecutionProvider::default().build());

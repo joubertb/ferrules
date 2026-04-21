@@ -97,6 +97,7 @@ pub mod layout;
 pub mod metrics;
 
 pub mod ocr;
+pub mod onnx_coreml;
 pub mod render;
 pub mod sentence_detection;
 pub mod spacing;

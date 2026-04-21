@@ -297,6 +297,7 @@ async fn main() {
         } else {
             None
         },
+        model_cache_dir: None,
     };
 
     let page_range = match args.page_range {

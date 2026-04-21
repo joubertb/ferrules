@@ -141,6 +141,30 @@ struct Args {
         help = "Enable profiling for the table transformer model (saved as .json)"
     )]
     profile_table: bool,
+
+    /// Directory to cache compiled CoreML models (persists across restarts).
+    /// Pass "none" or "disable" to skip caching entirely. When unset, defaults
+    /// to `$XDG_CACHE_HOME/ferrules/coreml` (or the platform equivalent).
+    #[arg(long, env = "FERRULES_COREML_CACHE_DIR")]
+    model_cache_dir: Option<String>,
+}
+
+/// Resolve the effective CoreML model cache root. Returns `None` if the user
+/// explicitly disabled caching or if no default location can be determined.
+fn resolve_coreml_cache_dir(raw: Option<&str>) -> Option<PathBuf> {
+    if let Some(value) = raw {
+        let trimmed = value.trim();
+        if trimmed.is_empty()
+            || trimmed.eq_ignore_ascii_case("none")
+            || trimmed.eq_ignore_ascii_case("disable")
+            || trimmed.eq_ignore_ascii_case("off")
+        {
+            return None;
+        }
+        return Some(PathBuf::from(trimmed));
+    }
+    let base = dirs::cache_dir()?;
+    Some(base.join("ferrules").join("coreml"))
 }
 
 /// Check if an error is GPU-related and exit the process if so.
@@ -603,6 +627,13 @@ async fn main() {
         .install_recorder()
         .expect("failed to install Prometheus recorder");
 
+    let model_cache_dir = resolve_coreml_cache_dir(args.model_cache_dir.as_deref());
+    if let Some(ref dir) = model_cache_dir {
+        tracing::info!("CoreML model cache directory: {:?}", dir);
+    } else {
+        tracing::info!("CoreML model cache disabled; models will recompile on each start");
+    }
+
     let ort_config = ORTConfig {
         execution_providers: providers,
         intra_threads: args.intra_threads,
@@ -619,6 +650,7 @@ async fn main() {
         } else {
             None
         },
+        model_cache_dir,
     };
     // Initialize the layout model and queues
     let parser = FerrulesParser::new(ort_config);
