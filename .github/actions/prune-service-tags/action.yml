@@ -1,0 +1,92 @@
+name: Prune numeric Docker Hub tags for a service
+description: Keep the N highest `<service>-<int>` tags on Docker Hub; delete older ones.
+inputs:
+  service:
+    description: Service prefix (e.g. `api`, `worker`). Tags matching `<service>-<digits>` are candidates.
+    required: true
+  keep:
+    description: Number of newest numeric tags to keep.
+    required: false
+    default: '3'
+  repo:
+    description: Docker Hub repo in `<namespace>/<name>` form.
+    required: false
+    default: joubertb/repos
+  username:
+    description: Docker Hub username. Needed to exchange the PAT for a JWT.
+    required: true
+  token:
+    description: Docker Hub PAT. Must have Read+Write+Delete scope; otherwise DELETE calls 403 and the step emits warnings.
+    required: true
+runs:
+  using: composite
+  steps:
+    - name: Prune
+      shell: bash
+      env:
+        SERVICE: ${{ inputs.service }}
+        KEEP: ${{ inputs.keep }}
+        REPO: ${{ inputs.repo }}
+        DH_USER: ${{ inputs.username }}
+        DH_TOKEN: ${{ inputs.token }}
+      run: |
+        set -euo pipefail
+
+        JWT=$(curl -sS --fail -X POST https://hub.docker.com/v2/users/login/ \
+          -H 'Content-Type: application/json' \
+          -d "{\"username\":\"$DH_USER\",\"password\":\"$DH_TOKEN\"}" | jq -r .token)
+        if [ -z "$JWT" ] || [ "$JWT" = "null" ]; then
+          echo "::error::Docker Hub login failed"
+          exit 1
+        fi
+
+        URL="https://hub.docker.com/v2/repositories/$REPO/tags?page_size=100"
+        ALL=$(mktemp)
+        : > "$ALL"
+        while [ -n "$URL" ] && [ "$URL" != "null" ]; do
+          RESP=$(curl -sS --fail -H "Authorization: JWT $JWT" "$URL")
+          printf '%s' "$RESP" | jq -r '.results[].name' >> "$ALL"
+          URL=$(printf '%s' "$RESP" | jq -r .next)
+        done
+
+        MATCHES=$(grep -E "^${SERVICE}-[0-9]+$" "$ALL" || true)
+        if [ -z "$MATCHES" ]; then
+          echo "No numeric tags for $SERVICE — nothing to prune."
+          exit 0
+        fi
+
+        KEEP_SET=$(printf '%s\n' "$MATCHES" | sort -t- -k2 -n -r | head -n "$KEEP")
+        DELETE=$(comm -23 \
+          <(printf '%s\n' "$MATCHES" | sort) \
+          <(printf '%s\n' "$KEEP_SET"  | sort))
+
+        echo "Keeping:  $(printf '%s ' $KEEP_SET)"
+        echo "Deleting: $(printf '%s ' $DELETE)"
+
+        # Docker Hub JWTs TTL is ~5 min. Each prune run is small (at most a
+        # few deletes), so a single 401 retry with fresh JWT is enough.
+        refresh_jwt() {
+          JWT=$(curl -sS --fail -X POST https://hub.docker.com/v2/users/login/ \
+            -H 'Content-Type: application/json' \
+            -d "{\"username\":\"$DH_USER\",\"password\":\"$DH_TOKEN\"}" | jq -r .token)
+        }
+
+        FAILED=0
+        for t in $DELETE; do
+          code=$(curl -sS -o /dev/null -w '%{http_code}' \
+            -X DELETE -H "Authorization: JWT $JWT" \
+            "https://hub.docker.com/v2/repositories/$REPO/tags/$t/")
+          if [ "$code" = "401" ]; then
+            refresh_jwt
+            code=$(curl -sS -o /dev/null -w '%{http_code}' \
+              -X DELETE -H "Authorization: JWT $JWT" \
+              "https://hub.docker.com/v2/repositories/$REPO/tags/$t/")
+          fi
+          if [ "$code" = "204" ] || [ "$code" = "202" ]; then
+            echo "DELETE $t → $code"
+          else
+            echo "::warning::Failed to delete $t (HTTP $code)"
+            FAILED=$((FAILED + 1))
+          fi
+        done
+        echo "Prune complete: $(echo "$DELETE" | wc -w | tr -d ' ') attempted, $FAILED failed."

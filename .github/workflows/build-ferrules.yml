@@ -50,7 +50,7 @@ jobs:
         tags: |
           type=ref,event=branch,prefix=ferrules-
           type=ref,event=pr,prefix=ferrules-pr-
-          type=sha,prefix=ferrules-{{branch}}-
+          type=raw,value=ferrules-${{ github.run_number }},enable=${{ github.ref == 'refs/heads/pdftotts' }}
           type=raw,value=ferrules-latest,enable=${{ github.ref == 'refs/heads/pdftotts' }}
 
     - name: Build and push Docker image
@@ -71,3 +71,12 @@ jobs:
 
     - name: Image digest
       run: echo ${{ steps.build.outputs.digest }}
+
+    - name: Prune old ferrules tags
+      if: github.event_name != 'pull_request' && github.ref == 'refs/heads/pdftotts'
+      uses: ./.github/actions/prune-service-tags
+      with:
+        service: ferrules
+        keep: '3'
+        username: ${{ secrets.DOCKERHUB_USERNAME }}
+        token: ${{ secrets.DOCKERHUB_TOKEN }}
