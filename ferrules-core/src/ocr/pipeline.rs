@@ -169,12 +169,14 @@ pub fn detect_text_regions(image: &DynamicImage) -> anyhow::Result<Vec<TextRegio
     let det_output_name = det_guard.output_name.clone();
     let outputs = det_guard
         .session
-        .run(ort::inputs![TensorRef::from_array_view(input_tensor.view())?])
+        .run(ort::inputs![TensorRef::from_array_view(
+            input_tensor.view()
+        )?])
         .context("DBNet detection inference failed")?;
 
-    let output_tensor = outputs.get(&det_output_name).with_context(|| {
-        format!("Detection model output '{}' not found", det_output_name)
-    })?;
+    let output_tensor = outputs
+        .get(&det_output_name)
+        .with_context(|| format!("Detection model output '{}' not found", det_output_name))?;
 
     let (_output_shape, output_data) = output_tensor
         .try_extract_tensor::<f32>()
@@ -210,12 +212,14 @@ pub fn recognize_text(crops: &[DynamicImage]) -> anyhow::Result<Vec<(String, f32
     let rec_output_name = rec_guard.output_name.clone();
     let outputs = rec_guard
         .session
-        .run(ort::inputs![TensorRef::from_array_view(input_tensor.view())?])
+        .run(ort::inputs![TensorRef::from_array_view(
+            input_tensor.view()
+        )?])
         .context("SVTR recognition inference failed")?;
 
-    let output_tensor = outputs.get(&rec_output_name).with_context(|| {
-        format!("Recognition model output '{}' not found", rec_output_name)
-    })?;
+    let output_tensor = outputs
+        .get(&rec_output_name)
+        .with_context(|| format!("Recognition model output '{}' not found", rec_output_name))?;
 
     let (output_shape, output_data) = output_tensor
         .try_extract_tensor::<f32>()

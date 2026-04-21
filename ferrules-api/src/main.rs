@@ -147,6 +147,47 @@ struct Args {
     /// to `$XDG_CACHE_HOME/ferrules/coreml` (or the platform equivalent).
     #[arg(long, env = "FERRULES_COREML_CACHE_DIR")]
     model_cache_dir: Option<String>,
+
+    /// Use CoreML's MLProgram model format instead of the default
+    /// NeuralNetwork. Experimental — benchmark per-model before enabling.
+    #[arg(long, env = "FERRULES_COREML_MLPROGRAM")]
+    coreml_mlprogram: bool,
+
+    /// Log per-node CoreML vs CPU coverage to stderr at session creation.
+    /// Diagnostic only.
+    #[arg(long, env = "FERRULES_COREML_PROFILE_COMPUTE_PLAN")]
+    coreml_profile_compute_plan: bool,
+
+    /// Request CoreML's `FastPrediction` specialization for the layout ONNX
+    /// session. Trades longer cold-start compile time + larger
+    /// `.mlmodelc` on disk for lower inference latency. Only meaningful when
+    /// a model cache dir is set (otherwise paid on every start). A/B test
+    /// before enabling in production.
+    #[arg(long, env = "FERRULES_COREML_FAST_PREDICTION_LAYOUT")]
+    coreml_fast_prediction_layout: bool,
+
+    /// Request `FastPrediction` for the standard (CPU + GPU)
+    /// table-transformer session.
+    #[arg(long, env = "FERRULES_COREML_FAST_PREDICTION_TABLE")]
+    coreml_fast_prediction_table: bool,
+
+    /// Request `FastPrediction` for the ANE-only table-transformer session.
+    #[arg(long, env = "FERRULES_COREML_FAST_PREDICTION_TABLE_ANE")]
+    coreml_fast_prediction_table_ane: bool,
+
+    /// Declare that the layout ONNX (`yolov8s-doclaynet`, input
+    /// `[1, 3, 1024, 1024]`) has fully-static input shapes so CoreML can
+    /// skip per-call shape specialization. Safe for this model; do not add
+    /// an equivalent flag for graphs with dynamic dims.
+    #[arg(long, env = "FERRULES_COREML_STATIC_INPUT_SHAPES_LAYOUT")]
+    coreml_static_input_shapes_layout: bool,
+
+    /// Declare that the ANE table-transformer ONNX (input
+    /// `[4, 3, 1000, 1000]`) has fully-static input shapes. The standard
+    /// (fp16) table-transformer has dynamic input dims and intentionally
+    /// has no corresponding flag.
+    #[arg(long, env = "FERRULES_COREML_STATIC_INPUT_SHAPES_TABLE_ANE")]
+    coreml_static_input_shapes_table_ane: bool,
 }
 
 /// Resolve the effective CoreML model cache root. Returns `None` if the user
@@ -651,6 +692,13 @@ async fn main() {
             None
         },
         model_cache_dir,
+        coreml_mlprogram: args.coreml_mlprogram,
+        coreml_profile_compute_plan: args.coreml_profile_compute_plan,
+        coreml_fast_prediction_layout: args.coreml_fast_prediction_layout,
+        coreml_fast_prediction_table: args.coreml_fast_prediction_table,
+        coreml_fast_prediction_table_ane: args.coreml_fast_prediction_table_ane,
+        coreml_static_input_shapes_layout: args.coreml_static_input_shapes_layout,
+        coreml_static_input_shapes_table_ane: args.coreml_static_input_shapes_table_ane,
     };
     // Initialize the layout model and queues
     let parser = FerrulesParser::new(ort_config);

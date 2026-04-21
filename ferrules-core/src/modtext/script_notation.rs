@@ -1295,8 +1295,7 @@ fn fix_script_tag_spacing(text: &str) -> String {
     let step1 = SCRIPT_TAG_SPACING_REGEX.replace_all(text, "</");
 
     // Remove spaces after opening tags: "<sup> 2</sup>" -> "<sup>2</sup>"
-    let step2 = SCRIPT_OPENING_TAG_SPACING_REGEX
-        .replace_all(&step1, "$1");
+    let step2 = SCRIPT_OPENING_TAG_SPACING_REGEX.replace_all(&step1, "$1");
 
     // Remove spaces between closing tags and punctuation:
     // "</sub> ." -> "</sub>." and "</sup> ," -> "</sup>,"

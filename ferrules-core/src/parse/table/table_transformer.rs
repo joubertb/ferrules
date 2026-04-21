@@ -176,20 +176,21 @@ impl BatchInferenceRunner {
                         logits_shape.iter().map(|&i| i as usize).collect();
                     let logits_data_f32: Vec<f32> =
                         logits_data.iter().map(|x| x.to_f32()).collect();
-                    let logits = ndarray::ArrayBase::<OwnedRepr<f32>, ndarray::IxDyn>::from_shape_vec(
-                        logits_shape_vec,
-                        logits_data_f32,
-                    )?;
+                    let logits =
+                        ndarray::ArrayBase::<OwnedRepr<f32>, ndarray::IxDyn>::from_shape_vec(
+                            logits_shape_vec,
+                            logits_data_f32,
+                        )?;
                     let (boxes_shape, boxes_data) =
                         outputs["pred_boxes"].try_extract_tensor::<half::f16>()?;
                     let boxes_shape_vec: Vec<usize> =
                         boxes_shape.iter().map(|&i| i as usize).collect();
-                    let boxes_data_f32: Vec<f32> =
-                        boxes_data.iter().map(|x| x.to_f32()).collect();
-                    let boxes = ndarray::ArrayBase::<OwnedRepr<f32>, ndarray::IxDyn>::from_shape_vec(
-                        boxes_shape_vec,
-                        boxes_data_f32,
-                    )?;
+                    let boxes_data_f32: Vec<f32> = boxes_data.iter().map(|x| x.to_f32()).collect();
+                    let boxes =
+                        ndarray::ArrayBase::<OwnedRepr<f32>, ndarray::IxDyn>::from_shape_vec(
+                            boxes_shape_vec,
+                            boxes_data_f32,
+                        )?;
                     Ok::<_, anyhow::Error>((logits, boxes))
                 } else {
                     let outputs = session
@@ -202,18 +203,20 @@ impl BatchInferenceRunner {
                         outputs["logits"].try_extract_tensor::<f32>()?;
                     let logits_shape_vec: Vec<usize> =
                         logits_shape.iter().map(|&i| i as usize).collect();
-                    let logits = ndarray::ArrayBase::<OwnedRepr<f32>, ndarray::IxDyn>::from_shape_vec(
-                        logits_shape_vec,
-                        logits_data.to_vec(),
-                    )?;
+                    let logits =
+                        ndarray::ArrayBase::<OwnedRepr<f32>, ndarray::IxDyn>::from_shape_vec(
+                            logits_shape_vec,
+                            logits_data.to_vec(),
+                        )?;
                     let (boxes_shape, boxes_data) =
                         outputs["pred_boxes"].try_extract_tensor::<f32>()?;
                     let boxes_shape_vec: Vec<usize> =
                         boxes_shape.iter().map(|&i| i as usize).collect();
-                    let boxes = ndarray::ArrayBase::<OwnedRepr<f32>, ndarray::IxDyn>::from_shape_vec(
-                        boxes_shape_vec,
-                        boxes_data.to_vec(),
-                    )?;
+                    let boxes =
+                        ndarray::ArrayBase::<OwnedRepr<f32>, ndarray::IxDyn>::from_shape_vec(
+                            boxes_shape_vec,
+                            boxes_data.to_vec(),
+                        )?;
                     Ok::<_, anyhow::Error>((logits, boxes))
                 }
             }
@@ -311,7 +314,17 @@ impl TableTransformerStandard {
                         .model_cache_dir
                         .as_deref()
                         .and_then(|root| per_model_cache_dir(root, &TABLE_MODEL_CACHE_KEY));
-                    execution_providers.push(build_coreml_provider(ane_only, cache.as_deref()));
+                    execution_providers.push(build_coreml_provider(
+                        ane_only,
+                        cache.as_deref(),
+                        config.coreml_mlprogram,
+                        config.coreml_profile_compute_plan,
+                        config.coreml_fast_prediction_table,
+                        // fp16 table-transformer has dynamic input dims
+                        // (batch, height, width) — static_input_shapes is
+                        // unsafe here and intentionally hard-wired off.
+                        false,
+                    ));
                 }
                 crate::layout::model::OrtExecutionProvider::CPU => {
                     execution_providers.push(CPUExecutionProvider::default().build());
@@ -722,7 +735,14 @@ impl TableTransformer {
                         .model_cache_dir
                         .as_deref()
                         .and_then(|root| per_model_cache_dir(root, &TABLE_MODEL_ANE_CACHE_KEY));
-                    execution_providers.push(build_coreml_provider(ane_only, cache.as_deref()));
+                    execution_providers.push(build_coreml_provider(
+                        ane_only,
+                        cache.as_deref(),
+                        config.coreml_mlprogram,
+                        config.coreml_profile_compute_plan,
+                        config.coreml_fast_prediction_table_ane,
+                        config.coreml_static_input_shapes_table_ane,
+                    ));
                 }
                 crate::layout::model::OrtExecutionProvider::CPU => {
                     execution_providers.push(CPUExecutionProvider::default().build());

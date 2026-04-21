@@ -8,7 +8,10 @@
 use std::path::{Path, PathBuf};
 
 use ort::execution_providers::{
-    coreml::{CoreMLComputeUnits, CoreMLExecutionProvider},
+    coreml::{
+        CoreMLComputeUnits, CoreMLExecutionProvider, CoreMLModelFormat,
+        CoreMLSpecializationStrategy,
+    },
     ExecutionProviderDispatch,
 };
 
@@ -53,9 +56,29 @@ pub fn per_model_cache_dir(root: &Path, key: &str) -> Option<PathBuf> {
 /// - `cache_dir`: per-model cache directory. Caller is responsible for
 ///   passing distinct paths for distinct ONNX graphs — sharing a directory
 ///   across different models will corrupt CoreML's cache.
+/// - `mlprogram`: when true, request the newer MLProgram model format
+///   instead of the default NeuralNetwork. MLProgram supports a wider
+///   operator set but may regress on ops that fall back to CPU.
+/// - `profile_compute_plan`: when true, ort logs a per-node CoreML-vs-CPU
+///   coverage summary to stderr at session creation. Used for A/B testing
+///   model formats; leave off in production.
+/// - `fast_prediction`: when true, request CoreML's `FastPrediction`
+///   specialization strategy. Trades longer first-load compile time and
+///   larger on-disk `.mlmodelc` for lower inference latency. Only meaningful
+///   when `cache_dir` is set — otherwise the extra compile cost is paid on
+///   every process start.
+/// - `static_input_shapes`: when true, declare that all ONNX graph inputs
+///   have fully-static shapes. Lets CoreML skip shape-specialization work at
+///   inference time. **Only enable for models whose every input dim is a
+///   positive integer** — passing this for a graph with `batch_size`,
+///   `height`, or any dynamic dim regresses latency or errors at runtime.
 pub fn build_coreml_provider(
     ane_only: bool,
     cache_dir: Option<&Path>,
+    mlprogram: bool,
+    profile_compute_plan: bool,
+    fast_prediction: bool,
+    static_input_shapes: bool,
 ) -> ExecutionProviderDispatch {
     let mut provider = CoreMLExecutionProvider::default();
     if ane_only {
@@ -63,6 +86,19 @@ pub fn build_coreml_provider(
     }
     if let Some(dir) = cache_dir {
         provider = provider.with_model_cache_dir(dir.display().to_string());
+    }
+    if mlprogram {
+        provider = provider.with_model_format(CoreMLModelFormat::MLProgram);
+    }
+    if profile_compute_plan {
+        provider = provider.with_profile_compute_plan(true);
+    }
+    if fast_prediction {
+        provider =
+            provider.with_specialization_strategy(CoreMLSpecializationStrategy::FastPrediction);
+    }
+    if static_input_shapes {
+        provider = provider.with_static_input_shapes(true);
     }
     provider.build()
 }
@@ -82,10 +118,14 @@ mod tests {
     fn build_coreml_provider_does_not_panic() {
         // Black-box: we can't easily inspect the built provider, but we can
         // confirm every code path builds cleanly.
-        let _ = build_coreml_provider(false, None);
-        let _ = build_coreml_provider(true, None);
+        let _ = build_coreml_provider(false, None, false, false, false, false);
+        let _ = build_coreml_provider(true, None, false, false, false, false);
         let tmp = std::env::temp_dir().join("ferrules-coreml-test-cache");
         let _ = std::fs::create_dir_all(&tmp);
-        let _ = build_coreml_provider(true, Some(&tmp));
+        let _ = build_coreml_provider(true, Some(&tmp), false, false, false, false);
+        let _ = build_coreml_provider(true, Some(&tmp), true, false, false, false);
+        let _ = build_coreml_provider(true, Some(&tmp), true, true, false, false);
+        let _ = build_coreml_provider(true, Some(&tmp), false, false, true, false);
+        let _ = build_coreml_provider(true, Some(&tmp), false, false, false, true);
     }
 }

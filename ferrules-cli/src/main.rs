@@ -298,6 +298,7 @@ async fn main() {
             None
         },
         model_cache_dir: None,
+        ..Default::default()
     };
 
     let page_range = match args.page_range {

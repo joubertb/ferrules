@@ -51,6 +51,34 @@ pub struct ORTConfig {
     /// beneath this path, avoiding recompilation on every restart. When
     /// `None`, CoreML falls back to its default (typically `/tmp`).
     pub model_cache_dir: Option<std::path::PathBuf>,
+    /// When true, use CoreML's newer MLProgram model format instead of the
+    /// default NeuralNetwork. Wider operator support but not always a win —
+    /// A/B test per model before flipping on.
+    pub coreml_mlprogram: bool,
+    /// When true, ort logs a per-node CoreML-vs-CPU coverage summary to
+    /// stderr at session creation. Diagnostic only; leave off in production.
+    pub coreml_profile_compute_plan: bool,
+    /// When true, request CoreML's `FastPrediction` specialization for the
+    /// layout ONNX session. Trades cold-start compile time + disk cache size
+    /// for lower inference latency. Amortized only when `model_cache_dir` is
+    /// set. A/B test per model — gains vary per graph.
+    pub coreml_fast_prediction_layout: bool,
+    /// When true, request `FastPrediction` for the standard (CPU + GPU)
+    /// table-transformer session.
+    pub coreml_fast_prediction_table: bool,
+    /// When true, request `FastPrediction` for the ANE-only
+    /// table-transformer session.
+    pub coreml_fast_prediction_table_ane: bool,
+    /// Declare that the layout ONNX (`yolov8s-doclaynet`) has fully-static
+    /// input shapes so CoreML can skip shape specialization at inference.
+    /// Safe: yolov8s input is `[1, 3, 1024, 1024]`, every dim is a positive
+    /// integer. Must NOT be set for graphs with any dynamic dim.
+    pub coreml_static_input_shapes_layout: bool,
+    /// Declare that the ANE table-transformer ONNX has fully-static input
+    /// shapes. Safe: ane-b4 input is `[4, 3, 1000, 1000]`. The standard
+    /// (non-ANE) table-transformer has dynamic dims and intentionally has no
+    /// corresponding flag.
+    pub coreml_static_input_shapes_table_ane: bool,
 }
 
 impl ORTConfig {
@@ -96,6 +124,13 @@ impl Default for ORTConfig {
             profile_layout: None,
             profile_table: None,
             model_cache_dir: None,
+            coreml_mlprogram: false,
+            coreml_profile_compute_plan: false,
+            coreml_fast_prediction_layout: false,
+            coreml_fast_prediction_table: false,
+            coreml_fast_prediction_table_ane: false,
+            coreml_static_input_shapes_layout: false,
+            coreml_static_input_shapes_table_ane: false,
         }
     }
 }
@@ -180,7 +215,10 @@ impl ORTLayoutParser {
         let run_options = RunOptions::new()?;
         let mut session = self.session.lock().await;
         let outputs = session
-            .run_async(ort::inputs![TensorRef::from_array_view(input.view())?], &run_options)?
+            .run_async(
+                ort::inputs![TensorRef::from_array_view(input.view())?],
+                &run_options,
+            )?
             .await?;
 
         let output_val = outputs
@@ -267,7 +305,14 @@ impl ORTLayoutParser {
                         .model_cache_dir
                         .as_deref()
                         .and_then(|root| per_model_cache_dir(root, &LAYOUT_MODEL_CACHE_KEY));
-                    execution_providers.push(build_coreml_provider(ane_only, cache.as_deref()));
+                    execution_providers.push(build_coreml_provider(
+                        ane_only,
+                        cache.as_deref(),
+                        config.coreml_mlprogram,
+                        config.coreml_profile_compute_plan,
+                        config.coreml_fast_prediction_layout,
+                        config.coreml_static_input_shapes_layout,
+                    ));
                 }
                 OrtExecutionProvider::CPU => {
                     execution_providers.push(CPUExecutionProvider::default().build());
@@ -325,7 +370,10 @@ impl ORTLayoutParser {
         ]);
         // Use try_lock during init — no contention possible yet.
         // This avoids blocking_lock() panic when called from within a tokio runtime.
-        let mut session = self.session.try_lock().context("Session lock held during warmup")?;
+        let mut session = self
+            .session
+            .try_lock()
+            .context("Session lock held during warmup")?;
         let outputs = session.run(ort::inputs![TensorRef::from_array_view(input.view())?])?;
         drop(outputs);
         drop(session);
@@ -357,8 +405,7 @@ impl ORTLayoutParser {
     pub fn run_batch(&self, input: Array4<f32>) -> anyhow::Result<ndarray::Array3<f32>> {
         let batch_size = input.dim().0;
         let mut session = self.session.blocking_lock();
-        let outputs =
-            session.run(ort::inputs![TensorRef::from_array_view(input.view())?])?;
+        let outputs = session.run(ort::inputs![TensorRef::from_array_view(input.view())?])?;
 
         let output_val = outputs
             .get(&self.output_name)
