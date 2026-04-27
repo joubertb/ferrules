@@ -82,12 +82,18 @@ struct Args {
         )]
     pub coreml: bool,
 
+    /// Restrict the ANE table-transformer (ane-b4) to CPUAndNeuralEngine
+    /// compute units. Enabled by default — the ANE-b4 model was trained for
+    /// this path; routing to GPU shifts FP16 scores and regresses table
+    /// detection. The layout model is intentionally unrestricted (all compute
+    /// units) to allow GPU routing, which is faster.
     #[arg(
         long,
+        env = "FERRULES_COREML_ANE_ONLY_TABLE_ANE",
         default_value_t = false,
-        help = "Enable or disable Apple Neural Engine acceleration (only applies when CoreML is enabled)"
+        help = "Restrict ANE table-transformer to CPUAndNeuralEngine (off by default — all compute units is faster and quality-equivalent for NeuralNetwork format)"
     )]
-    pub use_ane: bool,
+    pub coreml_ane_only_table_ane: bool,
 
     #[arg(
         long,
@@ -149,7 +155,9 @@ struct Args {
     model_cache_dir: Option<String>,
 
     /// Use CoreML's MLProgram model format instead of the default
-    /// NeuralNetwork. Experimental — benchmark per-model before enabling.
+    /// NeuralNetwork. Off by default — MLProgram changes YOLOv8 layout
+    /// detection outputs (different FP16 path), requiring per-document
+    /// quality validation before enabling in production.
     #[arg(long, env = "FERRULES_COREML_MLPROGRAM")]
     coreml_mlprogram: bool,
 
@@ -178,8 +186,8 @@ struct Args {
     /// Declare that the layout ONNX (`yolov8s-doclaynet`, input
     /// `[1, 3, 1024, 1024]`) has fully-static input shapes so CoreML can
     /// skip per-call shape specialization. Safe for this model; do not add
-    /// an equivalent flag for graphs with dynamic dims.
-    #[arg(long, env = "FERRULES_COREML_STATIC_INPUT_SHAPES_LAYOUT")]
+    /// an equivalent flag for graphs with dynamic dims. Defaults to true.
+    #[arg(long, env = "FERRULES_COREML_STATIC_INPUT_SHAPES_LAYOUT", default_value_t = true, action = clap::ArgAction::Set)]
     coreml_static_input_shapes_layout: bool,
 
     /// Declare that the ANE table-transformer ONNX (input
@@ -229,9 +237,7 @@ fn parse_ep_args(args: &Args) -> Vec<OrtExecutionProvider> {
     }
 
     if args.coreml {
-        providers.push(OrtExecutionProvider::CoreML {
-            ane_only: args.use_ane,
-        });
+        providers.push(OrtExecutionProvider::CoreML { ane_only: false });
     }
     providers.push(OrtExecutionProvider::CPU);
     providers
@@ -693,6 +699,8 @@ async fn main() {
         },
         model_cache_dir,
         coreml_mlprogram: args.coreml_mlprogram,
+        coreml_ane_only_layout: false,
+        coreml_ane_only_table_ane: args.coreml_ane_only_table_ane,
         coreml_profile_compute_plan: args.coreml_profile_compute_plan,
         coreml_fast_prediction_layout: args.coreml_fast_prediction_layout,
         coreml_fast_prediction_table: args.coreml_fast_prediction_table,

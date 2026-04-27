@@ -730,13 +730,13 @@ impl TableTransformer {
                             .build(),
                     );
                 }
-                crate::layout::model::OrtExecutionProvider::CoreML { ane_only } => {
+                crate::layout::model::OrtExecutionProvider::CoreML { .. } => {
                     let cache = config
                         .model_cache_dir
                         .as_deref()
                         .and_then(|root| per_model_cache_dir(root, &TABLE_MODEL_ANE_CACHE_KEY));
                     execution_providers.push(build_coreml_provider(
-                        ane_only,
+                        config.coreml_ane_only_table_ane,
                         cache.as_deref(),
                         config.coreml_mlprogram,
                         config.coreml_profile_compute_plan,

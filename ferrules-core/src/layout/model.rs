@@ -55,6 +55,15 @@ pub struct ORTConfig {
     /// default NeuralNetwork. Wider operator support but not always a win —
     /// A/B test per model before flipping on.
     pub coreml_mlprogram: bool,
+    /// When true, restrict the layout model (yolov8s-doclaynet) to
+    /// CPUAndNeuralEngine compute units. Default false — all compute units
+    /// lets CoreML route to GPU, which is faster for this model.
+    pub coreml_ane_only_layout: bool,
+    /// When true, restrict the ANE table-transformer (ane-b4) to
+    /// CPUAndNeuralEngine compute units. Default true — the ANE-b4 model was
+    /// trained for the CPU+ANE path; routing to GPU produces different FP16
+    /// scores that shift table detection results.
+    pub coreml_ane_only_table_ane: bool,
     /// When true, ort logs a per-node CoreML-vs-CPU coverage summary to
     /// stderr at session creation. Diagnostic only; leave off in production.
     pub coreml_profile_compute_plan: bool,
@@ -113,7 +122,7 @@ impl Default for ORTConfig {
     fn default() -> Self {
         let mut execution_providers = vec![OrtExecutionProvider::CPU];
         if cfg!(target_os = "macos") {
-            execution_providers.push(OrtExecutionProvider::CoreML { ane_only: true });
+            execution_providers.push(OrtExecutionProvider::CoreML { ane_only: false });
         }
         Self {
             execution_providers,
@@ -125,11 +134,13 @@ impl Default for ORTConfig {
             profile_table: None,
             model_cache_dir: None,
             coreml_mlprogram: false,
+            coreml_ane_only_layout: false,
+            coreml_ane_only_table_ane: false,
             coreml_profile_compute_plan: false,
             coreml_fast_prediction_layout: false,
             coreml_fast_prediction_table: false,
             coreml_fast_prediction_table_ane: false,
-            coreml_static_input_shapes_layout: false,
+            coreml_static_input_shapes_layout: true,
             coreml_static_input_shapes_table_ane: false,
         }
     }
@@ -300,13 +311,13 @@ impl ORTLayoutParser {
                             .build(),
                     );
                 }
-                OrtExecutionProvider::CoreML { ane_only } => {
+                OrtExecutionProvider::CoreML { .. } => {
                     let cache = config
                         .model_cache_dir
                         .as_deref()
                         .and_then(|root| per_model_cache_dir(root, &LAYOUT_MODEL_CACHE_KEY));
                     execution_providers.push(build_coreml_provider(
-                        ane_only,
+                        config.coreml_ane_only_layout,
                         cache.as_deref(),
                         config.coreml_mlprogram,
                         config.coreml_profile_compute_plan,
