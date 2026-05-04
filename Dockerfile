@@ -45,12 +45,21 @@ COPY . .
 # Build with ort-dynamic: ORT is loaded at runtime, enabling GPU/CPU selection
 RUN cargo build --release -p ferrules-api --features ferrules-core/ort-dynamic
 
-# Download GPU-enabled ONNX Runtime (includes CUDA/TensorRT EPs + CPU fallback)
-RUN mkdir -p /app/onnx_libs && \
+# Download both ONNX Runtime distributions:
+#   - GPU build: includes CUDA/TensorRT EPs (used when --cuda is enabled)
+#   - CPU-only build: avoids loading libonnxruntime_providers_cuda.so on hosts
+#     where the NVIDIA driver is missing or broken (its capability probe at
+#     session init can null-deref and segfault the process).
+# At runtime, docker-init.sh selects which one to load via ORT_DYLIB_PATH.
+RUN mkdir -p /app/onnx_libs/gpu /app/onnx_libs/cpu && \
     echo "Downloading ONNX Runtime GPU ${ONNXRUNTIME_VERSION}..." && \
     curl -L https://github.com/microsoft/onnxruntime/releases/download/v${ONNXRUNTIME_VERSION}/onnxruntime-linux-x64-gpu-${ONNXRUNTIME_VERSION}.tgz | \
-    tar xzf - -C /app/onnx_libs --strip-components=2 --wildcards "*/lib/libonnxruntime*.so*" && \
-    echo "ONNX Runtime libraries:" && ls -la /app/onnx_libs/
+    tar xzf - -C /app/onnx_libs/gpu --strip-components=2 --wildcards "*/lib/libonnxruntime*.so*" && \
+    echo "Downloading ONNX Runtime CPU ${ONNXRUNTIME_VERSION}..." && \
+    curl -L https://github.com/microsoft/onnxruntime/releases/download/v${ONNXRUNTIME_VERSION}/onnxruntime-linux-x64-${ONNXRUNTIME_VERSION}.tgz | \
+    tar xzf - -C /app/onnx_libs/cpu --strip-components=2 --wildcards "*/lib/libonnxruntime*.so*" && \
+    echo "ONNX Runtime GPU libraries:" && ls -la /app/onnx_libs/gpu/ && \
+    echo "ONNX Runtime CPU libraries:" && ls -la /app/onnx_libs/cpu/
 
 # ============================================================
 # Runtime stage
@@ -72,9 +81,13 @@ ENV CUDA_HOME=/usr/local/cuda
 ENV PATH="${CUDA_HOME}/bin:${PATH}"
 ENV LD_LIBRARY_PATH="${CUDA_HOME}/lib64:${LD_LIBRARY_PATH}"
 
-# Copy binary and ONNX Runtime libraries
+# Copy binary and ONNX Runtime libraries (both CPU-only and GPU variants).
+# docker-init.sh picks one at startup via ORT_DYLIB_PATH based on whether
+# nvidia-smi reports a working GPU. The CUDA EP shared object is therefore
+# never mapped into the process on CPU-only hosts.
 COPY --from=builder /app/target/release/ferrules-api /app/ferrules-api
-COPY --from=builder /app/onnx_libs/ /usr/local/lib/
+COPY --from=builder /app/onnx_libs/gpu/ /usr/local/lib/ort-gpu/
+COPY --from=builder /app/onnx_libs/cpu/ /usr/local/lib/ort-cpu/
 
 # Copy runtime data
 COPY --from=builder /app/models/ /app/models/

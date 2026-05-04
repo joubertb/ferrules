@@ -41,15 +41,36 @@ if ! health_check; then
     exit 1
 fi
 
-# Auto-detect GPU: if nvidia-smi is available and working, enable CUDA
+# Auto-detect GPU and pick the matching ONNX Runtime distribution.
+#
+# Both CPU-only and GPU builds of libonnxruntime.so are shipped in the
+# image. We select between them at startup with ORT_DYLIB_PATH (honored by
+# the `ort` Rust crate's load-dynamic mode) plus LD_LIBRARY_PATH so the
+# dynamic linker resolves any sibling .so dependencies from the same dir.
+#
+# This avoids loading libonnxruntime_providers_cuda.so on hosts where the
+# NVIDIA driver is missing or broken — the GPU build's capability probe
+# null-derefs there and segfaults the process.
 GPU_ARGS=""
 if command -v nvidia-smi &>/dev/null && nvidia-smi &>/dev/null; then
     GPU_NAME=$(nvidia-smi --query-gpu=name --format=csv,noheader 2>/dev/null | head -1)
     echo "🎮 GPU detected: ${GPU_NAME:-unknown}, enabling CUDA acceleration"
+    ORT_LIB_DIR="/usr/local/lib/ort-gpu"
     GPU_ARGS="--cuda"
 else
-    echo "💻 No GPU detected, using CPU execution"
+    echo "💻 No GPU detected, using CPU-only ONNX Runtime"
+    ORT_LIB_DIR="/usr/local/lib/ort-cpu"
 fi
+
+if [[ ! -f "${ORT_LIB_DIR}/libonnxruntime.so" ]]; then
+    echo "❌ libonnxruntime.so not found in ${ORT_LIB_DIR}"
+    ls -la "${ORT_LIB_DIR}" || true
+    exit 1
+fi
+
+export ORT_DYLIB_PATH="${ORT_LIB_DIR}/libonnxruntime.so"
+export LD_LIBRARY_PATH="${ORT_LIB_DIR}:${LD_LIBRARY_PATH}"
+echo "  - ORT_DYLIB_PATH: ${ORT_DYLIB_PATH}"
 
 echo "🎯 Starting Ferrules API with text corrections..."
 
