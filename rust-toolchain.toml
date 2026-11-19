@@ -1,2 +1,5 @@
 [toolchain]
-channel = "nightly"
+# Pinned: a floating "nightly" moves cargo's OUT_DIR layout, which breaks
+# ort-sys 2.0.0-rc.10's build.rs (OUT_DIR.ancestors().nth(3)). Keep in sync
+# with dist-workspace.toml rust-toolchain-version. The Dockerfile reads this file.
+channel = "nightly-2025-08-15"

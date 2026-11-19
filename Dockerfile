@@ -15,7 +15,6 @@ ARG BASE_RUNTIME=nvidia/cuda:12.8.1-cudnn-runtime-ubuntu22.04
 # ============================================================
 FROM ${BASE_BUILD} AS builder
 
-ARG RUST_VERSION=nightly-2025-08-15
 ARG ONNXRUNTIME_VERSION=1.22.0
 
 WORKDIR /app
@@ -35,12 +34,15 @@ RUN apt-get update && apt-get install -y \
     libxml2-dev \
     && rm -rf /var/lib/apt/lists/*
 
-# Install Rust
-RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain ${RUST_VERSION}
+# Install rustup only; the toolchain version comes from rust-toolchain.toml
+RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain none
 ENV PATH="/root/.cargo/bin:${PATH}"
 
 # Copy source code and essential files
 COPY . .
+
+# Install the toolchain pinned in rust-toolchain.toml
+RUN rustup toolchain install
 
 # Build with ort-dynamic: ORT is loaded at runtime, enabling GPU/CPU selection
 RUN cargo build --release -p ferrules-api --features ferrules-core/ort-dynamic
