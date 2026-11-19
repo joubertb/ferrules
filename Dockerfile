@@ -16,6 +16,10 @@ ARG BASE_RUNTIME=nvidia/cuda:12.8.1-cudnn-runtime-ubuntu22.04
 FROM ${BASE_BUILD} AS builder
 
 ARG ONNXRUNTIME_VERSION=1.22.0
+# SHA-256 of the NuGet packages for ONNXRUNTIME_VERSION; update all three together.
+#   GPU: Microsoft.ML.OnnxRuntime.Gpu.Linux   CPU: Microsoft.ML.OnnxRuntime
+ARG ONNXRUNTIME_GPU_SHA256=d3dabd8235b7a04a67838a3b93437420f1a709528a8d8611e08bedbb08206d1d
+ARG ONNXRUNTIME_CPU_SHA256=d571e63a2329baacb713f441e65ad75284de354db6e1ac435fe4bebbb417986a
 
 WORKDIR /app
 
@@ -27,6 +31,7 @@ RUN apt-get update && apt-get install -y \
     libclang-dev \
     curl \
     xz-utils \
+    unzip \
     pkg-config \
     libssl-dev \
     zlib1g-dev \
@@ -53,13 +58,19 @@ RUN cargo build --release -p ferrules-api --features ferrules-core/ort-dynamic
 #     where the NVIDIA driver is missing or broken (its capability probe at
 #     session init can null-deref and segfault the process).
 # At runtime, docker-init.sh selects which one to load via ORT_DYLIB_PATH.
-RUN mkdir -p /app/onnx_libs/gpu /app/onnx_libs/cpu && \
-    echo "Downloading ONNX Runtime GPU ${ONNXRUNTIME_VERSION}..." && \
-    curl -L https://github.com/microsoft/onnxruntime/releases/download/v${ONNXRUNTIME_VERSION}/onnxruntime-linux-x64-gpu-${ONNXRUNTIME_VERSION}.tgz | \
-    tar xzf - -C /app/onnx_libs/gpu --strip-components=2 --wildcards "*/lib/libonnxruntime*.so*" && \
-    echo "Downloading ONNX Runtime CPU ${ONNXRUNTIME_VERSION}..." && \
-    curl -L https://github.com/microsoft/onnxruntime/releases/download/v${ONNXRUNTIME_VERSION}/onnxruntime-linux-x64-${ONNXRUNTIME_VERSION}.tgz | \
-    tar xzf - -C /app/onnx_libs/cpu --strip-components=2 --wildcards "*/lib/libonnxruntime*.so*" && \
+# From NuGet: github.com/microsoft/onnxruntime releases went 404 (2026-11-18).
+RUN fetch_ort() { \
+        pkg="$1"; sha="$2"; dest="$3"; \
+        echo "Downloading ${pkg} ${ONNXRUNTIME_VERSION}..." && \
+        curl -fsSL -o /tmp/ort.nupkg \
+            "https://api.nuget.org/v3-flatcontainer/${pkg}/${ONNXRUNTIME_VERSION}/${pkg}.${ONNXRUNTIME_VERSION}.nupkg" && \
+        echo "${sha}  /tmp/ort.nupkg" | sha256sum -c - && \
+        mkdir -p "${dest}" && \
+        unzip -j /tmp/ort.nupkg 'runtimes/linux-x64/native/*.so' -d "${dest}" && \
+        rm /tmp/ort.nupkg; \
+    } && \
+    fetch_ort microsoft.ml.onnxruntime.gpu.linux "${ONNXRUNTIME_GPU_SHA256}" /app/onnx_libs/gpu && \
+    fetch_ort microsoft.ml.onnxruntime "${ONNXRUNTIME_CPU_SHA256}" /app/onnx_libs/cpu && \
     echo "ONNX Runtime GPU libraries:" && ls -la /app/onnx_libs/gpu/ && \
     echo "ONNX Runtime CPU libraries:" && ls -la /app/onnx_libs/cpu/
 
